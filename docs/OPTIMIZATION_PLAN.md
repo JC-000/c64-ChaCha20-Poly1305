@@ -5,6 +5,26 @@ Author notes:
 - Numbers in Section 1 are **measured** via `tools/benchmark_chacha20_poly1305.py`.
   Everything else labelled "estimated" or "~" is a guess grounded in the cited
   exemplars — it needs to be re-measured step-by-step.
+- **Representation caveat (learned in Step 7)**: several plan estimates —
+  most visibly Step 7's −8 000 cy P4 target — are borrowed from
+  Andrew Moon's `poly1305-donna` C reference, which uses a
+  **radix-2^26 limb** representation. In that form `2^130 ≡ 5 (mod p)`
+  lands on a limb boundary, so the fused wrap fold (`*5 at i+j-17`)
+  is a clean per-partial-product operation. This library uses a
+  **byte (radix-2^8)** representation, where the equivalent
+  congruence is `2^136 ≡ 320 (mod p)` — a 6-bit sub-byte misalignment.
+  Per-PP folding at byte granularity costs more to realign than the
+  fold saves, so the byte-layout achievable form of a Donna-style
+  optimization is usually "fold into the reduction step" (where the
+  shift amortizes across 17 bytes as straight-line code), not "fold
+  into the multiply". Step 7 captured ~13% of its plan-estimated
+  savings for exactly this reason. **Any remaining plan item whose
+  estimate was transcribed from Moon-style limb code should be
+  re-examined before implementation** — the achievable ceiling on
+  byte-layout is typically bounded by the pre-optimization reduce
+  cost, not by the theoretical limb-form savings. Porting to a
+  radix-2^26 internal representation is a much larger rewrite than
+  any single step in this plan and is explicitly out of scope.
 - Target-app priority per project memory: WireGuard, TLS 1.3, DTLS.
   Packet-size profile is **bimodal**, not uniformly long:
   - **Large**: WireGuard data packets (~1280 B MTU), TLS 1.3 bulk records
