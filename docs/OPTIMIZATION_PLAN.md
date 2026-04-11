@@ -69,7 +69,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S4 P1 unroll poly1305_multiply + CT     | `7e6589f` |         45 957 |         39 797 |           3 497 234 |        -41.5% |
 | S5 profile dispatch scaffold (no-op)    | `fd9323b` |         45 957 |         39 675 |           3 497 228 |        -41.5% |
 | S6 P3 Shoup per-r table (Profile A)     | `09b93f7` |         45 940 |         12 987 |           2 282 955 |        -61.8% |
-| S7 P4 Donna fused wrap (both profiles)  | `PENDING` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
+| S7 P4 Donna fused wrap (both profiles)  | `1889efd` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
