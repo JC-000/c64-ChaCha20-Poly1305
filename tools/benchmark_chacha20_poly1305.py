@@ -270,8 +270,9 @@ def setup_aead_encrypt(transport, labels, msg_len):
     Returns the address to patch into the wrapper (aead_encrypt entry).
 
     Uses a 32-byte key, 12-byte nonce, 0-byte AAD, and msg_len bytes of
-    plaintext.  Plaintext lives at $4000..$4000+msg_len (clear of the
-    library PRG at $0810..$12bb and of the sqtab at $8000..$83ff).
+    plaintext.  Plaintext lives at $5000..$5000+msg_len (clear of the
+    library PRG — which after the Step 4 unroll reaches ~$43a1 — and of
+    the sqtab at $8000..$83ff).
     """
     key = bytes(range(32))
     nonce = bytes(range(12))
@@ -282,7 +283,7 @@ def setup_aead_encrypt(transport, labels, msg_len):
     write_ptr(transport, labels["aead_aad_ptr"], aad_buf)
     write_bytes(transport, labels["aead_aad_len"], bytes([0]))
 
-    pt_addr = 0x4000
+    pt_addr = 0x5000
     if msg_len > 0:
         write_bytes(transport, pt_addr, bytes((i & 0xFF) for i in range(msg_len)))
     write_ptr(transport, labels["aead_data_ptr"], pt_addr)

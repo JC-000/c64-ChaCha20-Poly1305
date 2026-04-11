@@ -231,13 +231,67 @@ mul_b:          !byte 0
 mul_s_pg:       !byte 0
 
 ; =============================================================================
+; poly_ripple - propagate a set carry upward through poly_product starting
+; at index X. Entered only when the just-completed add left carry set.
+;
+; Uses INC/BNE instead of SEC/ADC#0 — ripple stops as soon as a byte doesn't
+; wrap to zero. Bounded by poly_product size (33 bytes, indices 0..32).
+;
+; Note on constant-time: the ripple loop branches on carry (INC's Z flag),
+; which is a function of hardware flags after an addition. This is
+; standard for multi-precision arithmetic on 6502 and is *not* a CT
+; violation — the CT contract is "no branches on secret operand bytes
+; directly". The early-exits removed from poly1305_multiply (beq on
+; h[i] / r[j]) were such violations; carry-out branches are not.
+;
+; Clobbers: A, X
+; =============================================================================
+poly_ripple:
+@loop:
+        cpx #33
+        bcs @done
+        inc poly_product,x
+        bne @done              ; carry absorbed
+        inx
+        bne @loop              ; always taken (X never wraps before bounds hit)
+@done:
+        rts
+
+; =============================================================================
 ; poly1305_multiply - Multiply h (17 bytes) by r (16 bytes), reduce mod 2^130-5
 ;
-; Schoolbook multiply: for each byte pair h[i] * r[j], accumulate into
-; poly_product[i+j..i+j+1]. Then reduce: top portion * 5, add to bottom.
+; Fully unrolled 17x16 schoolbook multiply (272 partial products) as a
+; straight-line macro expansion. Eliminates the inner/outer loop overhead
+; from the old loopy form (~12 k cy per block) and removes the two
+; data-dependent early-exits (`beq @skip_h_zero`, `beq @skip_r_zero`)
+; which were constant-time violations — every partial product is now
+; computed unconditionally regardless of h[i] or r[j] being zero.
+;
+; Each partial product h[i]*r[j] is added to poly_product[i+j..i+j+1]
+; via a 16-bit add; if that add leaves carry set, poly_ripple propagates
+; it upward. Final reduction mod 2^130-5 is handled by poly1305_reduce.
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
+
+; Macro: emit one partial product h[.i] * r[.j]
+!macro poly_pp .i, .j {
+        lda poly_h + .i
+        ldx poly_r + .j
+        jsr mul_8x8             ; poly_prod_lo/hi = h[i] * r[j]
+        clc
+        lda poly_product + (.i + .j)
+        adc poly_prod_lo
+        sta poly_product + (.i + .j)
+        lda poly_product + (.i + .j + 1)
+        adc poly_prod_hi
+        sta poly_product + (.i + .j + 1)
+        bcc +
+        ldx #(.i + .j + 2)
+        jsr poly_ripple
++
+}
+
 poly1305_multiply:
         ; Zero the product buffer (33 bytes)
         ldx #32
@@ -247,70 +301,13 @@ poly1305_multiply:
         dex
         bpl @zero_prod
 
-        ; Schoolbook multiply: h[i] * r[j] for i=0..16, j=0..15
-        lda #0
-        sta poly_i              ; i = 0 (h index)
-@mul_outer:
-        ldx poly_i
-        lda poly_h,x
-        beq @skip_h_zero       ; skip entire inner loop if h[i] = 0
+        ; Fully unrolled 17x16 schoolbook: 272 partial products
+        !for .I, 0, 16 {
+            !for .J, 0, 15 {
+                +poly_pp .I, .J
+            }
+        }
 
-        lda #0
-        sta poly_j              ; j = 0 (r index)
-@mul_inner:
-        ; Load h[i] into A, r[j] into X for mul_8x8
-        ldx poly_i
-        lda poly_h,x           ; A = h[i]
-        pha
-        ldx poly_j
-        lda poly_r,x           ; A = r[j]
-        beq @skip_r_zero       ; skip if r[j] = 0
-        tax                    ; X = r[j]
-        pla                    ; A = h[i]
-        jsr mul_8x8            ; poly_prod_lo/hi = h[i] * r[j]
-
-        ; Add 16-bit product to poly_product[i+j .. i+j+1]
-        lda poly_i
-        clc
-        adc poly_j
-        tax                    ; X = i+j
-
-        clc
-        lda poly_product,x
-        adc poly_prod_lo
-        sta poly_product,x
-        inx                    ; X = i+j+1
-        lda poly_product,x
-        adc poly_prod_hi
-        sta poly_product,x
-        bcc @next_j
-        ; Propagate carry upward — carry is set entering this loop
-@prop_carry:
-        inx
-        cpx #33
-        bcs @next_j            ; bounds check (clobbers carry)
-        sec                    ; restore carry (we only get here if carry was set)
-        lda poly_product,x
-        adc #0
-        sta poly_product,x
-        bcs @prop_carry
-        jmp @next_j
-
-@skip_r_zero:
-        pla                    ; discard saved h[i]
-@next_j:
-        inc poly_j
-        lda poly_j
-        cmp #16
-        bcc @mul_inner
-
-@skip_h_zero:
-        inc poly_i
-        lda poly_i
-        cmp #17
-        bcs @mul_done
-        jmp @mul_outer
-@mul_done:
         jmp poly1305_reduce
 
 ; =============================================================================
