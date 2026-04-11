@@ -230,33 +230,147 @@ cc20_qr_table:
 }
 
 ; =============================================================================
-; Quarter-round macro
+; Permuted-read add/xor macros
 ;
-; QR(a, b, c, d) where a,b,c,d are word *indices* (0..15). The macro
-; expands to the 4 op groups with all 32-bit ops inlined against literal
-; ZP addresses (cc20_work + 4*i).
+; These emit a 32-bit add or xor where the destination and/or source word
+; is accessed with a byte-offset permutation (implementing a byte-level
+; rotate-left as a compile-time rename). Parameters are the four physical
+; byte offsets from the base for logical byte 0,1,2,3.
 ;
-;   a += b; d ^= a; d <<<= 16
-;   c += d; b ^= c; b <<<= 12
-;   a += b; d ^= a; d <<<= 8
-;   c += d; b ^= c; b <<<= 7
+; Convention: P[j] is the physical offset (relative to the word base) of
+; logical byte j. For natural order P = (0,1,2,3). For rotl-8 renamed,
+; P = (3,0,1,2). For rotl-16, P = (2,3,0,1). For rotl-24, P = (1,2,3,0).
+;
+; The carry chain (for add) still flows from logical byte 0 → 3.
+; =============================================================================
+
+; dst ^= src (both with permutations).
+!macro xor32_perm .dst, .dp0, .dp1, .dp2, .dp3, .src, .sp0, .sp1, .sp2, .sp3 {
+        lda .dst + .dp0
+        eor .src + .sp0
+        sta .dst + .dp0
+        lda .dst + .dp1
+        eor .src + .sp1
+        sta .dst + .dp1
+        lda .dst + .dp2
+        eor .src + .sp2
+        sta .dst + .dp2
+        lda .dst + .dp3
+        eor .src + .sp3
+        sta .dst + .dp3
+}
+
+; dst += src (both with permutations). Carry chain flows low→high logically.
+!macro add32_perm .dst, .dp0, .dp1, .dp2, .dp3, .src, .sp0, .sp1, .sp2, .sp3 {
+        clc
+        lda .dst + .dp0
+        adc .src + .sp0
+        sta .dst + .dp0
+        lda .dst + .dp1
+        adc .src + .sp1
+        sta .dst + .dp1
+        lda .dst + .dp2
+        adc .src + .sp2
+        sta .dst + .dp2
+        lda .dst + .dp3
+        adc .src + .sp3
+        sta .dst + .dp3
+}
+
+; End-of-QR normalization: copy a word from offset-permuted physical layout
+; back to natural byte order. Writes logical[j] = phys[P[j]] into phys[j].
+; For rotl-16 (P=2,3,0,1) this is a half-swap. For rotl-8 (P=3,0,1,2) it's
+; a 4-byte cycle. Uses Y as temp to free A/X.
+;
+; Since rotl-16 is a symmetric swap, we can do it in place with two pairs
+; of byte swaps. For rotl-8 / rotl-24, we cycle through 4 bytes using Y
+; as a single-register scratch.
+
+!macro normalize_rot16 .base {
+        ; P = (2,3,0,1): swap b[0]<->b[2], b[1]<->b[3]
+        lda .base+0
+        ldy .base+2
+        sty .base+0
+        sta .base+2
+        lda .base+1
+        ldy .base+3
+        sty .base+1
+        sta .base+3
+}
+
+!macro normalize_rot24 .base {
+        ; Current P = (1,2,3,0): logical[j] = phys[(j+1) mod 4].
+        ; We want phys[j] := logical[j] for all j.
+        ; new_phys[0] = old_phys[1]
+        ; new_phys[1] = old_phys[2]
+        ; new_phys[2] = old_phys[3]
+        ; new_phys[3] = old_phys[0]
+        ldy .base+0             ; save old phys[0]
+        lda .base+1
+        sta .base+0
+        lda .base+2
+        sta .base+1
+        lda .base+3
+        sta .base+2
+        sty .base+3
+}
+
+; =============================================================================
+; Quarter-round macro (C3: rot-8/16 as offset rename)
+;
+; QR(a, b, c, d) where a,b,c,d are word *indices* (0..15). All words start
+; at natural byte order (P=(0,1,2,3)). Byte-aligned rotations are absorbed
+; into the byte offsets of subsequent reads/writes. Rot-12 = rename-8 +
+; phys rotl-4; rot-7 = rename-8 + phys rotr-1. At QR end, we normalize b
+; (cumulative R=16) and d (cumulative R=24) back to natural order.
+;
+; Cumulative offset trace:
+;   start:                     R_a=0  R_b=0  R_c=0  R_d=0
+;   a+=b; d^=a; d<<<=16        R_a=0  R_b=0  R_c=0  R_d=16
+;   c+=d; b^=c; b<<<=12        R_a=0  R_b=8  R_c=0  R_d=16   (+rotl4 on phys-b)
+;   a+=b; d^=a; d<<<=8         R_a=0  R_b=8  R_c=0  R_d=24
+;   c+=d; b^=c; b<<<=7         R_a=0  R_b=16 R_c=0  R_d=24   (+rotr1 on phys-b)
+;   normalize b (R=16), d (R=24) → all natural
+;
+; Permutation table per R (multiple of 8):
+;   R=0  : (0,1,2,3)   natural
+;   R=8  : (3,0,1,2)   rotl-8  renamed
+;   R=16 : (2,3,0,1)   rotl-16 renamed
+;   R=24 : (1,2,3,0)   rotl-24 renamed
 ; =============================================================================
 !macro cc20_qr .ia, .ib, .ic, .id {
+        ; --- 1. a += b;   d ^= a;   d <<<= 16 ---
+        ; All natural. d <<<= 16 is a pure rename (no code emitted).
         +add32_zp    cc20_work+4*.ia, cc20_work+4*.ib
         +xor32_zp    cc20_work+4*.id, cc20_work+4*.ia
-        +rotl32_16_zp cc20_work+4*.id
+        ; R_d = 16
 
-        +add32_zp    cc20_work+4*.ic, cc20_work+4*.id
+        ; --- 2. c += d;   b ^= c;   b <<<= 12 ---
+        ; d is at R=16, P=(2,3,0,1). c, b natural.
+        +add32_perm  cc20_work+4*.ic, 0,1,2,3, cc20_work+4*.id, 2,3,0,1
         +xor32_zp    cc20_work+4*.ib, cc20_work+4*.ic
-        +rotl32_12_zp cc20_work+4*.ib
+        ; b <<<= 12 = rename-8 (R_b += 8 → 8) + phys rotl-4
+        +rotl32_4_zp cc20_work+4*.ib
+        ; R_b = 8, R_d = 16
 
-        +add32_zp    cc20_work+4*.ia, cc20_work+4*.ib
-        +xor32_zp    cc20_work+4*.id, cc20_work+4*.ia
-        +rotl32_8_zp cc20_work+4*.id
+        ; --- 3. a += b;   d ^= a;   d <<<= 8 ---
+        ; b at R=8, P=(3,0,1,2). d at R=16, P=(2,3,0,1). a natural.
+        +add32_perm  cc20_work+4*.ia, 0,1,2,3, cc20_work+4*.ib, 3,0,1,2
+        +xor32_perm  cc20_work+4*.id, 2,3,0,1, cc20_work+4*.ia, 0,1,2,3
+        ; d <<<= 8 rename: R_d = 16 + 8 = 24, P=(1,2,3,0)
+        ; R_b = 8, R_d = 24
 
-        +add32_zp    cc20_work+4*.ic, cc20_work+4*.id
-        +xor32_zp    cc20_work+4*.ib, cc20_work+4*.ic
-        +rotl32_7_zp cc20_work+4*.ib
+        ; --- 4. c += d;   b ^= c;   b <<<= 7 ---
+        ; d at R=24, P=(1,2,3,0). b at R=8, P=(3,0,1,2). c natural.
+        +add32_perm  cc20_work+4*.ic, 0,1,2,3, cc20_work+4*.id, 1,2,3,0
+        +xor32_perm  cc20_work+4*.ib, 3,0,1,2, cc20_work+4*.ic, 0,1,2,3
+        ; b <<<= 7 = rename-8 (R_b += 8 → 16) + phys rotr-1
+        +rotr32_1_zp cc20_work+4*.ib
+        ; R_b = 16, R_d = 24
+
+        ; --- End of QR: normalize b and d back to natural order ---
+        +normalize_rot16 cc20_work+4*.ib
+        +normalize_rot24 cc20_work+4*.id
 }
 
 ; =============================================================================
