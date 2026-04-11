@@ -5,9 +5,21 @@ Author notes:
 - Numbers in Section 1 are **measured** via `tools/benchmark_chacha20_poly1305.py`.
   Everything else labelled "estimated" or "~" is a guess grounded in the cited
   exemplars — it needs to be re-measured step-by-step.
-- Target-app priority per project memory: WireGuard, TLS 1.3, DTLS. Messages
-  are typically long (hundreds to ~1500 B); per-packet setup is frequent-ish
-  but amortized over a full packet.
+- Target-app priority per project memory: WireGuard, TLS 1.3, DTLS.
+  Packet-size profile is **bimodal**, not uniformly long:
+  - **Large**: WireGuard data packets (~1280 B MTU), TLS 1.3 bulk records
+    (up to 16 KB, typically chunked at ~1400 B per MTU). These amortize
+    per-packet setup over many Poly1305 blocks.
+  - **Small**: WireGuard handshake (32/48 B), keepalives (32 B), TLS 1.3
+    handshake records and alerts (tens of bytes). These are dominated by
+    per-packet setup — any optimization that trades init cost for
+    per-block cost is a net loss on these.
+
+  Consequence: per-packet init cost (`aead_encrypt n=0`) and per-block
+  cost (`poly1305_block`) must be tracked **separately** in the
+  progression table and considered on their own merits. A step that
+  wins big on n=1024 but regresses n=0 may require a small-packet
+  profile variant (see Project decision #5).
 
 ---
 
@@ -30,6 +42,18 @@ Author notes:
    every step: rebuild, run the full 214-test suite, run the benchmark,
    append a row to the progression table below. Any regression in cycle
    count must be explained in the commit body or the step reverted.
+5. **Packet-size awareness**: every optimization step must report
+   `aead_encrypt n=0` (pure fixed-cost per packet) **and** `aead_encrypt
+   n=1024` in its commit body. A step that improves n=1024 but regresses
+   n=0 is not automatically accepted — it must be justified by where on
+   the packet-size curve the break-even sits and whether the target
+   workloads (WireGuard MTU traffic, TLS 1.3 bulk records, WireGuard
+   handshakes, TLS 1.3 handshake records) cluster above or below that
+   point. If a win on large packets would visibly hurt handshake
+   throughput, the optimization goes behind a **small-packet profile
+   variant** — a third build profile, or a runtime `aead_encrypt_short`
+   entry point, depending on which is cheaper. The Profile A / Profile B
+   scaffold from Step 5 is the place this would land.
 
 ### Progression table
 
