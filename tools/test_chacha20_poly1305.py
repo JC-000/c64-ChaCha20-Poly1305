@@ -31,6 +31,17 @@ from c64_test_harness import (
     jsr,
 )
 
+# Independent ground-truth oracle: pyca/cryptography. Used by the
+# "cross-check vs pyca" tests below so that the expected values we compare
+# the C64 output against are NOT produced by the hand-rolled Python
+# reference in this same file (which could, in principle, share a bug with
+# the assembly). If this import fails, install with `pip install
+# cryptography`.
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305 as _PycaCC20P1305
+from cryptography.hazmat.primitives.ciphers import Cipher as _PycaCipher, algorithms as _pyca_algs
+from cryptography.hazmat.primitives.poly1305 import Poly1305 as _PycaPoly1305
+from cryptography.exceptions import InvalidTag as _PycaInvalidTag
+
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 )
@@ -42,7 +53,7 @@ VECTORS_PATH = os.path.join(PROJECT_ROOT, "test", "rfc7539_vectors.json")
 # C64 (not used by BASIC, KERNAL, or the library PRG at $0810-$12bb). The
 # library needs room for up to 114 + 16 bytes for the RFC AEAD vector.
 SCRATCH_BUF = 0xC000
-SCRATCH_LEN = 0x400
+SCRATCH_LEN = 0x1000  # $C000-$CFFF free (library ends <$13xx; tables at $8000-$82FF)
 
 VERBOSE = False
 
@@ -251,9 +262,11 @@ def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
                 struct.pack('<H', len(ciphertext)))
     write_bytes(transport, labels["aead_tag"], tag)
 
-    jsr(transport, labels["aead_decrypt"], timeout=600.0)
+    regs = jsr(transport, labels["aead_decrypt"], timeout=600.0)
     pt = read_bytes(transport, ct_buf, len(ciphertext))
-    return pt, ct_buf
+    # aead_decrypt returns A=0 on success, A=$ff on auth failure.
+    status = regs.get("a", regs.get("A", 0)) if isinstance(regs, dict) else 0
+    return pt, ct_buf, status
 
 
 # ============================================================================
@@ -581,8 +594,9 @@ def test_aead_decrypt(transport, labels, rng):
     plaintext = bytes(rng.randint(0, 255) for _ in range(32))
     ct, tag = aead_encrypt_ref(key, nonce, aad, plaintext)
 
-    pt_result, _ = c64_aead_decrypt(transport, labels, key, nonce, aad, ct, tag)
-    if pt_result == plaintext:
+    pt_result, _, status = c64_aead_decrypt(transport, labels, key, nonce,
+                                             aad, ct, tag)
+    if pt_result == plaintext and status == 0:
         passed += 1
         if VERBOSE:
             print("  PASS AEAD decrypt: valid tag")
@@ -590,24 +604,318 @@ def test_aead_decrypt(transport, labels, rng):
         failed += 1
         print("  FAIL AEAD decrypt valid:")
         print(f"    expected: {plaintext.hex()}")
-        print(f"    got:      {pt_result.hex()}")
+        print(f"    got:      {pt_result.hex()}  status={status:#x}")
 
     # --- Tampered path: ciphertext buffer should NOT be modified ---
     bad_tag = bytearray(tag)
     bad_tag[0] ^= 0x01
-    pt_result2, ct_buf = c64_aead_decrypt(transport, labels, key, nonce, aad,
-                                           ct, bytes(bad_tag))
+    pt_result2, ct_buf, status2 = c64_aead_decrypt(transport, labels, key,
+                                                    nonce, aad, ct,
+                                                    bytes(bad_tag))
     # Re-read ciphertext region to see if routine touched it.
     ct_after = read_bytes(transport, ct_buf, len(ct))
-    if ct_after == ct:
+    if ct_after == ct and status2 != 0:
         passed += 1
         if VERBOSE:
-            print("  PASS AEAD decrypt: tampered tag rejected")
+            print("  PASS AEAD decrypt: tampered tag rejected "
+                  f"(status={status2:#x})")
     else:
         failed += 1
-        print("  FAIL AEAD decrypt tampered: ciphertext was modified")
-        print(f"    before: {ct.hex()}")
-        print(f"    after:  {ct_after.hex()}")
+        print("  FAIL AEAD decrypt tampered:")
+        if status2 == 0:
+            print(f"    status=0 (should be nonzero)")
+        if ct_after != ct:
+            print(f"    ciphertext was modified")
+            print(f"    before: {ct.hex()}")
+            print(f"    after:  {ct_after.hex()}")
+    return passed, failed
+
+
+# ============================================================================
+# Independent cross-check tests vs. pyca/cryptography
+# ----------------------------------------------------------------------------
+# The tests below use pyca/cryptography as a *ground-truth oracle*. They do
+# not rely on the hand-rolled Python reference above — that reference is
+# convenient, but it was written by the same author(s) who wrote the
+# assembly, so a subtle shared bug (wrong rotation constant, mis-clamped
+# byte, off-by-one block counter) could in principle be missed if we only
+# cross-checked against ourselves.
+#
+# pyca/cryptography wraps OpenSSL's (or BoringSSL's) battle-tested C
+# implementations, so matching its output gives us high confidence the
+# assembly is doing real crypto.
+# ============================================================================
+
+def _pyca_chacha20_keystream(key, counter, nonce, nblocks=1):
+    """Extract `nblocks * 64` bytes of ChaCha20 keystream at the given counter."""
+    # pyca's ChaCha20 takes a 16-byte "nonce" which is actually (counter ||
+    # nonce) in little-endian layout per RFC 7539.
+    full_nonce = counter.to_bytes(4, 'little') + nonce
+    cipher = _PycaCipher(_pyca_algs.ChaCha20(key, full_nonce), mode=None)
+    enc = cipher.encryptor()
+    return enc.update(b'\x00' * (64 * nblocks)) + enc.finalize()
+
+
+def _pyca_poly1305_tag(key, message):
+    p = _PycaPoly1305(key)
+    p.update(message)
+    return p.finalize()
+
+
+def _pyca_aead_encrypt(key, nonce, aad, plaintext):
+    """Returns (ciphertext, tag) as separate values (pyca concatenates)."""
+    aead = _PycaCC20P1305(key)
+    combined = aead.encrypt(nonce, plaintext, aad if aad else None)
+    return combined[:-16], combined[-16:]
+
+
+def test_chacha20_block_vs_pyca(transport, labels, rng, count=20):
+    """Cross-check ChaCha20 block keystream against pyca."""
+    passed = failed = 0
+    for i in range(count):
+        key = bytes(rng.randint(0, 255) for _ in range(32))
+        nonce = bytes(rng.randint(0, 255) for _ in range(12))
+        counter = rng.randint(0, 0xFFFF)
+
+        expected = _pyca_chacha20_keystream(key, counter, nonce, nblocks=1)
+
+        c64_chacha20_init(transport, labels, key, nonce, counter)
+        got = c64_chacha20_block(transport, labels)
+
+        if got == expected:
+            passed += 1
+            if VERBOSE:
+                print(f"  PASS chacha20_block vs pyca #{i} "
+                      f"(counter={counter})")
+        else:
+            failed += 1
+            print(f"  FAIL chacha20_block vs pyca #{i} counter={counter}")
+            print(f"    key:   {key.hex()}")
+            print(f"    nonce: {nonce.hex()}")
+            print(f"    expected: {expected.hex()}")
+            print(f"    got:      {got.hex()}")
+    return passed, failed
+
+
+def test_poly1305_vs_pyca(transport, labels, rng, count=20):
+    """Cross-check Poly1305 MAC against pyca."""
+    passed = failed = 0
+    # Lengths chosen to hit boundaries: empty, 1, <16, 15, 16, 17, 32, 64,
+    # plus a few random.
+    lens = [0, 1, 8, 15, 16, 17, 31, 32, 33, 48, 64]
+    while len(lens) < count:
+        lens.append(rng.randint(0, 200))
+    lens = lens[:count]
+
+    for i, msg_len in enumerate(lens):
+        key = bytes(rng.randint(0, 255) for _ in range(32))
+        message = bytes(rng.randint(0, 255) for _ in range(msg_len))
+
+        # poly1305_update in the C64 lib takes a single 8-bit length, so we
+        # cap at 200 to stay well under the 255 limit.
+        if msg_len > 200:
+            continue
+
+        expected = _pyca_poly1305_tag(key, message)
+        got = c64_poly1305_mac(transport, labels, key, message)
+
+        if got == expected:
+            passed += 1
+            if VERBOSE:
+                print(f"  PASS poly1305 vs pyca #{i} ({msg_len}B)")
+        else:
+            failed += 1
+            print(f"  FAIL poly1305 vs pyca #{i} ({msg_len}B)")
+            print(f"    key:      {key.hex()}")
+            print(f"    message:  {message.hex()}")
+            print(f"    expected: {expected.hex()}")
+            print(f"    got:      {got.hex()}")
+    return passed, failed
+
+
+# Plaintext sizes chosen to exercise block boundaries:
+#   0, 1            - empty / single-byte (tail-only)
+#   63, 64, 65      - just below / exactly / just above one block
+#   127, 128, 129   - two-block boundary
+#   255, 256        - byte-count carry
+#   511, 512        - two-byte block counter territory
+AEAD_PT_SIZES = [0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 511, 512]
+AEAD_AAD_SIZES = [0, 1, 16, 255]
+
+
+def test_aead_vs_pyca(transport, labels, rng):
+    """Cross-check AEAD encrypt + decrypt + tamper rejection against pyca.
+
+    For each (aad_len, pt_len) combo we:
+      1. Compute (pyca_ct, pyca_tag) in Python via pyca.
+      2. Run C64 aead_encrypt; assert c64_ct == pyca_ct and c64_tag == pyca_tag.
+      3. Run C64 aead_decrypt on (pyca_ct, pyca_tag); assert recovered
+         plaintext matches, and aead_decrypt returned A=0.
+      4. Flip one byte of the tag, run aead_decrypt, assert A != 0.
+      5. Flip one byte of the ciphertext, run aead_decrypt, assert A != 0.
+    """
+    passed = failed = 0
+
+    # Build a list of (aad_len, pt_len) pairs. We pair each pt size with a
+    # random aad size plus fixed corner cases to hit ~30 combos total.
+    combos = []
+    for pt_len in AEAD_PT_SIZES:
+        combos.append((rng.choice(AEAD_AAD_SIZES), pt_len))
+    # Add corner AAD sizes with a common pt_len for full coverage.
+    for aad_len in AEAD_AAD_SIZES:
+        combos.append((aad_len, 64))
+    for aad_len in AEAD_AAD_SIZES:
+        combos.append((aad_len, 65))
+
+    for i, (aad_len, pt_len) in enumerate(combos):
+        key = bytes(rng.randint(0, 255) for _ in range(32))
+        nonce = bytes(rng.randint(0, 255) for _ in range(12))
+        aad = bytes(rng.randint(0, 255) for _ in range(aad_len))
+        plaintext = bytes(rng.randint(0, 255) for _ in range(pt_len))
+
+        pyca_ct, pyca_tag = _pyca_aead_encrypt(key, nonce, aad, plaintext)
+
+        # --- 1. Encrypt on C64, compare to pyca ---
+        c64_ct, c64_tag = c64_aead_encrypt(transport, labels, key, nonce,
+                                            aad, plaintext)
+        ct_ok = c64_ct == pyca_ct
+        tag_ok = c64_tag == pyca_tag
+        if ct_ok and tag_ok:
+            passed += 1
+            if VERBOSE:
+                print(f"  PASS AEAD vs pyca encrypt #{i} "
+                      f"aad={aad_len} pt={pt_len}")
+        else:
+            failed += 1
+            print(f"  FAIL AEAD vs pyca encrypt #{i} "
+                  f"aad={aad_len} pt={pt_len}")
+            if not ct_ok:
+                print(f"    pyca_ct: {pyca_ct.hex()}")
+                print(f"    c64_ct:  {c64_ct.hex()}")
+            if not tag_ok:
+                print(f"    pyca_tag: {pyca_tag.hex()}")
+                print(f"    c64_tag:  {c64_tag.hex()}")
+            continue  # skip decrypt checks if encrypt didn't match
+
+        # --- 2. Decrypt pyca's (ct, tag) on C64 ---
+        pt_got, _, status = c64_aead_decrypt(transport, labels, key, nonce,
+                                              aad, pyca_ct, pyca_tag)
+        if pt_got == plaintext and status == 0:
+            passed += 1
+            if VERBOSE:
+                print(f"  PASS AEAD vs pyca decrypt #{i}")
+        else:
+            failed += 1
+            print(f"  FAIL AEAD vs pyca decrypt #{i} "
+                  f"aad={aad_len} pt={pt_len}")
+            print(f"    status={status:#x}")
+            print(f"    expected: {plaintext.hex()}")
+            print(f"    got:      {pt_got.hex()}")
+
+        # --- 3. Flip one byte of the tag → must reject ---
+        bad_tag = bytearray(pyca_tag)
+        bad_tag[rng.randint(0, 15)] ^= 0x5A
+        _, _, bad_tag_status = c64_aead_decrypt(
+            transport, labels, key, nonce, aad, pyca_ct, bytes(bad_tag))
+        if bad_tag_status != 0:
+            passed += 1
+            if VERBOSE:
+                print(f"  PASS AEAD tampered-tag rejected #{i} "
+                      f"(status={bad_tag_status:#x})")
+        else:
+            failed += 1
+            print(f"  FAIL AEAD tampered-tag accepted #{i}: status=0")
+
+        # --- 4. Flip one byte of the ciphertext → must reject ---
+        # (only meaningful for pt_len > 0)
+        if pt_len > 0:
+            bad_ct = bytearray(pyca_ct)
+            bad_ct[rng.randint(0, len(bad_ct) - 1)] ^= 0x5A
+            _, _, bad_ct_status = c64_aead_decrypt(
+                transport, labels, key, nonce, aad, bytes(bad_ct), pyca_tag)
+            if bad_ct_status != 0:
+                passed += 1
+                if VERBOSE:
+                    print(f"  PASS AEAD tampered-ct rejected #{i}")
+            else:
+                failed += 1
+                print(f"  FAIL AEAD tampered-ct accepted #{i}: status=0")
+
+    return passed, failed
+
+
+def test_sanity_floor(transport, labels, rng):
+    """Sanity floor: verify encryption actually transforms the plaintext.
+
+    Catches a 'stub that just copies input to output' — if aead_encrypt
+    returned the plaintext unchanged, or returned all zeros, we'd see it
+    here. Uses a nonzero plaintext so that XOR-with-zero-keystream can't
+    sneak past us either.
+    """
+    passed = failed = 0
+
+    # Case 1: nonzero random plaintext → ct must differ from pt
+    key = bytes(rng.randint(1, 255) for _ in range(32))
+    nonce = bytes(rng.randint(1, 255) for _ in range(12))
+    aad = b""
+    plaintext = bytes(rng.randint(1, 255) for _ in range(64))
+    ct, tag = c64_aead_encrypt(transport, labels, key, nonce, aad, plaintext)
+
+    if ct != plaintext:
+        passed += 1
+        if VERBOSE:
+            print("  PASS sanity: ct != pt")
+    else:
+        failed += 1
+        print("  FAIL sanity: ct == pt (library may be a pass-through stub)")
+
+    if ct != bytes(len(ct)):
+        passed += 1
+        if VERBOSE:
+            print("  PASS sanity: ct != all-zeros")
+    else:
+        failed += 1
+        print("  FAIL sanity: ct is all zeros")
+
+    if tag != bytes(16):
+        passed += 1
+        if VERBOSE:
+            print("  PASS sanity: tag != all-zeros")
+    else:
+        failed += 1
+        print("  FAIL sanity: tag is all zeros")
+
+    # Case 2: all-zeros plaintext should still produce nonzero ct (keystream
+    # itself is effectively nonzero for any real ChaCha20 key/nonce). This
+    # catches 'AND-with-plaintext' style stubs.
+    zero_pt = bytes(64)
+    zero_ct, zero_tag = c64_aead_encrypt(transport, labels, key, nonce,
+                                          aad, zero_pt)
+    if zero_ct != zero_pt:
+        passed += 1
+        if VERBOSE:
+            print("  PASS sanity: ct(zeros) != zeros (keystream non-trivial)")
+    else:
+        failed += 1
+        print("  FAIL sanity: encrypting zeros produced zeros "
+              "(keystream may be identity)")
+
+    # Case 3: cross-check the all-zeros case against pyca for extra
+    # confidence (this is one known-answer test we can do entirely
+    # deterministically).
+    pyca_zero_ct, pyca_zero_tag = _pyca_aead_encrypt(key, nonce, aad, zero_pt)
+    if zero_ct == pyca_zero_ct and zero_tag == pyca_zero_tag:
+        passed += 1
+        if VERBOSE:
+            print("  PASS sanity: zero-pt matches pyca")
+    else:
+        failed += 1
+        print("  FAIL sanity: zero-pt diverges from pyca")
+        print(f"    pyca_ct:  {pyca_zero_ct.hex()}")
+        print(f"    c64_ct:   {zero_ct.hex()}")
+        print(f"    pyca_tag: {pyca_zero_tag.hex()}")
+        print(f"    c64_tag:  {zero_tag.hex()}")
+
     return passed, failed
 
 
@@ -638,6 +946,14 @@ def run_tests(transport, labels, seed):
          lambda: test_aead_encrypt(transport, labels)),
         ("AEAD random", lambda: test_aead_random(transport, labels, rng)),
         ("AEAD decrypt", lambda: test_aead_decrypt(transport, labels, rng)),
+        ("ChaCha20 block vs pyca (cross-check)",
+         lambda: test_chacha20_block_vs_pyca(transport, labels, rng)),
+        ("Poly1305 vs pyca (cross-check)",
+         lambda: test_poly1305_vs_pyca(transport, labels, rng)),
+        ("AEAD vs pyca (cross-check)",
+         lambda: test_aead_vs_pyca(transport, labels, rng)),
+        ("Sanity floor (ct != pt, tag != 0)",
+         lambda: test_sanity_floor(transport, labels, rng)),
     ]
 
     for name, fn in test_groups:
@@ -659,6 +975,10 @@ def run_tests(transport, labels, seed):
 
 def main():
     global VERBOSE
+    # Default seed is time-based (via random.randint on an unseeded RNG)
+    # so each run gets fresh random inputs — bugs that only surface for
+    # specific key/nonce/length patterns will eventually show up across
+    # runs. Pass --seed N to reproduce a specific failure.
     seed = random.randint(0, 2 ** 32 - 1)
     args = sys.argv[1:]
     i = 0
