@@ -11,6 +11,40 @@ Author notes:
 
 ---
 
+## Project decisions (locked)
+
+1. **Target apps**: WireGuard + TLS 1.3. Long messages dominant. No
+   GCM-SIV-style short-key churn expected.
+2. **Build profiles**: both ship.
+   - **Profile A** = REU-assisted + fast path (primary optimization target).
+   - **Profile B** = stock C64, no REU, portable baseline with all the
+     portable optimizations (ZP state, inlined QRs, rot-rename, P1 unroll,
+     SMC). REU-only tricks (REU-DMA quarter-square, REU row fetch) are
+     Profile-A-only.
+3. **Constant-time by contract**: no `USE_CT=0` escape hatch. The
+   `beq @skip_h_zero` / `beq @skip_r_zero` early-exits in
+   `poly1305_multiply` are to be removed as part of the P1 unroll step
+   (they become straight-line zero-multiplies that always run). CT is a
+   correctness contract for this library going forward. See Section 4.
+4. **Cadence**: one commit per optimization step. Benchmark gate after
+   every step: rebuild, run the full 214-test suite, run the benchmark,
+   append a row to the progression table below. Any regression in cycle
+   count must be explained in the commit body or the step reverted.
+
+### Progression table
+
+Columns: commit, chacha20_block (cy), poly1305_block (cy),
+aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
+
+| step                                    | commit    | chacha20_block | poly1305_block | aead_encrypt n=1024 | Δ vs baseline |
+|-----------------------------------------|-----------|---------------:|---------------:|--------------------:|--------------:|
+| S0 baseline (benchmark infra)           | `923d34d` |        149 987 |         53 270 |           5 974 048 |          0.0% |
+
+Subsequent steps append a row here with their measured cycle counts and
+commit hash.
+
+---
+
 ## Section 1 — Baseline
 
 ### Measured baseline (`benchmark_chacha20_poly1305.py`, 3 samples, `min`)
@@ -103,16 +137,16 @@ a lot of fat.
 
 ### ChaCha20 ranked optimizations
 
-| # | Optimization | Δ / 64 B block (est.) | Code size | Risk | Dep. |
-|---|---|---:|---:|---|---|
-| C1 | **Put `cc20_work` in zero page** (64 B in ZP, reclaim from BLAKE2/x25519 slots not used here) | -20 000 cy | neutral | low | — |
-| C2 | **Fully inline the 8 QRs per double-round** and inline the 32-bit add/xor/rot bodies: kill 80 `jsr`s + 80 `rts`s per block, kill pointer-patching macros | -30 000 cy | +~600 B | med | C1 |
-| C3 | **Rot-16 / rot-8 as "address rename"**: when QR bodies are inlined, each word's 4 bytes live at known ZP offsets; rot-16 becomes "swap operand pairs in subsequent adds", rot-8 becomes a +1 offset shift into the operand list. Zero runtime cost per mjosaarinen/chacha-avr pattern (github.com/mjosaarinen/chacha-avr/blob/master/chacha_core_avr.S, Saarinen 2018). | -8 000 cy (16 rotations × ~500 cy saved) | ~0 | med | C2 |
-| C4 | **Rot-12 as rot-8 + rot-4**, rot-7 as rot-8 − rot-1: we already do this, but with `jsr` linkage. After C2 these become inline; rot-8 is free (C3); rot-4 is the dominant remaining cost. Implement rot-4 as one unrolled pass of `asl/rol` ×4 (or `lsr/ror` ×4) with wrap, ~30 cy instead of current ~140 cy. | -3 500 cy | +200 B | low | C2,C3 |
-| C5 | **Fixed first row**: state[0..3] = `"expand 32-byte k"` never change (before the final `work += state` add). After the add, they're input-dependent again. Skip the row-0 copy in the `state→work` prelude and the four `cc20_set_dst 0` recomputes in QR0..QR3 column rounds by baking the constants as immediate values into the first-round-only add. | -~1 200 cy | +100 B | low | C2 |
-| C6 | **Counter-increment fold**: `chacha20_block` ends with a 4-byte `inc; bne; inc;…` counter step. When invoked from `chacha20_encrypt` in a tight loop, fold the counter increment into the state init instead of the end-of-block tail. | -~30 cy/block | 0 | low | — |
-| C7 | **Keystream XOR inline with copy**: `chacha20_block` copies work→keystream (64 bytes) and `chacha20_encrypt` then re-reads keystream to XOR with data. Merge: write final `work+state` byte straight into `*data ^=` in the encrypt loop. Saves a 64-byte copy + a 64-byte re-read per block. | -~700 cy | +100 B | med | C2 |
-| C8 | **SMC operand baking in the `state→work` copy and `work += state` tail**: ldy-indexed loops become straight-line `lda cc20_state+n / sta cc20_work+n` pairs. Already trivial if inlined. | -~400 cy | +200 B | low | C1 |
+| # | Optimization | Δ / 64 B block (est.) | Code size | Risk | Dep. | Profile |
+|---|---|---:|---:|---|---|---|
+| C1 | **Put `cc20_work` in zero page** (64 B in ZP, reclaim from BLAKE2/x25519 slots not used here) | -20 000 cy | neutral | low | — | A+B |
+| C2 | **Fully inline the 8 QRs per double-round** and inline the 32-bit add/xor/rot bodies: kill 80 `jsr`s + 80 `rts`s per block, kill pointer-patching macros | -30 000 cy | +~600 B | med | C1 | A+B |
+| C3 | **Rot-16 / rot-8 as "address rename"**: when QR bodies are inlined, each word's 4 bytes live at known ZP offsets; rot-16 becomes "swap operand pairs in subsequent adds", rot-8 becomes a +1 offset shift into the operand list. Zero runtime cost per mjosaarinen/chacha-avr pattern (github.com/mjosaarinen/chacha-avr/blob/master/chacha_core_avr.S, Saarinen 2018). | -8 000 cy (16 rotations × ~500 cy saved) | ~0 | med | C2 | A+B |
+| C4 | **Rot-12 as rot-8 + rot-4**, rot-7 as rot-8 − rot-1: we already do this, but with `jsr` linkage. After C2 these become inline; rot-8 is free (C3); rot-4 is the dominant remaining cost. Implement rot-4 as one unrolled pass of `asl/rol` ×4 (or `lsr/ror` ×4) with wrap, ~30 cy instead of current ~140 cy. | -3 500 cy | +200 B | low | C2,C3 | A+B |
+| C5 | **Fixed first row**: state[0..3] = `"expand 32-byte k"` never change (before the final `work += state` add). After the add, they're input-dependent again. Skip the row-0 copy in the `state→work` prelude and the four `cc20_set_dst 0` recomputes in QR0..QR3 column rounds by baking the constants as immediate values into the first-round-only add. | -~1 200 cy | +100 B | low | C2 | A+B |
+| C6 | **Counter-increment fold**: `chacha20_block` ends with a 4-byte `inc; bne; inc;…` counter step. When invoked from `chacha20_encrypt` in a tight loop, fold the counter increment into the state init instead of the end-of-block tail. | -~30 cy/block | 0 | low | — | A+B |
+| C7 | **Keystream XOR inline with copy**: `chacha20_block` copies work→keystream (64 bytes) and `chacha20_encrypt` then re-reads keystream to XOR with data. Merge: write final `work+state` byte straight into `*data ^=` in the encrypt loop. Saves a 64-byte copy + a 64-byte re-read per block. | -~700 cy | +100 B | med | C2 | A+B |
+| C8 | **SMC operand baking in the `state→work` copy and `work += state` tail**: ldy-indexed loops become straight-line `lda cc20_state+n / sta cc20_work+n` pairs. Already trivial if inlined. | -~400 cy | +200 B | low | C1 | A+B |
 
 **Projected `chacha20_block` after C1–C5: ~80–90 k cy** (~45 % improvement).
 That drops the 1024-byte AEAD ChaCha contribution from 2.4 M → ~1.4 M, i.e.
@@ -179,16 +213,16 @@ expensive as the multiply itself.
 
 ### Poly1305 ranked optimizations
 
-| # | Optimization | Δ / 16 B block (est.) | Code size | Risk | Dep. |
-|---|---|---:|---:|---|---|
-| P1 | **Fully unroll the 17×16 schoolbook** into straight-line code; eliminate `poly_i`/`poly_j` loop state, eliminate `pha`/`pla`, eliminate carry-propagate branch loop. | -12 000 cy | +~1.5 KB | med | — |
-| P2 | **Bake `r` into the multiply body (SMC)**: `r` is fixed for an entire packet (derived once per AEAD call). Instead of `lda poly_r,y`, use `lda #$??` immediates patched at `poly1305_init` time. Removes one ZP load per inner iteration (272 × 3 cy = ~800 cy) and opens the door to P3. | -800 cy (alone) | +~700 B | med | P1 |
-| P3 | **Shoup-style per-r table (16 × 256 bytes = 4 KB)**: for each `r[j]`, precompute `r[j] * 0..255` as a pair of 256-byte tables (lo/hi). Inner multiply becomes two `lda tab,x` + `adc` — ~8 cy instead of ~45 cy. Precompute cost: 16 × 256 × ~12 cy ≈ 50 k cy per packet. Break-even: ~2 blocks. Worth it for ≥4-block messages (≥64 B). | -25 000 cy | +4 KB tables + ~500 B code | med | — |
-| P4 | **Donna-style fused wrap**: in the schoolbook, for `j > i` directly accumulate `h[j] * r[i+17-j] * 320` (i.e. `*(5<<6)`) into position `i+j-17`, per floodyberry/poly1305-donna-8.h. Fuses the `*5` reduction into the multiply so we never form the 33-byte intermediate. Avoids the 2-pass 17-byte `ror` reduction entirely. | -8 000 cy | ~0 | high | P1 |
-| P5 | **Skip multiplications involving clamped `r` bits**: after clamping, `r[3]`, `r[7]`, `r[11]`, `r[15]` have their top 4 bits zero (so those bytes are ≤ 15, but still multi-bit), and `r[4]`, `r[8]`, `r[12]` have their bottom 2 bits zero. This does NOT give us skippable partial products — those r bytes can still be fully nonzero, just constrained. **Do not pursue.** Documenting the negative result so we don't revisit. | 0 | 0 | — | — |
-| P6 | **`aead_scratch` -> ZP for partial-block fast path**: current code copies last partial block into `aead_scratch` in RAM and re-points `zp_ptr1`. If instead the scratch lives in ZP and `poly1305_block` reads from it via `zp,y`, we save ~60 cy on every message with a partial tail. | -60 cy/packet | neutral | low | — |
-| P7 | **Merge `poly1305_block` add + first multiply partial-product pass**: the add loop writes `h[i]`, the next multiply loop immediately reads `h[i]`. Fuse so each iteration adds `block[i]` and kicks off the `h[i] * r[*]` pass without re-loading. | -700 cy | ~0 | med | P1 |
-| P8 | **Move sqtab build from `poly1305_init` to one-time library init** if Profile A is chosen — the sqtab is a pure function of the platform, not of `r`. Saves ~80 k cy of per-packet setup (amortizes into the n=0 baseline figure). | -80 000 cy/packet (one-time) | 0 | low | — |
+| # | Optimization | Δ / 16 B block (est.) | Code size | Risk | Dep. | Profile |
+|---|---|---:|---:|---|---|---|
+| P1 | **Fully unroll the 17×16 schoolbook** into straight-line code; eliminate `poly_i`/`poly_j` loop state, eliminate `pha`/`pla`, eliminate carry-propagate branch loop. Also removes the data-dependent `beq @skip_h_zero` / `beq @skip_r_zero` early-exits (constant-time contract — see Section 4). | -12 000 cy | +~1.5 KB | med | — | A+B |
+| P2 | **Bake `r` into the multiply body (SMC)**: `r` is fixed for an entire packet (derived once per AEAD call). Instead of `lda poly_r,y`, use `lda #$??` immediates patched at `poly1305_init` time. Removes one ZP load per inner iteration (272 × 3 cy = ~800 cy) and opens the door to P3. | -800 cy (alone) | +~700 B | med | P1 | A+B |
+| P3 | **Shoup-style per-r table (16 × 256 bytes = 4 KB)**: for each `r[j]`, precompute `r[j] * 0..255` as a pair of 256-byte tables (lo/hi). Inner multiply becomes two `lda tab,x` + `adc` — ~8 cy instead of ~45 cy. Precompute cost: 16 × 256 × ~12 cy ≈ 50 k cy per packet. Break-even: ~2 blocks. Worth it for ≥4-block messages (≥64 B). | -25 000 cy | +4 KB tables + ~500 B code | med | — | A only |
+| P4 | **Donna-style fused wrap**: in the schoolbook, for `j > i` directly accumulate `h[j] * r[i+17-j] * 320` (i.e. `*(5<<6)`) into position `i+j-17`, per floodyberry/poly1305-donna-8.h. Fuses the `*5` reduction into the multiply so we never form the 33-byte intermediate. Avoids the 2-pass 17-byte `ror` reduction entirely. | -8 000 cy | ~0 | high | P1 | A+B |
+| P5 | **Skip multiplications involving clamped `r` bits**: after clamping, `r[3]`, `r[7]`, `r[11]`, `r[15]` have their top 4 bits zero (so those bytes are ≤ 15, but still multi-bit), and `r[4]`, `r[8]`, `r[12]` have their bottom 2 bits zero. This does NOT give us skippable partial products — those r bytes can still be fully nonzero, just constrained. **Do not pursue.** Documenting the negative result so we don't revisit. | 0 | 0 | — | — | n/a |
+| P6 | **`aead_scratch` -> ZP for partial-block fast path**: current code copies last partial block into `aead_scratch` in RAM and re-points `zp_ptr1`. If instead the scratch lives in ZP and `poly1305_block` reads from it via `zp,y`, we save ~60 cy on every message with a partial tail. | -60 cy/packet | neutral | low | — | A+B |
+| P7 | **Merge `poly1305_block` add + first multiply partial-product pass**: the add loop writes `h[i]`, the next multiply loop immediately reads `h[i]`. Fuse so each iteration adds `block[i]` and kicks off the `h[i] * r[*]` pass without re-loading. | -700 cy | ~0 | med | P1 | A+B |
+| P8 | **Move sqtab build from `poly1305_init` to one-time library init** — the sqtab is a pure function of the platform, not of `r`. Saves ~80 k cy of per-packet setup. Applies to Profile B unconditionally (Profile A replaces sqtab with Shoup tables and may drop sqtab entirely). | -80 000 cy/packet (one-time) | 0 | low | — | B primary; A if sqtab retained |
 
 **Projected `poly1305_block` after P1+P4+P7 (no Shoup table): ~28–32 k cy**
 (~42 % improvement).
@@ -247,6 +281,14 @@ poly side alone.
 
 ## Section 4 — AEAD glue optimizations
 
+**Constant-time contract**: this library is constant-time by contract.
+No optimization in Section 4 (or anywhere else) may introduce a
+data-dependent branch on secret data (`key`, `r`, `s`, `h`, plaintext,
+ciphertext, tag). `aead_verify_tag`'s OR-accumulator pattern is the
+canonical CT tag compare — do not regress it. The `poly1305_multiply`
+early-exit branches on `h[i]==0` and `r[j]==0` are removed as part of
+P1. There is no `USE_CT=0` escape hatch.
+
 Current: `aead_compute_tag` processes AAD, then ciphertext, then a 16-byte
 lengths block. Each transition calls `aead_process_padded` which does a
 byte-loop partial copy into `aead_scratch`. Tag compare uses an OR-accumulator
@@ -266,34 +308,60 @@ but they're cheap and safe — do them as a cleanup step.
 
 ---
 
-## Section 5 — Build profile(s)
+## Section 5 — Build profiles
 
-Following the polyval `SHORT` / `LONG` precedent:
+**Both profiles ship.** Profile A is the primary optimization target;
+Profile B is the portable baseline that must work on stock hardware.
+Any optimization that does not require REU is applied to *both*
+profiles. REU-DMA tricks are Profile-A-only.
 
-### Profile A — "LONG" / per-packet precompute (WireGuard, TLS, long DTLS)
+### Profile A — REU-assisted / fast path (primary target)
 
-- Shoup per-r table (16 × 512 B = 8 KB) built once per packet in
-  `poly1305_init` (~50 k cy, amortized over ≥ 4 blocks).
-- Fully unrolled chacha20_block (~2 KB code).
-- Fully unrolled poly1305_multiply (~1.5 KB code).
-- Optional: REU fetch of the quarter-square table instead of runtime build.
-- RAM budget: ~12 KB tables + ~4 KB code extra over baseline.
+- **Hardware assumption**: REU available.
+- **ChaCha20**: full C1–C8 (ZP state, inlined QRs, rot-rename, rot-4
+  inline, SMC, keystream-XOR merge, counter-fold, fixed-row skip).
+- **Poly1305**: P1 (unroll), P2 (SMC `r`), P3 (Shoup per-r table,
+  16×512 B = 8 KB), P4 (donna fused wrap), P6 (ZP scratch), P7 (add+mul
+  merge). P8: either retain sqtab as one-time build or drop it once P3
+  lands; decide at P3 commit time.
+- **REU-only tricks** (target applications for this profile): REU-DMA
+  prefetch of Shoup tables or quarter-square table from REU RAM instead
+  of in-RAM compute (~5 k cy DMA burst vs ~50 k cy runtime build).
+  Optional Step 10.
+- **RAM budget**: ~14 KB (~4 KB code extra + 8 KB Shoup tables + 1 KB
+  retained sqtab if kept).
 
-**Use when:** message ≥ 64 B, and a per-packet 50 k cy setup fits the
-latency budget. WireGuard data packets (~88 blocks): ~16 k cy/block,
-total ~1.4 M cy ≈ 1.4 s. TLS records (up to ~1024 B): ~64 blocks, same
-envelope.
+**Typical use**: WireGuard data (~88 blocks), TLS 1.3 records (~64
+blocks), long DTLS. Messages ≥ 64 B where the per-packet ~50 k cy
+Shoup-table build amortizes.
 
-### Profile B — "SHORT" / minimal-footprint (control packets, small DTLS)
+### Profile B — stock-C64 portable baseline
 
-- Keep quarter-square multiply (1 KB shared table).
-- Unroll `poly1305_multiply` body (P1) but keep runtime-variable `r` loads.
-- ChaCha20 still gets full unrolling (C1..C5) — it doesn't scale with
-  `r` so no reason to hold back.
-- RAM budget: +~2.5 KB code, same ~1 KB shared table.
+- **Hardware assumption**: truly original stock C64. No REU. Must work
+  everywhere.
+- **ChaCha20**: full C1–C8 (all portable). Same inlined hot path as
+  Profile A. ChaCha20 does not benefit from per-packet precompute, so
+  Profile A and Profile B have identical chacha20_block code.
+- **Poly1305**: P1 (unroll), P2 (SMC `r`), P4 (donna fused wrap),
+  P6 (ZP scratch), P7 (add+mul merge), P8 (one-time sqtab build).
+  **No Shoup table (P3)** — avoids the 8 KB RAM claim and the 50 k
+  per-packet precompute.
+- **RAM budget**: +~4 KB code, 1 KB shared sqtab. Total library
+  footprint ~6 KB, comfortable on a stock machine.
 
-**Use when:** messages are typically single-block (≤ 16 B) and the
-precompute amortization doesn't pay.
+**Typical use**: any deployment that cannot assume REU. Slower by the
+P3 delta (~25 k cy per poly1305_block) but correct and portable.
+
+### Profile gating
+
+- Implemented via ACME `!ifdef POLY1305_PROFILE_LONG` (Profile A) / else
+  (Profile B). Default build is Profile A (`make` with
+  `POLY1305_PROFILE_LONG` defined in `constants_lib.asm` or via a
+  `make profile-a` / `make profile-b` dispatch target — added as a
+  dedicated sprint step the first time a profile-specific change lands).
+- Both profiles must pass 214/214 tests. Benchmark runs against Profile A
+  unless otherwise noted; Profile B is re-benchmarked at Step 9 for the
+  final summary.
 
 ### Target-app decision matrix
 
@@ -302,117 +370,134 @@ precompute amortization doesn't pay.
 | WireGuard data    | up to ~1420 | ~88    | **A**   |
 | TLS 1.3 record    | up to ~1024 | ~64    | **A**   |
 | WireGuard handshake | ~148       | ~9     | **A**   |
-| DTLS small        | ~32–128     | ~2–8   | borderline; default **A** |
-| isolated tag      | ~16         | ~1     | **B**   |
-
-The project-memory note ("WireGuard / TLS / long messages common") makes
-Profile A the default. Profile B is optional; only build it if a
-ROM/RAM-constrained downstream user asks.
+| DTLS small        | ~32–128     | ~2–8   | **A** (falls back to B if no REU) |
+| isolated tag      | ~16         | ~1     | **B** (also works in A) |
+| stock-C64 end users without REU | any  | any    | **B**   |
 
 ---
 
 ## Section 6 — Sprint plan
 
-Each step is sized to a single commit. First step is measurement-only;
-last step is regression + tag.
+Each step is **exactly one commit**. Every step has:
+(a) one-sentence change description
+(b) files touched
+(c) expected cycle delta
+(d) test gate: `C64_SKIP_BUILD=1 python3 tools/test_chacha20_poly1305.py
+    --seed 7539 --verbose` must report 214/214 passing
+(e) benchmark gate: rerun `python3 tools/benchmark_chacha20_poly1305.py`,
+    append a row to the progression table at the top of this document
+    with `chacha20_block`, `poly1305_block`, `aead_encrypt n=1024`, and
+    the new commit hash.
 
-### Step 1 — Measurement-only baseline snapshot
-- **What**: nothing. Run `tools/benchmark_chacha20_poly1305.py` and
-  `tools/test_chacha20_poly1305.py --seed 7539`, paste results into
-  `docs/BASELINE.md` (new file).
-- **Files**: `docs/BASELINE.md` (new).
-- **Δ**: 0 (snapshot).
-- **Test gate**: 214/214 passing.
-- **Bench gate**: store baseline values for diff tracking.
+Any regression in cycle count must be explained in the commit body or
+the step reverted.
 
-### Step 2 — ZP-resident `cc20_work`
-- **What**: move `cc20_work` (64 B) from RAM to a ZP page claim; update
-  `chacha20_quarter_round` and the `state→work` / `work += state` /
-  `work → keystream` code paths to use direct ZP addressing.
-- **Files**: `src/lib/constants_lib.asm` (ZP equates), `src/lib/data_lib.asm`
-  (drop RAM reservation), `src/lib/chacha20_lib.asm`.
-- **Δ**: **estimated** -20 000 cy per `chacha20_block`.
-- **Test gate**: full 214/214; verify `test_chacha20_poly1305.py` passes
-  both the RFC 7539 vectors and the pyca cross-check.
-- **Bench gate**: `chacha20_block` < 135 k cy.
+### Step 0 — Baseline snapshot (done)
+- **Commit**: `923d34d` (benchmark infra + baseline measurements).
+- No code changes; seeds the progression table. Referenced in Section 1.
 
-### Step 3 — Inline all eight QRs of `chacha20_quarter_round`
-- **What**: replace the JSR-driven QR loop with eight inlined QR bodies
-  per double-round, each with inlined add/xor/rot32 bodies (no JSR). Keep
-  rot-8/16 as byte-copy for now (no C3 yet).
+### Step 1 — ZP-resident `cc20_work` (C1)
+- **What**: move `cc20_work` (64 B) from RAM to a ZP claim at `$40..$7f`
+  so `(w32_dst),y` indirects into ZP and the direct `sta cc20_work,x`
+  loops become ZP,x addressing.
+- **Files**: `src/lib/constants_lib.asm` (add `cc20_work` equate),
+  `src/lib/data_lib.asm` (drop the 64-byte RAM reservation),
+  `src/lib/chacha20_lib.asm` (no logical changes; references auto-rewire
+  via the label).
+- **Δ est.**: −20 000 cy per `chacha20_block`; scales linearly into
+  `aead_encrypt n=1024` (16 blocks → −320 000 cy).
+- **Test gate**: 214/214 via
+  `C64_SKIP_BUILD=1 python3 tools/test_chacha20_poly1305.py --seed 7539 --verbose`.
+- **Bench gate**: `chacha20_block` < 135 000 cy; append row.
+
+### Step 2 — Inline all eight QRs of `chacha20_quarter_round` (C2)
+- **What**: replace the `cc20_qr_idx`-driven JSR loop with eight inlined
+  QR bodies per double-round, each with inlined add/xor/rot32 bodies
+  (no JSR). Rot-8/16 still go through the existing byte-copy primitive
+  (no C3 yet).
 - **Files**: `src/lib/chacha20_lib.asm`, optionally `src/lib/word32_lib.asm`
   if helpers become dead code.
-- **Δ**: **estimated** -30 000 cy per block.
+- **Δ est.**: −30 000 cy per block.
 - **Test gate**: 214/214.
-- **Bench gate**: `chacha20_block` < 100 k cy.
+- **Bench gate**: `chacha20_block` < 100 000 cy; append row.
 
-### Step 4 — Rot-8/16 as offset rename; rot-4 inlined one-pass
+### Step 3 — Rot-8/16 as offset rename; rot-4 inlined one-pass (C3 + C4)
 - **What**: implement the mjosaarinen-style offset-rename trick for
-  rot-8 and rot-16 within an inlined QR; inline `rotl32_4` as one
-  unrolled nibble shift (4 `asl/rol` rounds + wrap), `rotl32_7` as
-  rot-8 (free) then `ror` chain, `rotl32_12` as rot-8 (free) then rot-4.
+  rot-8 and rot-16 within the inlined QR (zero runtime cost). Inline
+  `rotl32_4` as one unrolled nibble shift, `rotl32_7` as rot-8 (free)
+  plus `ror` chain, `rotl32_12` as rot-8 (free) plus rot-4.
 - **Files**: `src/lib/chacha20_lib.asm`.
-- **Δ**: **estimated** -12 000 cy per block.
-- **Test gate**: 214/214 (rotations have explicit unit tests — easy to
-  catch regressions).
-- **Bench gate**: `chacha20_block` < 90 k cy.
+- **Δ est.**: −12 000 cy per block.
+- **Test gate**: 214/214.
+- **Bench gate**: `chacha20_block` < 90 000 cy; append row.
 
-### Step 5 — Unroll `poly1305_multiply` schoolbook (P1)
-- **What**: replace `mul_outer`/`mul_inner` loops with 17 × 16 =
-  272 straight-line `jsr mul_8x8` + unrolled accumulation. Eliminate
-  the `poly_i`/`poly_j` ZP state and the `pha`/`pla` pair. Keep
-  quarter-square `mul_8x8` for now.
+### Step 4 — Unroll `poly1305_multiply` schoolbook (P1 + CT cleanup)
+- **What**: replace `mul_outer`/`mul_inner` loops with 17 × 16 straight-line
+  multiply-accumulate. Eliminate `poly_i`/`poly_j` ZP state, `pha`/`pla`,
+  and the `beq @skip_h_zero` / `beq @skip_r_zero` early-exits
+  (constant-time contract). Keep quarter-square `mul_8x8` for now.
 - **Files**: `src/lib/poly1305_lib.asm`.
-- **Δ**: **estimated** -12 000 cy per `poly1305_block`.
+- **Δ est.**: −12 000 cy per `poly1305_block`.
 - **Test gate**: 214/214 (Poly1305 RFC 7539 §2.5.2 vector is in the suite).
-- **Bench gate**: `poly1305_block` < 42 k cy.
+- **Bench gate**: `poly1305_block` < 42 000 cy; append row.
 
-### Step 6 — Shoup per-r table (P3) under `POLY1305_PROFILE_LONG`
-- **What**: add 16 × 2 × 256-byte tables at a page-aligned RAM address
-  (e.g. `$7000..$8FFF`). Build in `poly1305_init` after clamping. Rewrite
-  `poly1305_multiply` inner multiply to `lda rj_lo_tab,x / adc
-  product+k / sta product+k / lda rj_hi_tab,x / adc product+k+1 / sta
-  product+k+1`. Gate behind an ACME `!ifdef POLY1305_PROFILE_LONG` so
-  Profile B can still build.
+### Step 5 — Profile dispatch scaffold (Profile A / Profile B build targets)
+- **What**: add `POLY1305_PROFILE_LONG` flag in `constants_lib.asm`
+  (default ON = Profile A). Add `make profile-a` / `make profile-b`
+  dispatch in the Makefile, both producing the same PRG name at
+  different output paths. Run the test suite against *both* profiles
+  once to seed the CI matrix. No runtime code changes yet.
+- **Files**: `Makefile`, `src/lib/constants_lib.asm`.
+- **Δ est.**: 0 cy (scaffolding only).
+- **Test gate**: 214/214 in **both** profiles.
+- **Bench gate**: no numeric change expected; row recorded as "no-op"
+  with both profile commit hashes noted.
+
+### Step 6 — Shoup per-r table (P3, Profile A only)
+- **What**: add 16 × 2 × 256-byte tables at a page-aligned RAM address.
+  Build in `poly1305_init` after clamping. Rewrite the unrolled inner
+  multiply to `lda rj_lo_tab,x / adc ... / lda rj_hi_tab,x / adc ...`.
+  Gated `!ifdef POLY1305_PROFILE_LONG`.
 - **Files**: `src/lib/poly1305_lib.asm`, `src/lib/data_lib.asm`,
-  `src/lib/constants_lib.asm` (profile flag).
-- **Δ**: **estimated** -25 000 cy per `poly1305_block`; +50 000 cy one-time
-  per `poly1305_init`.
-- **Test gate**: 214/214 in **both** profiles. Add a CI matrix if
-  Profile B is kept.
-- **Bench gate**: `poly1305_block` < 18 k cy under Profile A.
+  `src/lib/constants_lib.asm`.
+- **Δ est.**: −25 000 cy per `poly1305_block` (Profile A);
+  +50 000 cy per `poly1305_init` (amortizes ≥ 2 blocks).
+- **Test gate**: 214/214 in **both** profiles; Profile B must still
+  build and pass without the tables.
+- **Bench gate**: Profile A `poly1305_block` < 18 000 cy; append row.
 
 ### Step 7 — Donna-style fused wrap reduction (P4)
-- **What**: rewrite `poly1305_multiply` such that for `j > i`, partial
-  products land directly at position `i+j-17` with the `*5` factor
-  pre-applied (as a 256-byte `*5 mod 256` + `*5 div 256` auxiliary
-  table). Delete `poly1305_reduce`'s 2-pass `ror` and `*5` loops.
+- **What**: rewrite `poly1305_multiply` so for `j > i`, partial products
+  land at position `i+j-17` with the `*5` factor pre-applied. Delete
+  `poly1305_reduce`'s 2-pass `ror` and `*5` loops.
 - **Files**: `src/lib/poly1305_lib.asm`.
-- **Δ**: **estimated** -8 000 cy per block.
-- **Test gate**: 214/214. Add extra random test vectors against pyca —
-  this is the highest-risk change (easy to botch the `5 << k` bookkeeping).
-- **Bench gate**: `poly1305_block` < 12 k cy under Profile A.
+- **Δ est.**: −8 000 cy per block.
+- **Test gate**: 214/214 in both profiles; add 10 k random cross-check
+  vectors before commit (this step has the highest defect risk).
+- **Bench gate**: Profile A `poly1305_block` < 12 000 cy; append row.
 
-### Step 8 — AEAD glue cleanups (A3–A6)
+### Step 8 — AEAD glue cleanups (A3–A6 + C6 + C7)
 - **What**: lengths-block unroll, fold OTK derivation into encrypt,
-  skip redundant `aead_setup_chacha` on decrypt.
-- **Files**: `src/lib/chacha20poly1305_lib.asm`.
-- **Δ**: **estimated** -3 000 cy per packet.
-- **Test gate**: 214/214.
-- **Bench gate**: `aead_encrypt n=0` < 248 k cy.
+  skip redundant `aead_setup_chacha` on decrypt, counter-fold, and
+  keystream XOR-inline-with-copy.
+- **Files**: `src/lib/chacha20poly1305_lib.asm`, `src/lib/chacha20_lib.asm`.
+- **Δ est.**: −3 000 cy per packet + −700 cy per chacha20_block (C7)
+  + −30 cy per block (C6).
+- **Test gate**: 214/214 in both profiles.
+- **Bench gate**: `aead_encrypt n=0` < 248 000 cy; append row.
 
 ### Step 9 — Profile documentation + tag
 - **What**: update README with Profile A / B build instructions, finalize
-  `docs/OPTIMIZATION_PLAN.md` with post-sprint measurements, run the
-  full test suite with both profiles, cut a `v0.2-optimized` tag.
+  this document with post-sprint measurements, run the full test suite
+  against both profiles, cut a `v0.2-optimized` tag.
 - **Test gate**: 214/214 × 2 profiles.
-- **Bench gate**: final table committed to `docs/BASELINE.md` showing
-  before/after deltas per step.
+- **Bench gate**: final table in this document showing baseline vs
+  per-step vs final deltas.
 
-### Optional Step 10 — REU quarter-square preload
-- Only if Profile A's `poly1305_init` cost is a user complaint.
-- Swap sqtab runtime build for REU DMA prefetch.
-- Gate under `POLY1305_REU=1`.
+### Optional Step 10 — REU quarter-square / REU Shoup-table preload (A only)
+- Only if Profile A's `poly1305_init` cost (~50 k cy) is a complaint.
+- Swap the runtime Shoup build or sqtab build for an REU DMA prefetch.
+- Gate under `POLY1305_REU=1` inside Profile A.
 
 ---
 
