@@ -41,7 +41,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S0 baseline (benchmark infra)           | `923d34d` |        149 987 |         53 270 |           5 974 048 |          0.0% |
 | S1 C1 ZP-resident cc20_work             | `380ae42` |        149 898 |         53 609 |           6 004 218 |         +0.5% |
 | S2 C2 inline 8 QRs per double-round     | `7a62737` |         50 228 |         53 552 |           4 290 622 |        -28.2% |
-| S3 C3 rot-8/16 offset rename            | `PENDING` |         45 954 |         53 381 |           4 220 923 |        -29.3% |
+| S3 C3 rot-8/16 offset rename            | `71fabf3` |         45 954 |         53 381 |           4 220 923 |        -29.3% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
