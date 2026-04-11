@@ -69,6 +69,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S4 P1 unroll poly1305_multiply + CT     | `7e6589f` |         45 957 |         39 797 |           3 497 234 |        -41.5% |
 | S5 profile dispatch scaffold (no-op)    | `fd9323b` |         45 957 |         39 675 |           3 497 228 |        -41.5% |
 | S6 P3 Shoup per-r table (Profile A)     | `09b93f7` |         45 940 |         12 987 |           2 282 955 |        -61.8% |
+| S7 P4 Donna fused wrap (both profiles)  | `PENDING` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -121,6 +122,33 @@ POLY1305_PROFILE_LONG { POLY1305_PROFILE_LONG = 1 }` auto-default
 from S5 was *removed* in this step: leaving it in would silently
 force Profile A on any caller that just `!source`s the library, so
 absence of the symbol now correctly selects Profile B.
+
+**Note on S7**: P4 Donna-style fused wrap reduction (both profiles).
+The 17×16 schoolbook still emits a 33-byte intermediate `poly_product`,
+but `poly1305_reduce` is rewritten as a single fully-unrolled fused
+pass that merges the two old 1-bit `ror` shifts and the 17-byte
+running-carry `*5` add into straight-line per-byte code. A 256-byte
+LUT (`poly_reduce_shl6_tab`) supplies `(y & 3) << 6` so the inter-byte
+2-bit boundary doesn't need 6 inline `asl`s. The product-zeroing
+prologue is also unrolled to 33 straight-line `sta`s. Profile A
+measured `poly1305_block` = **11 949 cy**, **Δ = −1 038 cy** vs S6
+(beats the < 12 000 cy gate by 51 cy); the plan's −8 000 cy estimate
+assumed the multiply itself would shrink (true Donna fusion), but the
+Shoup hot path is already at the inner-loop floor for byte-aligned
+schoolbook on 6502 — the realisable savings are bounded by the cost
+of the *reduction*, not the multiply, which is what was actually
+attacked. Profile B `poly1305_block` = 38 666 cy (was 39 675, **Δ =
+−1 009 cy**), confirming that — unlike S6 — Step 7 helps both profiles
+without conditional code. The clean-byte Donna fold (`*5` at position
+`i+j-17`) is **not** literally byte-aligned for a 16-bit Poly1305 byte
+representation: `2^136 ≡ 320 mod p`, not `5`, so the fold has a 6-bit
+sub-byte misalignment that defeats per-PP fusion in the multiply's
+inner loop. Folding into the reduction (where the 2-bit shift can be
+amortised across 17 bytes) is the achievable form of P4 in this byte
+representation. n=0 aead_encrypt: 670 919 cy (was 671 332, ≈ flat as
+expected — the rewrite touches `poly1305_multiply` runtime, not
+`poly1305_init` setup). 10 000 random Poly1305 vectors cross-checked
+against pyca/cryptography pass on both profiles (seed `20260411`).
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
