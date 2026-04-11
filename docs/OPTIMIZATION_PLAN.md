@@ -39,6 +39,24 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | step                                    | commit    | chacha20_block | poly1305_block | aead_encrypt n=1024 | Δ vs baseline |
 |-----------------------------------------|-----------|---------------:|---------------:|--------------------:|--------------:|
 | S0 baseline (benchmark infra)           | `923d34d` |        149 987 |         53 270 |           5 974 048 |          0.0% |
+| S1 C1 ZP-resident cc20_work             | `pending` |        149 898 |         53 609 |           6 004 218 |         +0.5% |
+
+**Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
+estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
+hot path still goes through `(w32_dst),y` ZP-indirect indexed loads
+(5 cy), and only the two 64-byte copy loops (`state→work` and
+`work→keystream`) and the final `work += state` addressing get the
+`abs,x → zp,x` savings. ACME correctly emits `zp,x` for
+`lda/sta cc20_work,x` (verified: chacha20_lib is now 2 bytes shorter),
+but there are only ~128 such ops per block. **The −20 000 cy estimate
+implicitly assumed C2 (QR inlining) was bundled — it isn't realized
+until Step 2.** The +0.5% aead_encrypt regression and +339 cy
+poly1305_block drift are code-layout artifacts: moving cc20_work out
+of `data_lib.asm` shifted `poly1305_block` from $0eb8 to $0eb6, which
+changes the page-boundary alignment of inner branches in the 272-iter
+multiply loop (≈1.25 cy × 272 iters = +339). This will disappear once
+Step 4 unrolls the multiply. S1 stands because C1 is a correctness
+prerequisite for Steps 2 and 3; the real win lands there.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.

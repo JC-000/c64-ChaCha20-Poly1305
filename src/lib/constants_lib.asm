@@ -24,6 +24,16 @@
 !ifndef cc20_remain   { cc20_remain   = $18 } ; bytes remaining (low byte)
 !ifndef cc20_buf_pos  { cc20_buf_pos  = $19 } ; position within 64-byte keystream
 
+; --- ChaCha20 working state (64 bytes, ZP-resident per Step 1 / C1) ---
+; Placed at $40..$7f — clear of $02-$1d (chacha/poly/word32 scratch) and
+; $fb-$fe (generic pointer pair). The entire 16-word working state is the
+; hot inner loop of chacha20_block; keeping it in ZP turns every
+; (w32_dst),y indirect into a zero-page indirect whose target lives in ZP,
+; and turns the `sta cc20_work,x` direct stores into zp,x addressing
+; (4 cy vs 5 cy absolute,x). The host project may override if it wants
+; to place cc20_work elsewhere in ZP.
+!ifndef cc20_work     { cc20_work     = $40 } ; 64 bytes: $40..$7f
+
 ; --- Poly1305 ZP ---
 !ifndef poly_i     { poly_i     = $1a }   ; outer loop counter
 !ifndef poly_j     { poly_j     = $1b }   ; inner loop counter

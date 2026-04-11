@@ -14,9 +14,8 @@
 cc20_state:
         !fill 64, 0
 
-; Working state during block computation
-cc20_work:
-        !fill 64, 0
+; cc20_work (64 bytes) is now ZP-resident — see cc20_work equate in
+; constants_lib.asm. No RAM reservation here.
 
 ; Generated keystream for XOR
 cc20_keystream:
