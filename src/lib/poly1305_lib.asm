@@ -50,7 +50,75 @@ poly1305_init:
 
         ; 3. Build quarter-square table
         jsr sqtab_init
+
+!ifdef POLY1305_PROFILE_LONG {
+        ; 4. Build Shoup per-r tables (Step 6 / P3, Profile A only).
+        ;    Uses mul_8x8 (sqtab-backed) 4096 times, one per
+        ;    (limb j, byte value x). Amortized across >= 2 blocks.
+        jsr shoup_init
+}
         rts
+
+!ifdef POLY1305_PROFILE_LONG {
+; =============================================================================
+; shoup_init - Populate r_tab_lo / r_tab_hi with T_j[x] = x * r[j]
+;
+; For each j in 0..15, for each x in 0..255:
+;   (hi,lo) = x * r[j]   (16-bit via mul_8x8 + sqtab)
+;   r_tab_lo + j*256 + x = lo
+;   r_tab_hi + j*256 + x = hi
+;
+; Called from poly1305_init AFTER poly1305_clamp and sqtab_init. ~4096
+; calls to mul_8x8, amortized over all subsequent poly1305_block calls
+; for this message (r is fixed per packet).
+;
+; Self-modifies the inner mul_8x8 multiplier immediate and the two
+; store high bytes so the inner loop is a straight-line sequence of
+; absolute addressing modes.
+;
+; Clobbers: A, X, Y
+; =============================================================================
+shoup_init:
+        lda #0
+        sta poly_j              ; reuse as j counter (0..15)
+.shoup_j_loop:
+        ; Patch store high bytes to (r_tab_lo + j*256) and (r_tab_hi + j*256).
+        lda poly_j
+        clc
+        adc #>r_tab_lo
+        sta .shoup_sta_lo+2
+        lda poly_j
+        clc
+        adc #>r_tab_hi
+        sta .shoup_sta_hi+2
+
+        ; Patch the inner mul multiplier to r[j].
+        ldy poly_j
+        lda poly_r,y
+        sta .shoup_rj_val+1
+
+        ; Inner loop: x = 0..255.
+        lda #0
+        sta poly_i              ; reuse as x counter
+.shoup_x_loop:
+        lda poly_i              ; A = x (multiplicand)
+.shoup_rj_val: ldx #$00         ; X = r[j] (SMC, multiplier)
+        jsr mul_8x8             ; -> poly_prod_lo / poly_prod_hi
+        ldy poly_i
+        lda poly_prod_lo
+.shoup_sta_lo: sta r_tab_lo,y   ; SMC high byte
+        lda poly_prod_hi
+.shoup_sta_hi: sta r_tab_hi,y   ; SMC high byte
+
+        inc poly_i
+        bne .shoup_x_loop        ; 256 iterations
+
+        inc poly_j
+        lda poly_j
+        cmp #16
+        bne .shoup_j_loop
+        rts
+}
 
 ; =============================================================================
 ; poly1305_clamp - Clamp r per RFC 7539
@@ -274,7 +342,9 @@ poly_ripple:
 ; Clobbers: A, X, Y
 ; =============================================================================
 
-; Macro: emit one partial product h[.i] * r[.j]
+; Macro: emit one partial product h[.i] * r[.j] — Profile B (schoolbook
+; via sqtab-backed mul_8x8). Profile A replaces this with Shoup per-r
+; table lookups (see +poly_pp_shoup below).
 !macro poly_pp .i, .j {
         lda poly_h + .i
         ldx poly_r + .j
@@ -292,6 +362,36 @@ poly_ripple:
 +
 }
 
+!ifdef POLY1305_PROFILE_LONG {
+; Macro: Shoup-table partial product h[.i] * r[.j] — Profile A.
+;
+; Precondition on entry: X = poly_h + .i (loaded once per outer row).
+; The Shoup table at r_tab_lo + .j*256 holds T_j[x] = (x * r[j]) & $ff,
+; and r_tab_hi + .j*256 holds the high byte. Two page-indexed loads
+; replace the sqtab-based 8x8 multiply entirely.
+;
+; Postcondition: X still equals poly_h + .i (reloaded from RAM only
+; on the rare ripple path).
+;
+; No branches depend on the *value* of h[i] or r[j]; the only branch
+; (bcc) depends on carry-out from the addition, which is standard
+; multi-precision arithmetic and CT-safe on 6502.
+!macro poly_pp_shoup .i, .j {
+        clc
+        lda r_tab_lo + (.j * 256), x
+        adc poly_product + (.i + .j)
+        sta poly_product + (.i + .j)
+        lda r_tab_hi + (.j * 256), x
+        adc poly_product + (.i + .j + 1)
+        sta poly_product + (.i + .j + 1)
+        bcc +
+        ldx #(.i + .j + 2)
+        jsr poly_ripple
+        ldx poly_h + .i         ; ripple clobbered X; restore row base
++
+}
+}
+
 poly1305_multiply:
         ; Zero the product buffer (33 bytes)
         ldx #32
@@ -301,12 +401,24 @@ poly1305_multiply:
         dex
         bpl @zero_prod
 
+!ifdef POLY1305_PROFILE_LONG {
+        ; Fully unrolled 17x16 schoolbook via Shoup per-r tables (P3).
+        ; X is hoisted out of the j loop: h[i] is constant for all 16
+        ; inner iterations of a given row.
+        !for .I, 0, 16 {
+            ldx poly_h + .I
+            !for .J, 0, 15 {
+                +poly_pp_shoup .I, .J
+            }
+        }
+} else {
         ; Fully unrolled 17x16 schoolbook: 272 partial products
         !for .I, 0, 16 {
             !for .J, 0, 15 {
                 +poly_pp .I, .J
             }
         }
+}
 
         jmp poly1305_reduce
 
