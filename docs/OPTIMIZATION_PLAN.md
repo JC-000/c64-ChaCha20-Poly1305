@@ -44,6 +44,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S3 C3 rot-8/16 offset rename            | `71fabf3` |         45 954 |         53 381 |           4 220 923 |        -29.3% |
 | S4 P1 unroll poly1305_multiply + CT     | `7e6589f` |         45 957 |         39 797 |           3 497 234 |        -41.5% |
 | S5 profile dispatch scaffold (no-op)    | `fd9323b` |         45 957 |         39 675 |           3 497 228 |        -41.5% |
+| S6 P3 Shoup per-r table (Profile A)     | `PENDING` |         45 940 |         12 987 |           2 282 955 |        -61.8% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -72,6 +73,30 @@ profiles. The row above shows Profile A bench numbers; the
 `poly1305_block` −122 cy drift vs S4 (39 675 vs 39 797) is pure bench
 noise (S4's own reported spread was already on this order; no code
 or layout changed between S4 and S5). `Δ est. = 0` confirmed.
+
+**Note on S6**: P3 Shoup per-r table, Profile A only. Replaces the
+272-iter sqtab-backed `mul_8x8` schoolbook in `poly1305_multiply` with
+two page-indexed `lda tab,x` loads per partial product against
+precomputed `T_j[x] = x * r[j]` tables at `$6000..$7FFF` (16 × 2 ×
+256 B = 8 KB, page-aligned per limb). X is also hoisted out of the
+inner j-loop since h[i] is constant across one i-row. Tables are
+built by `shoup_init` inside `poly1305_init` using the existing
+`mul_8x8` primitive (so sqtab is retained). Measured
+`poly1305_block` = 12 987 cy, **Δ = −26 688 cy** vs S5 — beats the
+plan's −25 000 cy estimate and the 18 000 cy gate by ~5 k. The
+`poly1305_init`/per-packet fixed cost went up by ~420 k cy (250 k ->
+670 k in n=0 aead_encrypt), dominated by 4096 calls to `mul_8x8`
+during table build; the plan's +50 000 cy estimate was too low by
+~8×, because each `mul_8x8` call is ~100 cy including jsr/wrapper,
+not ~12 cy. Amortization break-even is ~16 blocks (256 B of message)
+instead of the estimated ~2; for n=1024 the net saving is
+~1 214 k cy per packet, which still dominates the penalty. Profile B
+is byte-identical to pre-S6 Profile B (verified via md5sum after
+`git stash` / rebuild / diff — see commit body). The `!ifndef
+POLY1305_PROFILE_LONG { POLY1305_PROFILE_LONG = 1 }` auto-default
+from S5 was *removed* in this step: leaving it in would silently
+force Profile A on any caller that just `!source`s the library, so
+absence of the symbol now correctly selects Profile B.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.

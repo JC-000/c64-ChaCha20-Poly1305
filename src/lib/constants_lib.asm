@@ -58,7 +58,33 @@
 ;   make profile-a   -> acme -DPOLY1305_PROFILE_LONG=1 ...  (default)
 ;   make profile-b   -> acme ...                            (flag undefined)
 ;
-; If no -D is passed on the command line (e.g. a direct `acme main.asm`
-; invocation, or a host project !source'ing this file), default to
-; Profile A so the library behaves identically to pre-Step-5 builds.
-!ifndef POLY1305_PROFILE_LONG { POLY1305_PROFILE_LONG = 1 }
+; Step 6 note: prior to Step 6 this file defaulted POLY1305_PROFILE_LONG
+; on when no `-D` was passed (so Profile B *via default* was identical
+; to Profile A). Once Step 6 introduces real Profile-A-only code (Shoup
+; per-r tables), that default would silently force Profile A on any
+; caller that simply `!source`s this library. The default is therefore
+; removed: callers that want Profile A must pass `-DPOLY1305_PROFILE_LONG=1`
+; to ACME, which the top-level Makefile's `profile-a` target already
+; does. Absence of the symbol selects Profile B (portable baseline).
+
+; --- Shoup per-r tables (Profile A only) ---
+; Step 6 (P3): precompute T_j[x] = x * r[j] as a 16-bit value for each
+; j in 0..15, so the inner multiply becomes two table lookups per
+; partial product instead of an 8x8 multiply via sqtab.
+;
+; Layout: 8 KB contiguous at $6000..$7FFF, page-aligned per limb.
+;   r_tab_lo + j*256  -> 256 low bytes  of (x * r[j]) for x = 0..255
+;   r_tab_hi + j*256  -> 256 high bytes of (x * r[j]) for x = 0..255
+;
+; The region fits between the bench plaintext window ($5000..$53FF
+; for 1024-byte messages) and the quarter-square sqtab ($8000..$83FF),
+; both of which remain in use. sqtab is retained because shoup_init
+; itself calls mul_8x8 (which reads sqtab) to populate the tables.
+;
+; These are *reservations of address space only* — the tables are
+; initialized at runtime by shoup_init (called from poly1305_init),
+; so the PRG image does not grow by 8 KB of zeros.
+!ifdef POLY1305_PROFILE_LONG {
+    r_tab_lo = $6000
+    r_tab_hi = $7000
+}
