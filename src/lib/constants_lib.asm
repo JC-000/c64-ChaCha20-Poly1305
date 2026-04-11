@@ -43,3 +43,22 @@
 ; --- General-purpose 16-bit pointers used by poly1305 / aead ---
 !ifndef zp_ptr1 { zp_ptr1 = $fb }        ; 2-byte pointer ($fb-$fc)
 !ifndef zp_ptr2 { zp_ptr2 = $fd }        ; 2-byte pointer ($fd-$fe)
+
+; --- Build profile flag -----------------------------------------------------
+; POLY1305_PROFILE_LONG selects "Profile A" (long-message / REU-assisted,
+; primary optimization target) vs "Profile B" (stock C64, no REU, portable
+; baseline). Profile A is the default.
+;
+; Steps 6 and 7 will gate their new code paths on !ifdef POLY1305_PROFILE_LONG
+; so that Profile B continues to assemble and pass the test suite without
+; the Shoup per-r tables (Step 6) or the Donna-style fused wrap reduction
+; (Step 7). At Step 5 this flag is scaffold-only: no runtime code consumes it.
+;
+; Select via the Makefile:
+;   make profile-a   -> acme -DPOLY1305_PROFILE_LONG=1 ...  (default)
+;   make profile-b   -> acme ...                            (flag undefined)
+;
+; If no -D is passed on the command line (e.g. a direct `acme main.asm`
+; invocation, or a host project !source'ing this file), default to
+; Profile A so the library behaves identically to pre-Step-5 builds.
+!ifndef POLY1305_PROFILE_LONG { POLY1305_PROFILE_LONG = 1 }

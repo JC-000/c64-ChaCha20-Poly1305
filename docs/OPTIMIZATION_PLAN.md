@@ -43,6 +43,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S2 C2 inline 8 QRs per double-round     | `7a62737` |         50 228 |         53 552 |           4 290 622 |        -28.2% |
 | S3 C3 rot-8/16 offset rename            | `71fabf3` |         45 954 |         53 381 |           4 220 923 |        -29.3% |
 | S4 P1 unroll poly1305_multiply + CT     | `7e6589f` |         45 957 |         39 797 |           3 497 234 |        -41.5% |
+| S5 profile dispatch scaffold (no-op)    | `fd9323b` |         45 957 |         39 675 |           3 497 228 |        -41.5% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -60,6 +61,17 @@ changes the page-boundary alignment of inner branches in the 272-iter
 multiply loop (≈1.25 cy × 272 iters = +339). This will disappear once
 Step 4 unrolls the multiply. S1 stands because C1 is a correctness
 prerequisite for Steps 2 and 3; the real win lands there.
+
+**Note on S5**: scaffolding-only step. Adds `POLY1305_PROFILE_LONG`
+flag in `constants_lib.asm` (default ON) and `make profile-a` /
+`make profile-b` dispatch. No runtime code consumes the flag yet —
+Steps 6 and 7 will gate their new paths on `!ifdef POLY1305_PROFILE_LONG`.
+Profile A and Profile B PRGs are **byte-identical** at this step
+(verified via `cmp`), and the test suite passes 214/214 under both
+profiles. The row above shows Profile A bench numbers; the
+`poly1305_block` −122 cy drift vs S4 (39 675 vs 39 797) is pure bench
+noise (S4's own reported spread was already on this order; no code
+or layout changed between S4 and S5). `Δ est. = 0` confirmed.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
