@@ -22,12 +22,14 @@ Both produce `build/c64_chacha20_poly1305.prg` and `build/labels.txt`
 
 - **Profile A** precomputes 8 KB of Shoup per-r multiplication tables
   at `poly1305_init` time (~490 k cy setup cost), reducing
-  `poly1305_block` from 38 760 to 12 122 cy. Best for messages longer
+  `poly1305_block` from 38 760 to 12 119 cy. Best for messages longer
   than ~256 bytes, where the table-build amortizes. Target workloads:
-  WireGuard data packets (~1280 B), TLS 1.3 bulk records.
+  WireGuard data packets (~1280 B), TLS 1.3 bulk records. With
+  `POLY1305_REU=1`, backs up the quarter-square table to REU for
+  fast restore if clobbered.
 
 - **Profile B** uses the portable quarter-square multiply (1 KB table).
-  Lower per-packet init cost (176 k vs 668 k cy at n=0), better for
+  Lower per-packet init cost (87 k vs 579 k cy at n=0), better for
   short packets such as WireGuard handshakes and TLS 1.3 alerts.
   Runs on any stock C64 without REU.
 
@@ -37,20 +39,22 @@ secret data).
 
 ## Performance
 
-Optimization sprint S0-S8 results (cycles, measured via CIA timer in
+Optimization sprint S0-S10 results (cycles, measured via CIA timer in
 VICE):
 
-| routine              | S0 baseline | Profile A (S8) |   change | Profile B (S8) |   change |
-|----------------------|------------:|---------------:|---------:|---------------:|---------:|
-| `chacha20_block`     |     149 987 |         44 920 |  -70.0%  |         44 920 |  -70.0%  |
-| `poly1305_block`     |      53 270 |         12 122 |  -77.2%  |         38 760 |  -27.2%  |
-| `aead_encrypt` n=0   |     251 330 |        668 308 | +165.9%  |        176 189 |  -29.9%  |
-| `aead_encrypt` n=1024|   5 974 048 |      2 197 974 |  -63.2%  |      3 415 291 |  -42.8%  |
+| routine              | S0 baseline | Profile A (S10) |   change | Profile B (S10) |   change |
+|----------------------|------------:|----------------:|---------:|----------------:|---------:|
+| `chacha20_block`     |     149 987 |          44 920 |  -70.0%  |          44 922 |  -70.0%  |
+| `poly1305_block`     |      53 270 |          12 119 |  -77.2%  |          38 760 |  -27.2%  |
+| `aead_encrypt` n=0   |     251 330 |         579 280 | +130.5%  |          87 210 |  -65.3%  |
+| `aead_encrypt` n=1024|   5 974 048 |       2 109 228 |  -64.7%  |       3 326 084 |  -44.3%  |
 
-Profile A n=0 is higher than baseline due to Shoup table-build cost;
-this amortizes rapidly at n >= 256. See `docs/OPTIMIZATION_PLAN.md` for
-the full per-step progression table, per-byte breakdowns, and
-estimate-vs-measured analysis.
+Profile A n=0 is higher than baseline due to Shoup table-build cost
+(~490 k cy per-packet); this amortizes rapidly at n >= 256. Step 10
+reduced n=0 by 89 k cy (sqtab one-time build). Profile B n=0 dropped
+to 87 k cy -- 65% below the original baseline. See
+`docs/OPTIMIZATION_PLAN.md` for the full per-step progression table,
+per-byte breakdowns, and estimate-vs-measured analysis.
 
 ## Constant-time guarantees
 
@@ -65,7 +69,9 @@ so instruction timing is deterministic.
 - `chacha20_init` -- seed ChaCha20 state from `cc20_key`, `cc20_nonce`, `cc20_counter`
 - `chacha20_block` -- generate one 64-byte keystream block into `cc20_keystream`
 - `chacha20_encrypt` -- XOR keystream with data at `cc20_data_ptr` (in place)
-- `poly1305_init` -- clamp `poly_r`, zero `poly_h`, build multiplication tables (Shoup per-r in Profile A, quarter-square in Profile B)
+- `poly1305_lib_init` -- one-time library init: build quarter-square table, set `sqtab_ready` flag. Call once before first `aead_encrypt`/`aead_decrypt`. Optional: if omitted, `poly1305_init` auto-builds on first call. With `POLY1305_REU=1` (Profile A), also DMA-backs sqtab to REU.
+- `poly1305_reu_restore` -- (Profile A + `POLY1305_REU=1` only) DMA sqtab from REU back to main RAM (~1.1 k cy). Use if external code clobbers `$8000-$83FF`.
+- `poly1305_init` -- clamp `poly_r`, zero `poly_h`, build multiplication tables (Shoup per-r in Profile A, quarter-square in Profile B). Skips sqtab build if already done.
 - `poly1305_block` -- process one 16-byte block pointed to by `zp_ptr1`
 - `poly1305_update` -- process a buffer at `zp_ptr1` of length `cc20_remain`
 - `poly1305_final` -- finalize and write tag to `poly1305_tag`

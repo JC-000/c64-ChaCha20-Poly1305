@@ -24,6 +24,90 @@ sqtab_lo        = $8000         ; 512 bytes: low bytes of floor(n^2/4)
 sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 
 ; =============================================================================
+; poly1305_lib_init - One-time library initialization (Step 10)
+;
+; Builds the 1 KB quarter-square lookup table at sqtab_lo/hi ($8000-$83FF).
+; This table is a pure function of the platform (integer squares) — it never
+; changes regardless of key, nonce, or r. Calling this once at application
+; startup saves ~80-90 k cy on every subsequent poly1305_init / aead_encrypt
+; / aead_decrypt call for both profiles.
+;
+; Safe to call multiple times (idempotent via sqtab_ready flag).
+; Must be called at least once before any aead_encrypt / aead_decrypt.
+;
+; REU backup (Profile A, POLY1305_REU=1): after building sqtab, DMA the
+; 1 KB table to REU bank 0 at offset $0000 as a fast-restore backup.
+; poly1305_reu_restore can later reload sqtab from REU in ~1.1 k cy if
+; the $8000-$83FF region is ever clobbered by external code.
+;
+; Clobbers: A, X, Y
+; =============================================================================
+poly1305_lib_init:
+        lda sqtab_ready
+        bne @already_done       ; skip if already built
+        jsr sqtab_init
+        lda #1
+        sta sqtab_ready
+
+!ifdef POLY1305_PROFILE_LONG {
+!ifdef POLY1305_REU {
+        ; DMA sqtab (1024 bytes at $8000) to REU bank 0, offset $0000.
+        ; C64 → REU transfer (command = $90: stash, no autoload, no FF00 trigger).
+        lda #$00
+        sta $DF04               ; REU base address lo
+        sta $DF05               ; REU base address hi
+        sta $DF06               ; REU bank
+        lda #<sqtab_lo
+        sta $DF02               ; C64 base address lo
+        lda #>sqtab_lo
+        sta $DF03               ; C64 base address hi
+        lda #<1024
+        sta $DF07               ; transfer length lo
+        lda #>1024
+        sta $DF08               ; transfer length hi
+        lda #$00
+        sta $DF0A               ; address control: increment both
+        lda #$90                ; command: C64→REU, no autoload, execute
+        sta $DF01
+}
+}
+
+@already_done:
+        rts
+
+!ifdef POLY1305_PROFILE_LONG {
+!ifdef POLY1305_REU {
+; =============================================================================
+; poly1305_reu_restore - DMA sqtab back from REU to main RAM
+;
+; Restores the 1 KB quarter-square table from REU bank 0 offset $0000
+; to $8000-$83FF. Use this if external code clobbers the sqtab region.
+; Cost: ~1.1 k cy (50 cy setup + 1024 cy DMA).
+;
+; Clobbers: A
+; =============================================================================
+poly1305_reu_restore:
+        lda #$00
+        sta $DF04               ; REU base address lo
+        sta $DF05               ; REU base address hi
+        sta $DF06               ; REU bank
+        lda #<sqtab_lo
+        sta $DF02               ; C64 base address lo
+        lda #>sqtab_lo
+        sta $DF03               ; C64 base address hi
+        lda #<1024
+        sta $DF07               ; transfer length lo
+        lda #>1024
+        sta $DF08               ; transfer length hi
+        lda #$00
+        sta $DF0A               ; address control: increment both
+        lda #$91                ; command: REU→C64, no autoload, execute
+        sta $DF01
+        rts
+}
+}
+
+; =============================================================================
 ; poly1305_init - Initialize Poly1305 state
 ;
 ; Input: 32-byte one-time key at poly_r (first 16 bytes) and poly_s (next 16)
@@ -32,7 +116,7 @@ sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 ; Operations:
 ;   1. Clamp r
 ;   2. Zero accumulator h
-;   3. Build quarter-square multiply table
+;   3. Build quarter-square multiply table (skipped if already built)
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
@@ -48,8 +132,13 @@ poly1305_init:
         dex
         bpl @zero_h
 
-        ; 3. Build quarter-square table
+        ; 3. Build quarter-square table (skip if poly1305_lib_init already ran)
+        lda sqtab_ready
+        bne @sqtab_done
         jsr sqtab_init
+        lda #1
+        sta sqtab_ready
+@sqtab_done:
 
 !ifdef POLY1305_PROFILE_LONG {
         ; 4. Build Shoup per-r tables (Step 6 / P3, Profile A only).

@@ -91,6 +91,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S6 P3 Shoup per-r table (Profile A)     | `09b93f7` |         45 940 |         12 987 |           2 282 955 |        -61.8% |
 | S7 P4 Donna fused wrap (both profiles)  | `1889efd` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
 | S8 A3-A6 + C7 AEAD/ChaCha glue (both)  | `202d0b3` |         44 922 |         12 122 |           2 197 974 |        -63.2% |
+| S10 sqtab one-time build + REU preload  | `860849c` |         44 920 |         12 119 |           2 109 228 |        -64.7% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -192,6 +193,25 @@ table, but passes 214/214 including lengths 1, 63, 65, 127, 129, 255,
 — dominated by Shoup `poly1305_init` ~420 k cy; see S6 note). Profile
 B `aead_encrypt n=0` = 176 200 cy (**gate met**). `poly1305_block`
 +173 cy drift is bench noise (no Poly1305 code touched).
+
+**Note on S10**: sqtab one-time build + optional REU preload (both
+profiles). The 1 KB quarter-square table at `$8000..$83FF` is a pure
+function of the platform — `floor(i^2/4)` for i=0..511. Previously
+`sqtab_init` was rebuilt every packet inside `poly1305_init` at ~89 k cy
+each time. Step 10 adds `poly1305_lib_init` (new public entry point):
+call it once at library startup to build sqtab and set a `sqtab_ready`
+flag. Subsequent `poly1305_init` calls skip the build entirely via flag
+check (3 cy). Backward-compatible: if the caller never calls
+`poly1305_lib_init`, `poly1305_init` still builds sqtab on the first
+call and sets the flag, so existing callers get the one-time-build
+benefit automatically from their second packet onward. Profile A
+`aead_encrypt n=0` = 579 280 cy (was 668 308, **Δ = −89 028 cy**,
+−13.3%). Profile B `aead_encrypt n=0` = 87 210 cy (was 176 189, **Δ =
+−88 979 cy**, −50.5%). The n=1024 savings are identical (~89 k) since
+sqtab build was a per-packet fixed cost. REU backup/restore gated under
+`POLY1305_REU=1` inside `POLY1305_PROFILE_LONG` (Profile A only): DMA
+sqtab to REU bank 0 after build, `poly1305_reu_restore` can reload it
+from REU in ~1.1 k cy if the `$8000` region is ever clobbered.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
