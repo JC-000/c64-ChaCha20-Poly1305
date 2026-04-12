@@ -572,15 +572,24 @@ chacha20_block:
         +add_state_word 14
         +add_state_word 15
 
-        ; 4. Copy work → keystream (64 bytes)
-        ldx #63
-@copy_keystream:
-        lda cc20_work,x
-        sta cc20_keystream,x
-        dex
-        bpl @copy_keystream
+        ; 4. (C7 / S8) Keystream copy elided. cc20_keystream is an alias
+        ;    for cc20_work (see constants_lib.asm), so the 64-byte
+        ;    work -> keystream copy that used to live here is a no-op.
+        ;    Downstream callers read keystream bytes directly out of
+        ;    the ZP working state.
 
-        ; 5. Increment counter in state (word 12, bytes 48-51)
+        ; 5. Increment counter in state (word 12, bytes 48-51).
+        ;    C6 (S8): kept here rather than folded into chacha20_encrypt.
+        ;    A5 relies on chacha20_block's tail inc to prime cc20_state
+        ;    with counter=1 for free after aead_derive_otk (counter
+        ;    goes 0 -> 1 via this chain, so aead_encrypt / aead_decrypt
+        ;    can skip their re-init). Moving the inc to the encrypt loop
+        ;    would require A5 to add an explicit inc, cancelling C6's
+        ;    savings — the per-block inc chain is already essentially
+        ;    minimum-cost (taken branches only on wrap), so the
+        ;    "fold" is net-zero in cycles. C6 is therefore noted but
+        ;    not relocated; the cleanliness benefit is not worth the
+        ;    coupling cost across aead_derive_otk / A5.
         inc cc20_state+48
         bne @ctr_done
         inc cc20_state+49

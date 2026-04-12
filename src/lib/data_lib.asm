@@ -17,9 +17,10 @@ cc20_state:
 ; cc20_work (64 bytes) is now ZP-resident — see cc20_work equate in
 ; constants_lib.asm. No RAM reservation here.
 
-; Generated keystream for XOR
-cc20_keystream:
-        !fill 64, 0
+; cc20_keystream is aliased to cc20_work in constants_lib.asm as of
+; Step 8 (C7) — chacha20_block no longer needs a separate output buffer
+; because its consumers can read directly from the ZP-resident work
+; state. 64 bytes of RAM reclaimed. No !fill here.
 
 ; 256-bit key
 cc20_key:

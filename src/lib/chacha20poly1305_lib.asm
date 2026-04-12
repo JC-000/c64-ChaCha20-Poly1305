@@ -34,18 +34,16 @@
 ; =============================================================================
 aead_encrypt:
         ; --- 1. Derive Poly1305 OTK ---
+        ; A5 (S8): aead_derive_otk already ran chacha20_init and one
+        ; chacha20_block. The block's tail increments cc20_state+48 from
+        ; 0 -> 1, so cc20_state is already primed with counter=1 and the
+        ; correct key/nonce. We therefore skip the redundant counter set,
+        ; aead_setup_chacha, and chacha20_init that the old flow performed
+        ; here. Save: 1x setup_chacha + 1x chacha20_init per packet
+        ; (~2 000 cy).
         jsr aead_derive_otk
 
-        ; --- 2. Encrypt plaintext with ChaCha20 (counter=1) ---
-        lda #1
-        sta cc20_counter
-        lda #0
-        sta cc20_counter+1
-        sta cc20_counter+2
-        sta cc20_counter+3
-        jsr aead_setup_chacha   ; set up key/nonce/counter in cc20 state
-        jsr chacha20_init
-
+        ; --- 2. Encrypt plaintext with ChaCha20 (counter=1, state primed) ---
         ; Set up encryption pointers
         lda aead_data_ptr
         sta cc20_data_ptr
@@ -84,15 +82,12 @@ aead_decrypt:
         bne @auth_fail          ; A != 0 means tag mismatch
 
         ; --- 4. Decrypt ciphertext with ChaCha20 (counter=1) ---
-        lda #1
-        sta cc20_counter
-        lda #0
-        sta cc20_counter+1
-        sta cc20_counter+2
-        sta cc20_counter+3
-        jsr aead_setup_chacha
-        jsr chacha20_init
-
+        ; A6 (S8): aead_derive_otk already set up key/nonce and ran one
+        ; chacha20_block, whose tail bumped cc20_state+48 to 1. The tag
+        ; compute between derive_otk and here only calls Poly1305
+        ; routines, so cc20_state is still primed with counter=1 and the
+        ; right key/nonce. Skip the redundant setup_chacha + init
+        ; (~500 cy saved per decrypt).
         lda aead_data_ptr
         sta cc20_data_ptr
         lda aead_data_ptr+1
@@ -216,12 +211,23 @@ aead_compute_tag:
 @skip_ct:
         ; --- Process lengths block (16 bytes) ---
         ; Build: aad_len as 8-byte LE ‖ data_len as 8-byte LE
-        ldx #15
+        ; A3 (S8): unrolled 16 straight stores — no loop overhead (-80 cy).
+        ; The three "live" bytes (aad_len at 0, data_len lo at 8, hi at 9)
+        ; are written directly with no intermediate zero store.
         lda #0
-@zero_len:
-        sta aead_scratch,x
-        dex
-        bpl @zero_len
+        sta aead_scratch+1
+        sta aead_scratch+2
+        sta aead_scratch+3
+        sta aead_scratch+4
+        sta aead_scratch+5
+        sta aead_scratch+6
+        sta aead_scratch+7
+        sta aead_scratch+10
+        sta aead_scratch+11
+        sta aead_scratch+12
+        sta aead_scratch+13
+        sta aead_scratch+14
+        sta aead_scratch+15
 
         lda aead_aad_len
         sta aead_scratch        ; low byte of AAD length (rest is 0)
@@ -256,7 +262,9 @@ aead_process_padded:
         ; Check if done (16-bit)
         lda cc20_remain
         ora cc20_remain_hi
-        beq @done
+        bne @have_data
+        jmp @done
+@have_data:
 
         ; Check if >= 16 bytes remain
         lda cc20_remain_hi
@@ -290,22 +298,90 @@ aead_process_padded:
         jmp @next_block
 
 @partial:
-        ; Copy remaining bytes to scratch, zero-pad to 16
-        ldx #15
+        ; A4 (S8): merged partial-block copy + zero-fill via SMC jump
+        ; dispatch. cc20_remain holds n (1..15) — a public length, so
+        ; branching on it is CT-safe.
+        ;
+        ; Copy chain: 15 identical fixed-size (6-byte) slots. Slot @cp_k
+        ; copies byte k from (zp_ptr1),y into aead_scratch,y and bumps
+        ; Y. Jumping to @cp_base + (15-n)*6 leaves exactly n slots to
+        ; fall through, so bytes 0..n-1 get copied and Y ends at n.
+        ;
+        ; Zero-fill chain: 15 identical fixed-size (3-byte) `sta abs`
+        ; slots @zf1..@zf15 writing to aead_scratch+1..+15. Jumping to
+        ; @zf1 + (n-1)*3 leaves slots @zf_n..@zf15 to fall through,
+        ; writing zero into aead_scratch+n..+15. aead_scratch+0 is
+        ; handled by the copy chain (n>=1 always here).
+        lda cc20_remain         ; n in 1..15
+        sta zp_tmp1             ; stash n for zfill dispatch
+        ; --- compute copy-chain entry = @cp_base + (15-n)*6 ---
+        ; n is in 1..15 so `eor #15` yields (15-n) (xor = subtract when
+        ; the minuend has all low bits set and the subtrahend has none
+        ; beyond them).
+        eor #15                 ; A = 15 - n
+        sta zp_tmp2             ; k = 15 - n
+        asl                     ; 2k
+        clc
+        adc zp_tmp2             ; 3k
+        asl                     ; 6k
+        clc
+        adc #<@cp_base
+        sta @partial_smc+1
         lda #0
-@zero_scratch:
-        sta aead_scratch,x
-        dex
-        bpl @zero_scratch
-
+        adc #>@cp_base
+        sta @partial_smc+2
         ldy #0
-        ldx cc20_remain
-@copy_partial:
-        lda (zp_ptr1),y
-        sta aead_scratch,y
-        iny
-        dex
-        bne @copy_partial
+@partial_smc:
+        jmp $0000
+@cp_base:
+@cp15:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp14:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp13:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp12:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp11:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp10:  lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp9:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp8:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp7:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp6:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp5:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp4:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp3:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp2:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp1:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+
+        ; --- compute zfill entry = @zf1 + (n-1)*3 ---
+        lda zp_tmp1             ; n
+        sec
+        sbc #1                  ; n-1
+        sta zp_tmp2             ; m = n-1 (0..14)
+        asl                     ; 2m
+        clc
+        adc zp_tmp2             ; 3m
+        clc
+        adc #<@zf1
+        sta @zfill_smc+1
+        lda #0
+        adc #>@zf1
+        sta @zfill_smc+2
+        lda #0
+@zfill_smc:
+        jmp $0000
+@zf1:   sta aead_scratch+1
+@zf2:   sta aead_scratch+2
+@zf3:   sta aead_scratch+3
+@zf4:   sta aead_scratch+4
+@zf5:   sta aead_scratch+5
+@zf6:   sta aead_scratch+6
+@zf7:   sta aead_scratch+7
+@zf8:   sta aead_scratch+8
+@zf9:   sta aead_scratch+9
+@zf10:  sta aead_scratch+10
+@zf11:  sta aead_scratch+11
+@zf12:  sta aead_scratch+12
+@zf13:  sta aead_scratch+13
+@zf14:  sta aead_scratch+14
+@zf15:  sta aead_scratch+15
 
         ; Process zero-padded block with hibit=1
         lda #<aead_scratch

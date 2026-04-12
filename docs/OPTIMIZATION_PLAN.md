@@ -70,6 +70,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S5 profile dispatch scaffold (no-op)    | `fd9323b` |         45 957 |         39 675 |           3 497 228 |        -41.5% |
 | S6 P3 Shoup per-r table (Profile A)     | `09b93f7` |         45 940 |         12 987 |           2 282 955 |        -61.8% |
 | S7 P4 Donna fused wrap (both profiles)  | `1889efd` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
+| S8 A3-A6 + C7 AEAD/ChaCha glue (both)  | `PENDING` |         44 922 |         12 122 |           2 197 974 |        -63.2% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -149,6 +150,28 @@ representation. n=0 aead_encrypt: 670 919 cy (was 671 332, ≈ flat as
 expected — the rewrite touches `poly1305_multiply` runtime, not
 `poly1305_init` setup). 10 000 random Poly1305 vectors cross-checked
 against pyca/cryptography pass on both profiles (seed `20260411`).
+
+**Note on S8**: A3-A6 + C7 AEAD/ChaCha glue cleanups (both profiles).
+Five sub-items implemented; C6 (counter-increment fold) retained in
+place as its relocation is net-zero cycles and conflicts with A5's
+free counter-prime. **A5 (fold OTK into encrypt)** is the biggest
+per-packet win: `aead_derive_otk`'s `chacha20_block` tail-inc already
+primes `cc20_state+48` = 1, so both encrypt and decrypt skip a
+redundant `aead_setup_chacha` + `chacha20_init` (saves ~2 600 cy
+per packet). **C7 (keystream alias)** eliminates the 64-byte
+`work → keystream` copy in `chacha20_block` by aliasing
+`cc20_keystream = cc20_work` — saves ~1 000 cy per block, ~16 000 cy
+at n=1024. **A3 (unrolled lengths zero)** and **A6 (skip decrypt
+re-init)** contribute small per-packet savings folded into the n=0
+delta. **A4 (SMC tail-block dispatch)** replaces the zero+copy loop
+for partial Poly1305 blocks with a jump-into-chain dispatch on n (a
+public length — CT-safe); affects only non-16-multiple message lengths
+(bench uses n=1024 = 0 mod 16 so A4 is invisible in the progression
+table, but passes 214/214 including lengths 1, 63, 65, 127, 129, 255,
+511). Profile A `aead_encrypt n=0` = 668 308 cy (gate 248 000 not met
+— dominated by Shoup `poly1305_init` ~420 k cy; see S6 note). Profile
+B `aead_encrypt n=0` = 176 200 cy (**gate met**). `poly1305_block`
++173 cy drift is bench noise (no Poly1305 code touched).
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
