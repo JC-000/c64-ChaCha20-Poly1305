@@ -34,6 +34,18 @@
 ; to place cc20_work elsewhere in ZP.
 !ifndef cc20_work     { cc20_work     = $40 } ; 64 bytes: $40..$7f
 
+; C7 (S8): cc20_keystream is an alias for cc20_work. chacha20_block used
+; to copy its 64-byte result out of cc20_work into a separate RAM buffer
+; named cc20_keystream, so downstream consumers (chacha20_encrypt XOR
+; loop, aead_derive_otk's poly_r/poly_s copies, the test-suite read of
+; the block output) would read from the buffer instead of the ZP
+; working state. That 64-byte copy costs ~256 cy per block with no
+; upside — the keystream bytes are *already* sitting in cc20_work at
+; the end of the round-add step, and every consumer is happy to read
+; them from there. Aliasing the label eliminates the copy pass and
+; reclaims 64 bytes of RAM in data_lib.
+!ifndef cc20_keystream { cc20_keystream = cc20_work }
+
 ; --- Poly1305 ZP ---
 !ifndef poly_i     { poly_i     = $1a }   ; outer loop counter
 !ifndef poly_j     { poly_j     = $1b }   ; inner loop counter
