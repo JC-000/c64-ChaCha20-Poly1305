@@ -392,14 +392,31 @@ poly_ripple:
 }
 }
 
+; =============================================================================
+; poly_reduce_shl6_tab - 256-entry LUT: tab[y] = (y & 3) << 6
+;
+; Used by the unrolled fused poly1305_reduce to land the top 2 bits of
+; product[17+k] at bit positions 6..7 of the overflow byte without six
+; in-line `asl`s. Saves ~10 cy per inner iteration × 16 iterations.
+;
+; **Page-aligned** so that `lda poly_reduce_shl6_tab,y` never crosses a
+; page boundary — `lda abs,y` adds a 1-cycle penalty on page cross, and
+; Y here is derived from h*r (secret), so a cross-dependent timing
+; would be a CT violation. Aligning the base low byte to $00 makes the
+; access strictly constant-time.
+; =============================================================================
+        !align 255, 0
+poly_reduce_shl6_tab:
+        !for .V, 0, 255 {
+            !byte (.V & 3) << 6
+        }
+
 poly1305_multiply:
-        ; Zero the product buffer (33 bytes)
-        ldx #32
+        ; Zero the product buffer (33 bytes) — unrolled store chain.
         lda #0
-@zero_prod:
-        sta poly_product,x
-        dex
-        bpl @zero_prod
+        !for .Z, 0, 32 {
+            sta poly_product + .Z
+        }
 
 !ifdef POLY1305_PROFILE_LONG {
         ; Fully unrolled 17x16 schoolbook via Shoup per-r tables (P3).
@@ -420,123 +437,110 @@ poly1305_multiply:
         }
 }
 
-        jmp poly1305_reduce
+        ; Fall through to poly1305_reduce (fused Donna wrap).
 
 ; =============================================================================
 ; poly1305_reduce - Reduce poly_product (33 bytes) mod 2^130-5 into poly_h
 ;
-; product = bottom (130 bits) + overflow * 2^130
-; result = bottom + overflow * 5  (since 2^130 ≡ 5 mod p)
+; Step 7 (P4 Donna-style fused wrap): the schoolbook above still fills
+; poly_product[0..32] as a 33-byte intermediate, but this reduction is
+; rewritten as a single fused pass that merges the old two 1-bit right-
+; shift passes and the 17-byte *5 running-carry loop into straight-line
+; code that computes each overflow byte on the fly.
 ;
-; Strategy:
-;   1. Copy bottom 130 bits (product[0..15] + low 2 bits of product[16]) to h
-;   2. Extract overflow = product >> 130 (right-shift product[16..32] by 2)
-;   3. Add overflow * 5 to h
-;      overflow*5 is computed as: for each overflow byte, multiply by 5
-;      and add to h with running carry.
+; Identity: product = L + 2^130 * H  where
+;     L = product[0..15] + (product[16] & 3) << 128   (130 bits)
+;     H = product[16..32] >> 2                        (124 bits, 17 bytes)
+; and  product mod (2^130 - 5) = L + 5*H  (since 2^130 ≡ 5 mod p).
+;
+; overflow byte k = (product[16+k] >> 2) | ((product[17+k] & 3) << 6),
+; with product[33] implicitly zero for k=16.
+;
+; Each overflow byte is multiplied by 5 via (x<<2)+x and added to h[k]
+; with a running 16-bit carry.
+;
+; CT contract: the only branches are (a) ripple on adder carry, which is
+; a function of hardware flags and independent of secret bytes beyond
+; standard multi-precision arithmetic, and (b) loop control on a fixed
+; 17-iteration unroll (fully straight-line here).
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
 poly1305_reduce:
-        ; 1. Copy bottom 130 bits to h
-        ldx #15
-@copy_lo:
-        lda poly_product,x
-        sta poly_h,x
-        dex
-        bpl @copy_lo
-        lda poly_product+16
-        and #$03               ; keep only low 2 bits (bits 128-129)
-        sta poly_h+16
+        ; 1. Copy low 130 bits of product → h (straight-line).
+        !for .K, 0, 15 {
+            lda poly_product + .K
+            sta poly_h + .K
+        }
+        lda poly_product + 16
+        and #$03
+        sta poly_h + 16
 
-        ; 2. Extract overflow: right-shift product[16..32] by 2 bits
-        ; Do 2 right-shift passes over bytes 32 down to 16
-        ; IMPORTANT: Use DEY/BNE for loop control — CPX clobbers carry,
-        ; which would corrupt the ROR chain.
-        clc
-        ldy #17                ; 17 bytes (product[32] down to product[16])
-        ldx #32
-@rshift1:
-        lda poly_product,x
-        ror
-        sta poly_product,x
-        dex
-        dey
-        bne @rshift1
-
-        clc
-        ldy #17
-        ldx #32
-@rshift2:
-        lda poly_product,x
-        ror
-        sta poly_product,x
-        dex
-        dey
-        bne @rshift2
-
-        ; product[16..32] now holds the overflow value (17 bytes)
-
-        ; 3. Add overflow * 5 to h
-        ; For each byte overflow[i] (product[16+i]):
-        ;   tmp16 = overflow[i] * 5 + running_carry
-        ;   h[i] += tmp16_lo  (with addition carry)
-        ;   running_carry = tmp16_hi + addition_carry_out
+        ; 2. Fused overflow-shift + *5 + add-to-h, fully unrolled for
+        ;    k = 0..16. Running carry_in kept in poly_carry.
         ;
-        ; overflow[i]*5: use mul_8x8 would be slow (17 calls).
-        ; Instead compute inline: byte*5 = byte*4 + byte = (byte<<2) + byte
-        ; Result fits in 16 bits (max 255*5 = 1275).
-
+        ;    Per iteration:
+        ;      ov    = (p[16+k] >> 2) | ((p[17+k] & 3) << 6)  ; k<16
+        ;      ov    = (p[32] >> 2)                           ; k=16
+        ;      prod5 = ov * 5                                 ; 16-bit (max 1275)
+        ;      sum16 = prod5 + carry_in                       ; 16-bit
+        ;      h[k] += sum16_lo; carry_out = sum16_hi + add_carry
+        ;      carry_in := carry_out
+        ;
+        ;    All arithmetic is branch-free (no early-outs on secret ov),
+        ;    matching the Step 4 CT cleanup.
         lda #0
-        sta poly_carry          ; running carry from multiplication
-        ldx #0
-@reduce_loop:
-        ; compute overflow[i] * 4
-        lda poly_product+16,x
-        asl
-        sta poly_tmp
-        lda #0
-        rol                    ; carry from first shift
-        sta poly_j              ; high byte temp (reuse poly_j as temp)
-        lda poly_tmp
-        asl
-        sta poly_tmp
-        lda poly_j
-        rol
-        sta poly_j              ; poly_j:poly_tmp = overflow[i] * 4
-
-        ; add overflow[i] to get *5
-        clc
-        lda poly_tmp
-        adc poly_product+16,x  ; + overflow[i]
-        sta poly_tmp
-        lda poly_j
-        adc #0
-        sta poly_j              ; poly_j:poly_tmp = overflow[i] * 5
-
-        ; add running carry
-        clc
-        lda poly_tmp
-        adc poly_carry
-        sta poly_tmp
-        lda poly_j
-        adc #0
-        sta poly_j              ; poly_j:poly_tmp = overflow[i]*5 + carry_in
-
-        ; add to h[i]
-        clc
-        lda poly_h,x
-        adc poly_tmp
-        sta poly_h,x
-
-        ; new running carry = poly_j + carry_out_from_addition
-        lda poly_j
-        adc #0
         sta poly_carry
 
-        inx
-        cpx #17
-        bcc @reduce_loop
+        !for .K, 0, 16 {
+            ; --- form overflow byte .K in A.
+            lda poly_product + 16 + .K
+            lsr
+            lsr                     ; A = p[16+.K] >> 2 (bits 6..7 cleared)
+            !if .K < 16 {
+                sta poly_tmp        ; stash low 6 bits of ov
+                ldy poly_product + 17 + .K
+                lda poly_reduce_shl6_tab,y  ; A = (y & 3) << 6  (via 256-entry LUT)
+                ora poly_tmp        ; A = overflow byte .K
+            }
+            sta poly_tmp            ; poly_tmp = ov (stash for ov*5)
+
+            ; --- compute ov*5 into (poly_i : A) branch-free.
+            ;     poly_i is unused outside shoup_init, repurposed as the
+            ;     running 8-bit hi scratch (max ov*5 = 1275, hi ≤ 4).
+            lda #0
+            sta poly_i
+            lda poly_tmp            ; A = ov
+            asl                     ; A = (ov<<1)&$ff, C = ov bit7
+            rol poly_i              ; poly_i:A = ov*2
+            asl
+            rol poly_i              ; poly_i:A = ov*4
+                                    ; rol leaves C = old poly_i bit7 = 0,
+                                    ; so the following adc doesn't need clc.
+            adc poly_tmp            ; A = (ov*4 + ov) lo = (ov*5) lo
+            sta poly_tmp            ; poly_tmp = ov*5 lo (reuse)
+            lda poly_i
+            adc #0                  ; hi of ov*5
+            sta poly_i              ; poly_i  = ov*5 hi
+
+            ; --- add running carry_in to ov*5
+            clc
+            lda poly_tmp
+            adc poly_carry
+            sta poly_tmp
+            lda poly_i
+            adc #0
+            sta poly_i              ; (poly_i : poly_tmp) = ov*5 + carry_in
+
+            ; --- add to h[.K], produce new carry_in for next k
+            clc
+            lda poly_h + .K
+            adc poly_tmp
+            sta poly_h + .K
+            lda poly_i
+            adc #0
+            sta poly_carry          ; carry_in for iteration .K+1
+        }
 
         rts
 
