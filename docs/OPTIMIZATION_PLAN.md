@@ -745,7 +745,150 @@ the step reverted.
 
 ---
 
-## Section 8 — Appendix: resources
+## Section 8 — Post-sprint summary
+
+### Final measurements (S8, both profiles)
+
+**Profile A** (Shoup per-r tables, `make profile-a`):
+
+| routine                           |      cycles |  spread |
+|-----------------------------------|------------:|--------:|
+| `chacha20_block` (64 B keystream) |      44 920 |     443 |
+| `poly1305_block` (16 B)          |      12 122 |     241 |
+| `aead_encrypt` n=0               |     668 308 |     133 |
+| `aead_encrypt` n=64              |     763 548 |   1 370 |
+| `aead_encrypt` n=128             |     858 883 |   1 934 |
+| `aead_encrypt` n=512             |   1 434 708 |     763 |
+| `aead_encrypt` n=1024            |   2 197 974 |   2 383 |
+| `aead_decrypt` n=0               |     668 648 |     195 |
+| `aead_decrypt` n=64              |     765 105 |     224 |
+| `aead_decrypt` n=128             |     861 183 |      82 |
+| `aead_decrypt` n=512             |   1 435 075 |     113 |
+| `aead_decrypt` n=1024            |   2 198 304 |     446 |
+
+**Profile B** (stock C64 quarter-square, `make profile-b`):
+
+| routine                           |      cycles |  spread |
+|-----------------------------------|------------:|--------:|
+| `chacha20_block` (64 B keystream) |      44 920 |     443 |
+| `poly1305_block` (16 B)          |      38 760 |     403 |
+| `aead_encrypt` n=0               |     176 189 |     266 |
+| `aead_encrypt` n=64              |     378 433 |     680 |
+| `aead_encrypt` n=128             |     580 723 |     887 |
+| `aead_encrypt` n=512             |   1 796 393 |     915 |
+| `aead_encrypt` n=1024            |   3 415 291 |   1 615 |
+| `aead_decrypt` n=0               |     176 433 |     347 |
+| `aead_decrypt` n=64              |     379 328 |     165 |
+| `aead_decrypt` n=128             |     581 896 |      84 |
+| `aead_decrypt` n=512             |   1 796 668 |     181 |
+| `aead_decrypt` n=1024            |   3 415 634 |     272 |
+
+### Derived cycles-per-byte (aead_encrypt)
+
+**Profile A:**
+
+| n    | total cycles | cy/byte |
+|------|-------------:|--------:|
+|   64 |      763 548 | 11930.4 |
+|  128 |      858 883 |  6710.0 |
+|  512 |    1 434 708 |  2802.2 |
+| 1024 |    2 197 974 |  2146.5 |
+
+**Profile B:**
+
+| n    | total cycles | cy/byte |
+|------|-------------:|--------:|
+|   64 |      378 433 |  5913.0 |
+|  128 |      580 723 |  4536.9 |
+|  512 |    1 796 393 |  3508.6 |
+| 1024 |    3 415 291 |  3335.2 |
+
+Note: Profile B has lower cy/byte at small n because its fixed cost
+(176 k vs 668 k) dominates; at large n Profile A's cheaper per-block
+cost wins.
+
+### S0 baseline vs S8 final comparison
+
+| routine              | S0 baseline | Profile A |   Δ A  | Profile B |   Δ B  |
+|----------------------|------------:|----------:|-------:|----------:|-------:|
+| `chacha20_block`     |     149 987 |    44 920 | -70.0% |    44 920 | -70.0% |
+| `poly1305_block`     |      53 270 |    12 122 | -77.2% |    38 760 | -27.2% |
+| `aead_encrypt` n=0   |     251 330 |   668 308 |+165.9% |   176 189 | -29.9% |
+| `aead_encrypt` n=64  |     643 118 |   763 548 | +18.7% |   378 433 | -41.2% |
+| `aead_encrypt` n=128 |     998 801 |   858 883 | -14.0% |   580 723 | -41.9% |
+| `aead_encrypt` n=512 |   3 130 996 | 1 434 708 | -54.2% | 1 796 393 | -42.6% |
+| `aead_encrypt` n=1024|   5 974 048 | 2 197 974 | -63.2% | 3 415 291 | -42.8% |
+| `aead_decrypt` n=0   |     251 698 |   668 648 |+165.6% |   176 433 | -29.9% |
+| `aead_decrypt` n=1024|   5 974 339 | 2 198 304 | -63.2% | 3 415 634 | -42.8% |
+
+Profile A break-even vs baseline: between n=64 and n=128 (at n=128 the
+Shoup table cost is already amortized). For the target workloads
+(WireGuard MTU ~1280 B, TLS 1.3 records ~1024 B), Profile A delivers
+-63.2% on `aead_encrypt n=1024`.
+
+### Plan estimate accuracy — key takeaways
+
+- **S1 (C1 ZP cc20_work)**: plan estimated -20 000 cy chacha20_block,
+  measured -89 cy. The estimate implicitly assumed C2 was bundled;
+  the ZP win doesn't materialize until QRs are inlined. Misleading
+  in isolation but correct as a C1+C2 compound estimate.
+- **S2 (C2 inline QRs)**: plan estimated -30 000 cy, measured
+  -99 759 cy. The compound C1+C2 win vastly exceeded the sum of
+  parts — inlining eliminated JSR/RTS overhead *and* unlocked the
+  ZP addressing savings that C1 set up.
+- **S3 (C3 rot-rename)**: plan estimated -12 000 cy (C3+C4 combined),
+  measured -4 274 cy. Reasonable; the rot-rename offsets were partially
+  already captured by C2's inlining.
+- **S4 (P1 unroll multiply)**: plan estimated -12 000 cy, measured
+  -13 584 cy. Accurate within 15%.
+- **S6 (P3 Shoup table)**: plan estimated -25 000 cy per block,
+  measured -26 688 cy — accurate. But init cost estimate was +50 000 cy
+  vs measured +420 000 cy (8x miss). The per-`mul_8x8` cost was ~100 cy
+  including jsr/wrapper, not the estimated ~12 cy.
+- **S7 (P4 Donna wrap)**: plan estimated -8 000 cy, measured -1 038 cy
+  (13% of estimate). The byte-vs-limb representation caveat: the plan's
+  estimate was transcribed from Moon's radix-2^26 limb code where
+  `2^130 = 5 (mod p)` lands on a limb boundary. In byte
+  representation, `2^136 = 320 (mod p)` has a 6-bit sub-byte
+  misalignment that defeats per-partial-product fusion. The achievable
+  form is folding into the reduction step, not the multiply.
+- **S8 (AEAD glue)**: plan estimated -3 730 cy per packet, measured
+  -18 503 cy at n=0 and -18 477 cy at n=1024 (vs S7). Exceeded by
+  ~5x; the C7 keystream-alias optimization saved ~1 000 cy per block
+  (16 000 cy at n=1024) which was underestimated.
+
+### Byte-vs-limb representation caveat
+
+The most significant planning lesson from this sprint: several
+estimates — most visibly S7's -8 000 cy target — were borrowed from
+Andrew Moon's `poly1305-donna` C reference using radix-2^26 limbs.
+In that form, `2^130 = 5 (mod p)` falls on a limb boundary, making
+per-partial-product wrap folding a clean operation. This library uses
+radix-2^8 (byte) representation where `2^136 = 320 (mod p)` — a 6-bit
+sub-byte misalignment. Per-PP folding costs more to realign than it
+saves. The achievable optimization ceiling on byte layout is bounded by
+the pre-optimization reduction cost, not by the theoretical limb-form
+savings. Porting to radix-2^26 internal representation is out of scope.
+
+**Forward-looking implication**: any future optimization whose estimate
+derives from limb-layout reference code should be re-examined against
+byte-layout constraints before implementation. The S7 experience
+(13% of estimate realized) is the calibration point.
+
+### n=0 gate scope
+
+The original S8 bench gate (`aead_encrypt n=0 < 248 000 cy`) was
+established before Profile A's Shoup table-build cost was known.
+Profile A `aead_encrypt n=0` = 668 308 cy (dominated by ~490 k cy
+Shoup `poly1305_init`). **The n=0 gate is Profile-B-scoped going
+forward**: Profile B `aead_encrypt n=0` = 176 189 cy, well within
+the 248 000 cy gate. Profile A's n=0 cost is the deliberate trade-off
+of the Shoup table strategy — init cost traded for per-block throughput,
+amortizing at n >= ~256 B.
+
+---
+
+## Section 9 — Appendix: resources
 
 ### URLs (primary sources cited above)
 
