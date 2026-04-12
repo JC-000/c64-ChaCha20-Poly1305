@@ -78,3 +78,9 @@ aead_tag:
 ; Poly1305 padding/length block scratch (16 bytes)
 aead_scratch:
         !fill 16, 0
+
+; --- Library-init state ---
+; sqtab_ready: non-zero once sqtab_init has been run at least once.
+; Checked by poly1305_init to skip redundant sqtab rebuilds (Step 10).
+sqtab_ready:
+        !byte 0
