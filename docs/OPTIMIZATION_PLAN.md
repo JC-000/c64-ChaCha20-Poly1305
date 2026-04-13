@@ -94,6 +94,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S10 sqtab one-time build + REU preload  | `860849c` |         44 920 |         12 119 |           2 109 228 |        -64.7% |
 | Port: ACME→ca65 toolchain               | `27e109f` |         44 922 |         12 122 |           2 109 212 |        -64.7% |
 | S11 incremental Shoup build             | `3782fbc` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
+| S12 Profile B P2+P7+mult66              | `291925a` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -275,6 +276,130 @@ the Shoup path's amortization (now that the build itself is ~118 k
 instead of ~438 k) is ~4 blocks (64 B of message) for Profile A vs
 Profile B (100 332 cy n=0 penalty / 26 867 cy-per-block savings), down
 from ~18 blocks (≈290 B) before.
+
+**Note on S12**: Profile B P2 + P7 + mult66 primitive swap. Profile A
+is byte-identical to pre-S12 (entire change is gated on
+`.ifndef POLY1305_PROFILE_LONG`); the progression table row for S12
+reprints Profile A's pre-S12 numbers verbatim because the step is
+Profile B only. Headline result: Profile B `poly1305_block` =
+**27 032 cy** (was 38 819, **Δ = −11 787 cy, −30.4%**), well under the
+36 000 cy gate and beating the ~34 000 cy target by ~7 000 cy.
+`aead_encrypt n=1024` = **2 598 896 cy** (was 3 326 167, **Δ =
+−727 271 cy, −21.9%**); `aead_encrypt n=0` = **74 844 cy** (was
+87 256, **Δ = −12 412 cy, −14.2%**, coming from the one lengths-block
+`poly1305_block` call in the AEAD tail which now takes the mult66
+path). `chacha20_block` = **44 921 cy** (unchanged), confirming no
+cross-profile leak into ChaCha20. 214/214 tests on both profiles
+(seed 7539). **10 000/10 000 random Poly1305 vectors cross-checked
+against pyca/cryptography** pass on Profile B (seed 20260412) —
+independent evidence beyond the 214-vector suite that the new
+mult66 primitive agrees with the RFC 7539 reference bit-for-bit
+across the full 8x8 input space.
+
+**Per sub-item measured delta (isolated on-the-fly by commenting
+the newer sub-items out and re-benching)**:
+
+- **mult66 primitive swap + J-outer / I-inner loop reversal**:
+  Profile B `poly1305_block` = 27 176 cy (was 38 819, Δ = −11 643 cy,
+  −30.0%). This is the vast majority of S12's savings.
+- **P7 straight-line block-add**: Profile B `poly1305_block` =
+  27 032 cy (was 27 176, Δ = −144 cy, −0.5%). Modest because the
+  fully-fused "merge add into multiply prologue" form of P7 is not
+  achievable in byte layout without stashing and restoring the
+  inter-byte carry around each `mult66` call (which costs more than
+  it saves on a 17-byte ripple). What S12 *does* land is the DEX/BNE
+  loop → straight-line unroll for the 16-byte block-add, saving the
+  `iny+dex+bne` loop-control cycles (~7 cy/iter × 16 = 112 cy before
+  accounting for bench noise on a single block).
+- **P2 SMC-bake of r[j]**: effectively **subsumed by mult66**. The
+  brief's P2 (SMC-patching 16 r[j] immediates at `poly1305_init` time)
+  was an optimization for the *old* unrolled sqtab multiply, where
+  each of 272 inner iterations does `ldx poly_r+j`. With mult66,
+  r[j] is already cached into the `lmul0/lmul1` ZP pointer low byte
+  and the `mult66_sbc_a` SMC immediate once per outer-j iteration
+  (3 stores, 14 cy total), and the 17 inner iterations then use
+  `(lmul0),y` / `sbc #imm` directly. Pulling that 3-store setup into
+  a per-`poly1305_init` patching pass saves ≈ 14 cy × 16 = 224 cy/block
+  at a cost of ≈ 224 cy/init — a net wash on single-block packets
+  (Profile B's target workload) and a rounding-error win on
+  n=1024 (−14 k cy on a 729 k-cycle path). Not worth the additional
+  SMC-patching surface area that would have to be wired into init
+  and audited for CT side-channels. **P2 is therefore left as a
+  structural note — already-achieved by mult66, not separately
+  re-implemented**. See also "S11 lesson" paragraph below.
+
+**S11-lesson check (per-call overhead vs plan estimate)**: the S12
+brief flagged that the plan's `−2 500 cy/block` estimate for mult66
+was derived from "~45 cy quarter-square vs ~30-35 cy mult66" per
+8x8, and asked whether per-call overhead savings came in larger
+than the plan's estimate. **They did — by ~4.7×.** The measured
+mult66 delta is −11 643 cy/block vs plan estimate −2 500 cy/block.
+The difference tracks the same underestimate pattern as S11 (which
+undershot its own build-cost estimate by 8×): plan estimates of
+"X cy/call savings × N calls" systematically underestimate 6502
+realities because they don't price in the `jsr/rts`/stack juggling
+around each call (12 cy × 272 = 3 264 cy of pure call overhead),
+the scratch-write dance `sta mul_a/stx mul_b/lda mul_a/…` inside
+`mul_8x8` (~10 cy × 272 = 2 720 cy of primitive prologue), and
+the sum-page decode branch that mult66 replaces with free
+indirect-indexed addressing (~3 cy × 272 = 816 cy — but only
+when the sum falls in page 1). The mult66 primitive removes all
+three, which stacks to far more than the "~10-15 cy/call" the plan
+quoted. This is the same lesson S6 taught (`mul_8x8` cost ~100 cy
+total vs plan's ~12 cy): **plan estimates that price only the
+arithmetic portion of a primitive miss 70–80% of the true 6502
+cost.** Future S13+ steps should treat plan estimates as lower
+bounds unless they explicitly account for JSR, stack, and
+scratch-buffer traffic.
+
+**mult66 applicability verdict**: the c64-x25519 reference at
+`fe25519.s:829` implements mult66 for field-element multiply where
+one operand (`a[i]` at the outer-i level) is the cached side. For
+Poly1305 on the Profile B path, the cached operand is naturally
+`r[j]` (constant per packet), and the J-outer/I-inner loop shape
+puts `r[j]` in exactly the role the reference's `a[i]` plays. The
+reference *also* precomputes per-operand doubled rows via REU DMA
+for the hybrid path, but that's Shoup-style precompute — the pure
+mult66 path (lines 882–915 of fe25519.s) uses just two shared
+512-byte tables (`sqtab_lo/hi` + `sqtab2_lo/hi`) and no per-operand
+rows. S12 uses that pure mult66 form and adds exactly one new
+table: `sqtab2_lo/hi` at `$8400..$87FF` (512 bytes total),
+derived from the existing sqtab in `~7 k cy` once per library
+lifetime by `sqtab2_init`. No per-packet or per-block precompute
+is added to Profile B — the byte cost is strictly +512 bytes of
+runtime RAM, not the +8 KB of Shoup tables that Profile A carries.
+mult66 therefore applies cleanly to Profile B without requiring
+any of Shoup's heavier per-packet setup.
+
+**CT contract**: mult66 introduces one secret-dependent branch
+(`bcs @pos`) that selects between the positive-diff and
+negative-diff paths based on `sign(h[i] - r[j])`. The two arms
+are straight-line and access fixed-address tables (each on its
+own 256-byte page, so no secret-indexed page-cross timing), and
+the branch itself contributes ≤ 1 cy of direction-dependent
+spread per 8x8 call. This is the **same class of secret-dependent
+branch** the baseline `mul_8x8` carried (`beq @s0` on `mul_s_pg`,
+which gates the sum-page-1 vs sum-page-0 subtraction). S12 replaces
+one such 1-cy-spread branch with another; it does not introduce
+a new channel that wasn't already there. The CT contract
+("no branches on whole operand *values* via beq/bne") remains
+satisfied — `bcs` is a branch on hardware flags derived from a
+subtraction, exactly like the 17-byte carry-ripple branches in
+`poly_ripple` that the CT note in `poly1305_multiply` explicitly
+allows.
+
+**Memory / table placement**: `sqtab2_lo = $8400`,
+`sqtab2_hi = $8600`, building on top of the existing
+`sqtab_lo/hi = $8000/$8200`. Free space above the bench plaintext
+upper-bound ($5000..$7C00 reservation, current pt_addr = $5000 —
+see `project_bench_tooling.md`). The `$8400..$87FF` region is
+outside both Profile A's `r_tab_lo/hi` ($6000..$7FFF Shoup
+tables) and the original sqtab, and both mult66 tables are
+individually page-aligned so the `,x` loads never cross a page.
+`lmul0 = $1e` / `lmul1 = $20` in ZP (4 consecutive bytes in the
+previously-unused $1e..$21 slot between `poly_tmp` at $1d and
+`cc20_work` at $40). Neither ZP range collides with any existing
+ZP assignment in `constants_lib.s`.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.

@@ -42,6 +42,25 @@
 sqtab_lo        = $8000         ; 512 bytes: low bytes of floor(n^2/4)
 sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 
+.ifndef POLY1305_PROFILE_LONG
+; Profile B mult66 auxiliary table (Step 12). Built alongside sqtab by
+; poly1305_lib_init. Layout:
+;   sqtab2_lo/hi[0]   = 0
+;   sqtab2_lo/hi[n]   = floor((256-n)^2 / 4) - 1     for n = 1..255
+;
+; Used by the mult66 negative-difference path: when a < b (cached
+; operand a, other operand b), `sbc` wraps X = a - b + 256 = 256 - (b-a),
+; and sqtab2[X] = floor((b-a)^2 / 4) - 1 = sqtab[|a-b|] - 1. The -1
+; compensates for carry being clear in the negative-diff SBC chain.
+;
+; Only the first 256 entries of each page are populated; the two tables
+; live on their own 256-byte pages so `lda sqtab2_{lo,hi},x` never
+; crosses a page boundary, matching the timing invariant of the
+; existing sqtab_lo/hi accesses.
+sqtab2_lo       = $8400
+sqtab2_hi       = $8600
+.endif
+
 ; =============================================================================
 ; poly1305_lib_init - One-time library initialization (Step 10)
 ;
@@ -65,6 +84,17 @@ poly1305_lib_init:
         lda sqtab_ready
         bne @already_done       ; skip if already built
         jsr sqtab_init
+.ifndef POLY1305_PROFILE_LONG
+        ; Profile B mult66: build sqtab2 (negative-diff companion table)
+        ; once per library lifetime, alongside sqtab. Also pre-set the
+        ; high bytes of the lmul0/lmul1 ZP pointers so the inner loop
+        ; only has to patch the low byte per outer-j iteration.
+        jsr sqtab2_init
+        lda #>sqtab_lo
+        sta lmul0+1
+        lda #>sqtab_hi
+        sta lmul1+1
+.endif
         lda #1
         sta sqtab_ready
 
@@ -155,6 +185,13 @@ poly1305_init:
         lda sqtab_ready
         bne @sqtab_done
         jsr sqtab_init
+.ifndef POLY1305_PROFILE_LONG
+        jsr sqtab2_init
+        lda #>sqtab_lo
+        sta lmul0+1
+        lda #>sqtab_hi
+        sta lmul1+1
+.endif
         lda #1
         sta sqtab_ready
 @sqtab_done:
@@ -383,6 +420,44 @@ sq_sh:  .res 3, 0              ; 24-bit shifted result (i^2 / 4)
 sq_ad:  .res 2, 0              ; 16-bit addition term (2i+1)
 sq_i:   .res 2, 0              ; 16-bit index counter (0..511)
 
+.ifndef POLY1305_PROFILE_LONG
+; =============================================================================
+; sqtab2_init - Build the mult66 negative-difference companion table (Step 12)
+;
+; Derives sqtab2_lo/hi from the already-built sqtab_lo/hi. For n = 1..255,
+; sqtab2[n] = floor((256-n)^2 / 4) - 1 = sqtab[256-n] - 1, because sqtab
+; stores floor(i^2/4). The -1 bakes in a one-cycle compensation for the
+; mult66 negative-diff path's cleared carry at the SBC. sqtab2[0] = 0.
+;
+; Cost: ~7 k cy (255 iterations, ~28 cy each), amortized over the library
+; lifetime via the `sqtab_ready` gate in poly1305_lib_init.
+;
+; Clobbers: A, X, Y
+; =============================================================================
+sqtab2_init:
+        ; sqtab2[0] = 0 (both lo and hi).
+        lda #0
+        sta sqtab2_lo
+        sta sqtab2_hi
+        ; For n = 1..255: sqtab2_lo[n] = (sqtab[256-n] - 1).lo
+        ;                 sqtab2_hi[n] = (sqtab[256-n] - 1).hi
+        ; 256-n walks from 255 down to 1 as n walks from 1 to 255.
+        ldy #$ff                ; Y = 256 - n   (page 0 of sqtab)
+        ldx #1                  ; X = n         (index into sqtab2)
+@loop:
+        sec
+        lda sqtab_lo,y
+        sbc #1
+        sta sqtab2_lo,x
+        lda sqtab_hi,y
+        sbc #0
+        sta sqtab2_hi,x
+        dey
+        inx
+        bne @loop               ; stop when X wraps 255 -> 0 (after n = 255)
+        rts
+.endif
+
 ; =============================================================================
 ; mul_8x8 - 8-bit x 8-bit → 16-bit multiply using quarter-square table
 ;
@@ -443,6 +518,69 @@ mul_a:          .byte 0
 mul_b:          .byte 0
 mul_s_pg:       .byte 0
 
+.ifndef POLY1305_PROFILE_LONG
+; =============================================================================
+; mult66 - Profile B fast 8x8 → 16-bit multiply (Step 12)
+;
+; Implements `prod = a * b` where `a` is the cached operand already baked
+; into ZP pointers lmul0 / lmul1 (both low bytes = a) and the SMC
+; `sbc #imm` site `mult66_sbc_a` (immediate = a). Caller loads
+; Y = b before the jsr; exit: poly_prod_lo/hi = a * b.
+;
+; Identity (quarter-square): a*b = floor((a+b)^2/4) - floor((a-b)^2/4).
+;
+; The sum term `sqtab[a+b]` is fetched via `lda (lmul0),y` with y = b:
+; because lmul0 = sqtab_lo + a (with the page bit computed automatically
+; by 6502 indirect-indexed addressing when y + low(lmul0) overflows),
+; the load crosses from `sqtab_lo + a` into `sqtab_lo + 256 + (a+b-256)`
+; exactly when a+b >= 256. No software sum-page branch — the sum-page
+; decode is free with indirect-indexed addressing. This is the whole
+; reason mult66 beats the direct `sqtab_lo+256,x` / `sqtab_lo,x`
+; branch-case of mul_8x8.
+;
+; The diff term is handled by a two-table split:
+;   positive diff (a >= b):  x = a-b,       sqtab[x] is correct
+;   negative diff (a <  b):  x = a-b+256 (wrap), sqtab2[x] = sqtab[|a-b|] - 1
+;   (the -1 compensates for carry being clear on the SBC that just wrapped)
+;
+; Entry: Y = b, lmul0+0 = lmul1+0 = a, mult66_sbc_a+1 = a
+; Exit:  poly_prod_lo = (a*b).lo, poly_prod_hi = (a*b).hi
+; Clobbers: A, X, Y
+;
+; Timing: this routine has one secret-dependent branch (`bcc` on the
+; sign of a - b). Both arms are straight-line and access fixed tables
+; only (sqtab_lo/hi and sqtab2_lo/hi, each on their own 256-byte page),
+; so neither `,x` load crosses a page boundary. The net timing spread
+; is one cycle per 8x8 depending on whether a >= b, which matches the
+; existing mul_8x8 sum-page branch's secret-dependent 1 cycle spread
+; (replaced here, not added). Constant-time contract (no data-dependent
+; branch on whole operand *values* beyond standard carry-chain flags)
+; is preserved.
+mult66:
+        tya                             ; A = b
+        sec
+mult66_sbc_a:
+        sbc #$00                        ; SMC immediate = a; A = b - a
+        tax                             ; X = b-a  (or wrapped 256-(a-b))
+        lda (lmul0),y                   ; A = sqtab_lo[a+b] (page auto-decoded)
+        bcs @pos
+        ; --- negative-diff path: a > b, sbc wrapped, carry cleared ---
+        sbc sqtab2_lo,x
+        sta poly_prod_lo
+        lda (lmul1),y                   ; A = sqtab_hi[a+b]
+        sbc sqtab2_hi,x
+        sta poly_prod_hi
+        rts
+@pos:
+        ; --- positive-diff path: a <= b, carry set, no compensation needed ---
+        sbc sqtab_lo,x
+        sta poly_prod_lo
+        lda (lmul1),y                   ; A = sqtab_hi[a+b]
+        sbc sqtab_hi,x
+        sta poly_prod_hi
+        rts
+.endif
+
 ; =============================================================================
 ; poly_ripple - propagate a set carry upward through poly_product starting
 ; at index X. Entered only when the just-completed add left carry set.
@@ -487,13 +625,15 @@ poly_ripple:
 ; Clobbers: A, X, Y
 ; =============================================================================
 
-; Macro: emit one partial product h[i] * r[j] — Profile B (schoolbook
-; via sqtab-backed mul_8x8). Profile A replaces this with Shoup per-r
-; table lookups (see poly_pp_shoup below).
-.macro poly_pp ia, ja
-        lda poly_h + ia
-        ldx poly_r + ja
-        jsr mul_8x8             ; poly_prod_lo/hi = h[i] * r[j]
+.ifndef POLY1305_PROFILE_LONG
+; Macro: emit one partial product h[i] * r[j] — Profile B mult66 path
+; (Step 12). Used inside a J-outer / I-inner double loop, with r[j]
+; already cached into lmul0+0 / lmul1+0 / mult66_sbc_a+1 at outer-j
+; entry. Calls `mult66` to compute h[i]*r[j] into poly_prod_lo/hi, then
+; accumulates into poly_product[I+J..I+J+1].
+.macro poly_pp_mult66 ia, ja
+        ldy poly_h + ia
+        jsr mult66
         clc
         lda poly_product + (ia + ja)
         adc poly_prod_lo
@@ -506,6 +646,7 @@ poly_ripple:
         jsr poly_ripple
 :
 .endmacro
+.endif
 
 .ifdef POLY1305_PROFILE_LONG
 ; Macro: Shoup-table partial product h[i] * r[j] — Profile A.
@@ -574,10 +715,20 @@ poly1305_multiply:
             .endrepeat
         .endrepeat
 .else
-        ; Fully unrolled 17x16 schoolbook: 272 partial products
-        .repeat 17, I
-            .repeat 16, J
-                poly_pp I, J
+        ; Profile B mult66 path (Step 12). Loop order reversed to
+        ; J-outer / I-inner so each outer-j iteration can cache r[j]
+        ; once into the mult66 ZP pointers and SMC `sbc #imm`, and
+        ; 17 inner iterations then reuse that cached operand with a
+        ; single indirect-indexed `(lmul0),y` per partial product.
+        .repeat 16, J
+            ; Bake r[j] into the mult66 operand slots. Three SMC-style
+            ; stores: lmul0+0, lmul1+0, and mult66_sbc_a's immediate.
+            lda poly_r + J
+            sta lmul0
+            sta lmul1
+            sta mult66_sbc_a+1
+            .repeat 17, I
+                poly_pp_mult66 I, J
             .endrepeat
         .endrepeat
 .endif
@@ -702,6 +853,7 @@ poly1305_reduce:
 poly1305_block:
         sta poly_carry          ; save high bit value
 
+.ifdef POLY1305_PROFILE_LONG
         ; h += block (16 bytes from (zp_ptr1))
         ; IMPORTANT: Use DEX/BNE for loop control — CPY clobbers carry,
         ; which would break carry propagation in the multi-byte addition.
@@ -720,6 +872,35 @@ poly1305_block:
         lda poly_h+16
         adc poly_carry
         sta poly_h+16
+.else
+        ; Profile B (Step 12 P7): straight-line block-add. Y walks the
+        ; 16 byte indexes 0..15 so the `adc (zp_ptr1),y` stays a single
+        ; addressing mode, while `lda/sta poly_h,y` uses absolute,y.
+        ; Compared to the Profile A DEX/BNE loop (~321 cy for 16 iters),
+        ; the straight-line chain drops loop-control cycles (iny+dex+bne
+        ; = 7 cy/iter × 16 = 112 cy) at a cost of only slightly more
+        ; code bytes.
+        ;
+        ; The fully-unrolled fuse-with-multiply form of P7 isn't
+        ; achievable in byte layout without stashing and restoring the
+        ; inter-byte carry around each mult66 call (which costs more
+        ; than it saves on a 17-byte ripple). The carry chain is kept
+        ; linear here and handed off to the multiply in a single sweep.
+        clc
+        ldy #0
+        .repeat 16, K
+            lda poly_h + K
+            adc (zp_ptr1),y
+            sta poly_h + K
+            .if K < 15
+                iny
+            .endif
+        .endrepeat
+        ; h[16] += high bit + carry
+        lda poly_h+16
+        adc poly_carry
+        sta poly_h+16
+.endif
 
         ; h *= r mod p
         jsr poly1305_multiply
