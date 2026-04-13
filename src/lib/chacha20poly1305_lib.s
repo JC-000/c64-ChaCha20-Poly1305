@@ -23,6 +23,24 @@
 ;   A register: 0 = success (decrypt), nonzero = auth failure
 ; =============================================================================
 
+.include "constants_lib.s"
+
+; Cross-module imports: chacha20_lib entry points.
+.import chacha20_init, chacha20_block, chacha20_encrypt
+
+; Cross-module imports: poly1305_lib entry points.
+.import poly1305_init, poly1305_block, poly1305_final
+
+; Cross-module imports: data_lib state.
+.import cc20_key, cc20_nonce, cc20_counter, cc20_remain_hi
+.import poly_r, poly_s, poly1305_tag, aead_scratch
+.import aead_key, aead_nonce, aead_aad_ptr, aead_aad_len
+.import aead_data_ptr, aead_data_len, aead_tag
+
+.export aead_encrypt, aead_decrypt
+
+.segment "CODE"
+
 ; =============================================================================
 ; aead_encrypt - ChaCha20-Poly1305 authenticated encryption
 ;
@@ -334,21 +352,51 @@ aead_process_padded:
 @partial_smc:
         jmp $0000
 @cp_base:
-@cp15:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp14:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp13:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp12:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp11:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp10:  lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp9:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp8:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp7:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp6:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp5:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp4:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp3:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp2:   lda (zp_ptr1),y : sta aead_scratch,y : iny
-@cp1:   lda (zp_ptr1),y : sta aead_scratch,y : iny
+@cp15:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp14:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp13:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp12:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp11:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp10:  lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp9:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp8:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp7:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp6:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp5:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp4:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp3:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp2:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
+@cp1:   lda (zp_ptr1),y
+        sta aead_scratch,y
+        iny
 
         ; --- compute zfill entry = @zf1 + (n-1)*3 ---
         lda zp_tmp1             ; n

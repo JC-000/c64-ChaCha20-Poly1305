@@ -1,13 +1,16 @@
 # c64-ChaCha20-Poly1305
 
 ChaCha20-Poly1305 AEAD (RFC 8439) for the Commodore 64 / 6502.
-Library-mode assembly: sources live under `src/lib/*_lib.asm` with no
+Library-mode assembly: sources live under `src/lib/*_lib.s` with no
 absolute origin, exposing public symbols for host applications
 (WireGuard, TLS 1.3, DTLS) or direct-jsr Python test harnesses.
 
 ## Build
 
-Requires [ACME](https://sourceforge.net/projects/acme-crossass/).
+Requires the [cc65](https://cc65.github.io/) toolchain (`ca65`
+assembler + `ld65` linker). The `ca65hl` macro package and
+`smc.inc` self-modifying-code helpers are vendored under
+`src/include/`, so no extra installation is needed beyond cc65 itself.
 
 ```
 make profile-a      # Profile A: Shoup per-r tables, optimized for long messages
@@ -16,7 +19,8 @@ make                # alias for profile-a
 ```
 
 Both produce `build/c64_chacha20_poly1305.prg` and `build/labels.txt`
-(VICE-format label file for harness consumption).
+(VICE-format label file for harness consumption, converted from the
+ld65 label output by the Makefile).
 
 ## Build profiles
 
@@ -78,7 +82,7 @@ so instruction timing is deterministic.
 - `aead_encrypt` -- full ChaCha20-Poly1305 AEAD encrypt
 - `aead_decrypt` -- full ChaCha20-Poly1305 AEAD decrypt (returns A=0 on auth success)
 
-See `src/lib/data_lib.asm` for input/output data fields (`aead_key`,
+See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`, `aead_data_ptr`,
 `aead_data_len`, `aead_tag`).
 
@@ -86,14 +90,18 @@ See `src/lib/data_lib.asm` for input/output data fields (`aead_key`,
 
 ```
 src/
-  main.asm                     entry stub + BASIC SYS header
+  c64.cfg                      ld65 linker config
+  main.s                       entry stub + BASIC SYS header
+  include/
+    ca65hl/                    vendored ca65hl macro package
+    smc.inc                    vendored self-modifying-code helpers
   lib/
-    constants_lib.asm          ZP equates, profile flags
-    data_lib.asm               mutable buffers (cc20_*, poly_*, aead_*)
-    word32_lib.asm             32-bit add / xor / rotate primitives
-    chacha20_lib.asm           ChaCha20 stream cipher (inlined QRs, rot-rename)
-    poly1305_lib.asm           Poly1305 MAC (Shoup table / quarter-square)
-    chacha20poly1305_lib.asm   AEAD wrapper
+    constants_lib.s            ZP equates, profile flags
+    data_lib.s                 mutable buffers (cc20_*, poly_*, aead_*)
+    word32_lib.s               32-bit add / xor / rotate primitives
+    chacha20_lib.s             ChaCha20 stream cipher (inlined QRs, rot-rename)
+    poly1305_lib.s             Poly1305 MAC (Shoup table / quarter-square)
+    chacha20poly1305_lib.s     AEAD wrapper
 test/
   rfc7539_vectors.json         RFC 8439 test vectors
 tools/

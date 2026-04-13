@@ -1,5 +1,5 @@
 ; =============================================================================
-; word32_lib.asm - 32-bit word operations (little-endian)
+; word32_lib.s - 32-bit word operations (little-endian)
 ;
 ; Imported verbatim from c64-wireguard/src/word32.asm as the baseline for
 ; ChaCha20 optimization work on the C64.
@@ -12,6 +12,14 @@
 ;
 ; BLAKE2s uses little-endian words: byte[0] = LSB, byte[3] = MSB
 ; =============================================================================
+
+.include "constants_lib.s"
+
+.export add32, add32_to_dst, xor32, xor32_in_place, copy32, zero32
+.export rotl32_1, rotl32_4, rotl32_7, rotl32_8, rotl32_12
+.export rotr32_1, rotr32_4, rotr32_7, rotr32_8, rotr32_12, rotr32_16
+
+.segment "CODE"
 
 ; =============================================================================
 ; add32 - 32-bit addition: (w32_dst) = (w32_src1) + (w32_src2)
@@ -295,12 +303,12 @@ rotl32_1:
         rol
         sta (w32_dst),y
         ; carry = old MSB, wraps to bit 0 of byte 0
-        bcc +
+        bcc @done
         ldy #0
         lda (w32_dst),y
         ora #$01
         sta (w32_dst),y
-+
+@done:
         rts
 
 ; =============================================================================
@@ -455,12 +463,12 @@ rotr32_1:
         ror
         sta (w32_dst),y
         ; carry = old LSB, wraps to bit 7 of byte 3
-        bcc +
+        bcc @done
         ldy #3
         lda (w32_dst),y
         ora #$80
         sta (w32_dst),y
-+
+@done:
         rts
 
 ; =============================================================================
