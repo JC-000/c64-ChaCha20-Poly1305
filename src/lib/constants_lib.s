@@ -84,6 +84,21 @@
   poly_tmp   = $1d                      ; temp for multiply
 .endif
 
+; --- Profile B mult66 ZP pointers (Step 12, Profile B only) ---
+; lmul0 / lmul1 are 16-bit indirect pointers whose low byte is set to
+; the cached operand (r[j]) at each outer-j iteration of the Profile B
+; multiply. `(lmul0),y` then delivers sqtab_lo[r[j] + h[i]] with a
+; single 5-cycle indirect-indexed load — the 9-bit sum r[j]+h[i] is
+; decoded automatically by the 6502's indirect-indexed addressing
+; crossing from the `sqtab_lo + r[j]` base into `sqtab_lo + 256` when
+; y + (lmul0_lo) overflows. Eliminates the mul_8x8 sum-page branch.
+.ifndef lmul0
+  lmul0      = $1e                      ; 2-byte ZP ptr for sqtab_lo mult66
+.endif
+.ifndef lmul1
+  lmul1      = $20                      ; 2-byte ZP ptr for sqtab_hi mult66
+.endif
+
 ; --- General-purpose 16-bit pointers used by poly1305 / aead ---
 .ifndef zp_ptr1
   zp_ptr1 = $fb                         ; 2-byte pointer ($fb-$fc)
