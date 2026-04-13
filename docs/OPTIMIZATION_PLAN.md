@@ -93,7 +93,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S8 A3-A6 + C7 AEAD/ChaCha glue (both)  | `202d0b3` |         44 922 |         12 122 |           2 197 974 |        -63.2% |
 | S10 sqtab one-time build + REU preload  | `860849c` |         44 920 |         12 119 |           2 109 228 |        -64.7% |
 | Port: ACME→ca65 toolchain               | `27e109f` |         44 922 |         12 122 |           2 109 212 |        -64.7% |
-| S11 incremental Shoup build             | `PENDING` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
+| S11 incremental Shoup build             | `3782fbc` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
