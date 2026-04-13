@@ -354,13 +354,23 @@ cc20_qr_table:
 ;   R=16 : (2,3,0,1)   rotl-16 renamed
 ;   R=24 : (1,2,3,0)   rotl-24 renamed
 ; =============================================================================
-.macro cc20_qr ia, ib, ic, id
-        ; --- 1. a += b;   d ^= a;   d <<<= 16 ---
-        ; All natural. d <<<= 16 is a pure rename (no code emitted).
+; cc20_qr — shared QR body.
+;
+; Implemented as two halves so that `cc20_qr_first` (C5 site 2, first column
+; round of the first double-round) can substitute its own immediate-baked
+; step-1 prelude and then reuse the shared steps 2..4 via `cc20_qr_body_rest`.
+; `cc20_qr` itself just emits the normal step 1 + body-rest.
+; =============================================================================
+
+; Step 1: a += b; d ^= a; d <<<= 16 (natural-order version).
+.macro cc20_qr_step1 ia, ib, id
         add32_zp    cc20_work+4*ia, cc20_work+4*ib
         xor32_zp    cc20_work+4*id, cc20_work+4*ia
-        ; R_d = 16
+        ; R_d = 16 (pure rename, no code).
+.endmacro
 
+; Steps 2..4 + normalize. Shared by cc20_qr and cc20_qr_first.
+.macro cc20_qr_body_rest ia, ib, ic, id
         ; --- 2. c += d;   b ^= c;   b <<<= 12 ---
         ; d is at R=16, P=(2,3,0,1). c, b natural.
         add32_perm  cc20_work+4*ic, 0,1,2,3, cc20_work+4*id, 2,3,0,1
@@ -387,6 +397,64 @@ cc20_qr_table:
         ; --- End of QR: normalize b and d back to natural order ---
         normalize_rot16 cc20_work+4*ib
         normalize_rot24 cc20_work+4*id
+.endmacro
+
+.macro cc20_qr ia, ib, ic, id
+        cc20_qr_step1      ia, ib, id
+        cc20_qr_body_rest  ia, ib, ic, id
+.endmacro
+
+; =============================================================================
+; cc20_qr_first — C5 site 2 variant of cc20_qr.
+;
+; Used ONLY in the first column round of the first double-round, where the
+; `a` operand (cc20_work[4*ia] for ia ∈ {0,1,2,3}) is still the expand-32-byte-k
+; constant word. Each `a += b` step here reads the a-operand as an immediate
+; via `lda #imm_b<n>` instead of `lda cc20_work+4*ia+n`.
+;
+; Paper check (why this is safe):
+;   - chacha20_block prelude copies cc20_state → cc20_work. Row 0 of cc20_state
+;     (words 0..3) is initialised by chacha20_init to the 16 "expand 32-byte k"
+;     bytes (see cc20_constants: $65 $78 $70 $61 $6e $64 $20 $33 $32 $2d $62 $79
+;     $74 $65 $20 $6b). These bytes do not change between chacha20_init and the
+;     start of the first double-round — nothing writes to cc20_state[0..15] in
+;     the window between.
+;   - The first column round is QR(0,4,8,12), QR(1,5,9,13), QR(2,6,10,14),
+;     QR(3,7,11,15). The `a` operand of QR k is word k (k ∈ {0,1,2,3}) —
+;     exactly row 0.
+;   - QR k's very first operation is `a += b`, which READS cc20_work[4*k..+3]
+;     (still the expand constant) before writing to it. The subsequent writes
+;     clobber row 0 word k; but QR k+1 reads word k+1, which QR k did NOT
+;     touch (QR k's destinations are words k, k+12, k+8, k+4, disjoint from
+;     {k+1, k+2, k+3}). Therefore all four QRs in this first column round
+;     see their row-0 word still equal to the expand constant at the moment
+;     of the baked read.
+;   - After the first column round completes, row 0 is irrevocably scrambled,
+;     so this bake applies to EXACTLY these four sites and nowhere else.
+;
+; The parameters b0..b3 are the four little-endian bytes of the expand
+; constant word that equals cc20_state[4*ia..4*ia+3].
+; =============================================================================
+.macro cc20_qr_first ia, ib, ic, id, b0, b1, b2, b3
+        ; --- 1. a += b;   d ^= a;   d <<<= 16 ---
+        ; C5 site 2: bake a-operand reads as immediates. Replaces four
+        ; `lda cc20_work+4*ia+n` (3 cy ZP) with `lda #imm` (2 cy), −4 cy / QR.
+        clc
+        lda #b0
+        adc cc20_work+4*ib+0
+        sta cc20_work+4*ia+0
+        lda #b1
+        adc cc20_work+4*ib+1
+        sta cc20_work+4*ia+1
+        lda #b2
+        adc cc20_work+4*ib+2
+        sta cc20_work+4*ia+2
+        lda #b3
+        adc cc20_work+4*ib+3
+        sta cc20_work+4*ia+3
+        xor32_zp    cc20_work+4*id, cc20_work+4*ia
+        ; R_d = 16
+        cc20_qr_body_rest  ia, ib, ic, id
 .endmacro
 
 ; =============================================================================
@@ -522,15 +590,72 @@ chacha20_init:
 ; 5. Increment counter in state
 ; =============================================================================
 chacha20_block:
-        ; 1. Copy state → work (64 bytes)
-        ldx #63
-@copy_to_work:
-        lda cc20_state,x
-        sta cc20_work,x
-        dex
-        bpl @copy_to_work
+        ; 1. Copy state → work (64 bytes).
+        ;    C8: straight-line unrolled state→work prelude (was a 64-iter
+        ;        ldx / abs,x / zp,x / dex / bpl loop — ~13 cy × 64 ≈ 832 cy).
+        ;    C5 site 1: for row 0 (bytes 0..15) the source is the fixed
+        ;        "expand 32-byte k" constant, so use `lda #imm` (2 cy) in
+        ;        place of `lda cc20_state+n` (4 cy abs). Row-0 byte values
+        ;        are the little-endian encoding of
+        ;          state[0]=0x61707865 ("expa") -> $65 $78 $70 $61
+        ;          state[1]=0x3320646e ("nd 3") -> $6e $64 $20 $33
+        ;          state[2]=0x79622d32 ("2-by") -> $32 $2d $62 $79
+        ;          state[3]=0x6b206574 ("te k") -> $74 $65 $20 $6b
+        ;        These match cc20_constants[] above byte-for-byte.
+        lda #$65
+        sta cc20_work+0
+        lda #$78
+        sta cc20_work+1
+        lda #$70
+        sta cc20_work+2
+        lda #$61
+        sta cc20_work+3
+        lda #$6e
+        sta cc20_work+4
+        lda #$64
+        sta cc20_work+5
+        lda #$20
+        sta cc20_work+6
+        lda #$33
+        sta cc20_work+7
+        lda #$32
+        sta cc20_work+8
+        lda #$2d
+        sta cc20_work+9
+        lda #$62
+        sta cc20_work+10
+        lda #$79
+        sta cc20_work+11
+        lda #$74
+        sta cc20_work+12
+        lda #$65
+        sta cc20_work+13
+        lda #$20
+        sta cc20_work+14
+        lda #$6b
+        sta cc20_work+15
 
-        ; 2. 10 double-rounds
+        ; Rows 1..3: unrolled plain copies (C8). 48 × (4 + 3) = 336 cy.
+.repeat 48, i
+        lda cc20_state+16+i
+        sta cc20_work+16+i
+.endrepeat
+
+        ; 2. 10 double-rounds.
+        ;    NOTE: C5 site 2 (baked row-0 a-operand in first column round)
+        ;    was evaluated but NOT shipped. Rationale: hoisting the first
+        ;    column round out of the loop to attach the baked a-operand
+        ;    duplicates ≥ 4 QRs of inlined code (~1400 B extra) or the
+        ;    full first double-round (8 QRs, ~2900 B extra), for a
+        ;    measured saving of only ~16 cy/block. The per-block saving
+        ;    is dominated by the PRG size growth, which pushes the BSS
+        ;    tail past the benchmark plaintext buffer at $5000 and would
+        ;    require relocating pt_addr sitewide. Sites 1 (row-0 imm
+        ;    state→work) and 3 (row-0 imm work+=state) ship; site 2 is
+        ;    deferred to a future step with a different shape (e.g. SMC
+        ;    patching the live cc20_qr expansions instead of duplicating
+        ;    them). The cc20_qr_first macro and paper-check comment are
+        ;    retained above for that future attempt.
         lda #10
         sta cc20_round
 @double_round:
@@ -555,7 +680,10 @@ chacha20_block:
         ; can add byte-by-byte with a single carry chain *per word*. Unroll
         ; as 16 × 4-byte adds against literal ZP addresses.
         ;
-        ; We use a macro that expands to a single 4-byte add.
+        ; Rows 1..3 (words 4..15): plain add against cc20_state (abs, 4 cy).
+        ; Row 0 (words 0..3): C5 site 3 — the state bytes are the fixed
+        ; expand-32-byte-k constants, so use `adc #imm` (2 cy) in place of
+        ; `adc cc20_state+n` (4 cy abs), saving 2 cy × 16 = 32 cy.
 .macro add_state_word i
         clc
         lda cc20_work+4*i
@@ -571,10 +699,28 @@ chacha20_block:
         adc cc20_state+4*i+3
         sta cc20_work+4*i+3
 .endmacro
-        add_state_word 0
-        add_state_word 1
-        add_state_word 2
-        add_state_word 3
+
+; C5 site 3: work[i] += {b0,b1,b2,b3} where the four bytes are the known
+; little-endian expand-32-byte-k constant word for row-0 index i ∈ {0..3}.
+.macro add_state_word_imm i, b0, b1, b2, b3
+        clc
+        lda cc20_work+4*i
+        adc #b0
+        sta cc20_work+4*i
+        lda cc20_work+4*i+1
+        adc #b1
+        sta cc20_work+4*i+1
+        lda cc20_work+4*i+2
+        adc #b2
+        sta cc20_work+4*i+2
+        lda cc20_work+4*i+3
+        adc #b3
+        sta cc20_work+4*i+3
+.endmacro
+        add_state_word_imm 0, $65, $78, $70, $61   ; "expa"
+        add_state_word_imm 1, $6e, $64, $20, $33   ; "nd 3"
+        add_state_word_imm 2, $32, $2d, $62, $79   ; "2-by"
+        add_state_word_imm 3, $74, $65, $20, $6b   ; "te k"
         add_state_word 4
         add_state_word 5
         add_state_word 6

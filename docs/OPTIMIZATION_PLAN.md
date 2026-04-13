@@ -95,6 +95,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | Port: ACME→ca65 toolchain               | `27e109f` |         44 922 |         12 122 |           2 109 212 |        -64.7% |
 | S11 incremental Shoup build             | `3782fbc` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 | S12 Profile B P2+P7+mult66              | `291925a` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
+| S13 C8 prelude + C5 row-0 bake (partial) | PENDING   |         44 480 |         11 950 |           1 709 243 |        -71.4% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -403,6 +404,74 @@ ZP assignment in `constants_lib.s`.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
+
+**Note on S13**: partial C5 (sites 1 + 3 only) + C8 straight-line
+state→work prelude, both profiles. `chacha20_block` = **44 480 cy**
+(was 44 921, **Δ = −441 cy, −1.0%**), `poly1305_block` unchanged
+within bench noise (Profile A flat, Profile B +41 cy = +0.15%),
+`aead_encrypt n=1024` Profile A = **1 709 243 cy** (was 1 717 259,
+**Δ = −8 016 cy**), Profile B = **2 590 667 cy** (was 2 598 911,
+**Δ = −8 244 cy**). Tests 214/214 on both profiles (seed 7539).
+Per-block delta breakdown: C5 site 1 (row-0 prelude as `lda #imm`,
+16 bytes × −2 cy = −32 cy), C5 site 3 (row-0 `work += state` tail
+as `adc #imm`, 16 bytes × −2 cy = −32 cy), C8 (straight-line unrolled
+state→work prelude replacing the 64-iter `ldx` copy loop, ~−418 cy;
+prelude 838 cy → 420 cy). Sum ≈ −482 cy − ~40 cy of layout/page-cross
+drift = −441 cy measured.
+
+**Gate was 43 500 cy on `chacha20_block`; measured 44 480 cy, 980 cy
+above gate. Miss attributed to the plan's C5 estimate being transcribed
+from pre-S2 code shape; see commit body for full diagnostic. C5 site 2
+is not re-attemptable on the current QR shape without positive
+cycle/byte loss.**
+
+**C5 site 2 deferral (first-column-round a-operand bake)**. The
+paper check for site 2 is correct — at the start of the first column
+round the row-0 words still equal the expand-32-byte-k constants, and
+QR0..QR3 each read their own row-0 word exactly once before writing
+to it (disjoint destinations {k, k+4, k+8, k+12} don't touch k+1 so
+QR k+1 still sees an unmodified row-0 word). The `cc20_qr_first` macro
+and its paper-check comment block are retained in `chacha20_lib.s`
+above `chacha20_block` for a future attempt. What's *not* achievable
+on the current post-S2 inlined QR shape is a positive cycle/byte
+ratio: attaching the baked a-operand requires hoisting the first
+column round out of the `@double_round` loop (ca65 macros can't
+switch behaviour based on a runtime iteration), which duplicates 4
+QRs (~1 400 B) or the full first double-round (~2 900 B) of inlined
+QR code, for a measured ceiling saving of only ~16 cy/block
+(4 row-0 reads × 4 QRs × 1 cy saved on `lda ZP` → `lda #imm`). At
+current PRG size the full hoist also pushes the BSS tail past the
+benchmark plaintext buffer at `$5000`, colliding `sqtab_ready` with
+the bench test data and triggering a full `sqtab_init` rebuild on
+every packet (observed as a 100× regression at `aead_encrypt n=128`
+during an earlier attempt of this step). The 16 cy/block saving does
+not justify either of those costs.
+
+**Plan-estimate-from-stale-shape lesson (third instance)**. The plan's
+C5 estimate of **−1 200 cy/block** was transcribed from the pre-S2
+code where `cc20_set_dst` did a ~75 cy/operand table-lookup + offset
+computation dance per operand — S2 inlined that overhead away,
+collapsing the C5 site 2 ceiling from "remove 75 cy/operand × 16
+operands = 1 200 cy" down to "remove 1 cy/byte × 16 bytes = 16 cy".
+The 43 500 cy gate was set against the stale estimate. Same failure
+pattern as two prior steps:
+- **S7 P4 Donna fused wrap**: plan estimate −8 000 cy, measured
+  −1 038 cy — the byte-layout representation means `2^136 ≡ 320 mod p`,
+  not `5`, so the fused-multiply form of Donna doesn't transfer;
+  only the reduction form is realisable in byte layout. (See
+  project memory `project_byte_vs_limb_representation.md`.)
+- **S12 mult66 primitive swap**: plan estimate −2 500 cy, measured
+  −11 643 cy — in the *other* direction, because the plan priced
+  only the arithmetic portion and missed the per-call `jsr/rts` +
+  scratch-dance overhead that mult66 collapses (4.7× underestimate).
+  See "S11-lesson check" paragraph above.
+
+S13 joins these as the third instance. The common pattern: **plan
+estimates tied to a specific code shape stop applying after a
+structural step changes that shape** (S2 for C5 site 2, limb→byte
+for P4 Donna, per-call call-setup for mult66). Future sprint steps
+should re-derive per-step estimates against the current code shape
+rather than transcribing from the plan's original per-item numbers.
 
 ---
 
