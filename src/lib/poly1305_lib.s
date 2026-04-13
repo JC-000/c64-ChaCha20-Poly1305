@@ -169,20 +169,40 @@ poly1305_init:
 
 .ifdef POLY1305_PROFILE_LONG
 ; =============================================================================
-; shoup_init - Populate r_tab_lo / r_tab_hi with T_j[x] = x * r[j]
+; shoup_init - Populate r_tab_lo / r_tab_hi with T_j[k] = k * r[j]
 ;
-; For each j in 0..15, for each x in 0..255:
-;   (hi,lo) = x * r[j]   (16-bit via mul_8x8 + sqtab)
-;   r_tab_lo + j*256 + x = lo
-;   r_tab_hi + j*256 + x = hi
+; For each j in 0..15, for each k in 0..255:
+;   (hi,lo) = k * r[j]   (16-bit)
+;   r_tab_lo + j*256 + k = lo
+;   r_tab_hi + j*256 + k = hi
 ;
-; Called from poly1305_init AFTER poly1305_clamp and sqtab_init. ~4096
-; calls to mul_8x8, amortized over all subsequent poly1305_block calls
-; for this message (r is fixed per packet).
+; Called from poly1305_init AFTER poly1305_clamp and sqtab_init.
 ;
-; Self-modifies the inner mul_8x8 multiplier immediate and the two
-; store high bytes so the inner loop is a straight-line sequence of
-; absolute addressing modes.
+; Step 11: replaced the 4096-call mul_8x8 loop (~438 k cy) with a per-j
+; incremental ripple-add loop. For fixed j,
+;   T_j[0] = 0
+;   T_j[k] = T_j[k-1] + r[j]   (16-bit running sum)
+; Max k*r[j] = 255*255 = 65025 = $FE01, so the hi byte never reaches
+; $FF and the hi-byte ripple (`adc #0`) can never itself carry out.
+; That means carry entering each loop iteration is always clear — a
+; single `clc` before the k=1 step suffices for all 255 iterations.
+;
+; The inner loop reads T_j[k-1] (just written the previous iteration)
+; via `lda r_tab_{lo,hi}_base-1, y` with y=k, and writes T_j[k] via
+; `sta r_tab_{lo,hi}_base, y`. The base-1 load pays a fixed page-cross
+; penalty (5 cy instead of 4) but avoids any register-juggling around
+; the missing `stx abs,y` opcode. Using memory itself as the feed-
+; forward storage keeps Y free as the index register.
+;
+; Self-modifies (all once per outer j):
+;   - the inner `adc #rj` immediate (shoup_rj_val+1)
+;   - four page bytes on the four `r_tab_{lo,hi}{load,store}` sites
+;     (shoup_ld_lo, shoup_sta_lo, shoup_ld_hi, shoup_sta_hi)
+;   - one page byte on the initial T_j[0] store (shoup_z_lo, shoup_z_hi)
+;
+; Cost: 29 cy per inner entry vs ~107 cy for mul_8x8 path. 16 j × 255
+; inner steps × 29 cy ≈ 118 k cy vs ~438 k cy. Saves ~320 k cy on
+; aead_encrypt for all n.
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
@@ -190,36 +210,53 @@ shoup_init:
         lda #0
         sta poly_j              ; reuse as j counter (0..15)
 shoup_j_loop:
-        ; Patch store high bytes to (r_tab_lo + j*256) and (r_tab_hi + j*256).
+        ; Patch the six SMC page bytes to (r_tab_{lo,hi} + j*256).
+        ; The `abs-1,y` read sites were assembled with high byte
+        ; `>r_tab_{lo,hi} - 1` (since r_tab is page-aligned, base-1 is
+        ; on the prior page). For table j we therefore patch them with
+        ; `>r_tab_{lo,hi} - 1 + j` (i.e. the store page minus 1).
         lda poly_j
         clc
         adc #>r_tab_lo
+        sta shoup_z_lo+2
         sta shoup_sta_lo+2
+        sec
+        sbc #1
+        sta shoup_ld_lo+2
         lda poly_j
         clc
         adc #>r_tab_hi
+        sta shoup_z_hi+2
         sta shoup_sta_hi+2
+        sec
+        sbc #1
+        sta shoup_ld_hi+2
 
-        ; Patch the inner mul multiplier to r[j].
+        ; Patch the inner `adc #rj` immediate to r[j].
         ldy poly_j
         lda poly_r,y
         sta shoup_rj_val+1
 
-        ; Inner loop: x = 0..255.
-        lda #0
-        sta poly_i              ; reuse as x counter
-shoup_x_loop:
-        lda poly_i              ; A = x (multiplicand)
-shoup_rj_val: ldx #$00         ; X = r[j] (SMC, multiplier)
-        jsr mul_8x8             ; -> poly_prod_lo / poly_prod_hi
-        ldy poly_i
-        lda poly_prod_lo
-shoup_sta_lo: sta r_tab_lo,y   ; SMC high byte
-        lda poly_prod_hi
-shoup_sta_hi: sta r_tab_hi,y   ; SMC high byte
+        ; Seed T_j[0] = 0.
+        ldy #0
+        tya                     ; A = 0
+shoup_z_lo: sta r_tab_lo,y      ; SMC high byte — T_j[0].lo = 0
+shoup_z_hi: sta r_tab_hi,y      ; SMC high byte — T_j[0].hi = 0
 
-        inc poly_i
-        bne shoup_x_loop        ; 256 iterations
+        ; k-loop: Y runs k = 1..255, wraps to 0 to exit. Carry is clear
+        ; entering the loop and is always clear at the bottom (because
+        ; max hi = $FE, so `adc #0` for hi can never carry out).
+        iny                     ; Y = 1
+        clc
+shoup_k_loop:
+shoup_ld_lo:  lda r_tab_lo-1, y ; SMC high byte — prev_lo = T_j[k-1]
+shoup_rj_val: adc #$00          ; SMC immediate = r[j]
+shoup_sta_lo: sta r_tab_lo,y    ; SMC high byte — T_j[k].lo
+shoup_ld_hi:  lda r_tab_hi-1, y ; SMC high byte — prev_hi = T_j[k-1].hi
+        adc #$00                ; + ripple carry from lo add
+shoup_sta_hi: sta r_tab_hi,y    ; SMC high byte — T_j[k].hi
+        iny
+        bne shoup_k_loop        ; 255 iterations (y wraps 1..255 → 0)
 
         inc poly_j
         lda poly_j
