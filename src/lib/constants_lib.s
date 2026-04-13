@@ -1,28 +1,48 @@
 ; =============================================================================
-; lib/constants_lib.asm - ChaCha20-Poly1305 library equates
+; lib/constants_lib.s - ChaCha20-Poly1305 library equates
 ;
 ; ZP + shared equates used by the ChaCha20-Poly1305 library only.
 ; No KERNAL / PETSCII / hardware references. No code emitted.
 ;
-; Each ZP equate is wrapped in !ifndef so a host project can pre-define its
-; own ZP layout before !source'ing this file.
+; Each ZP equate is wrapped in .ifndef so a host project can pre-define its
+; own ZP layout before .include'ing this file.
 ; =============================================================================
 
 ; --- General-purpose ZP pointers / scratch ---
-!ifndef zp_tmp1  { zp_tmp1  = $02 }   ; temp byte (word32 nibble rotates)
-!ifndef zp_tmp2  { zp_tmp2  = $03 }   ; temp byte (word32 nibble rotates)
+.ifndef zp_tmp1
+  zp_tmp1  = $02                        ; temp byte (word32 nibble rotates)
+.endif
+.ifndef zp_tmp2
+  zp_tmp2  = $03                        ; temp byte (word32 nibble rotates)
+.endif
 
 ; --- word32 operand pointers (32-bit add/xor/rotate primitives) ---
-!ifndef w32_src1 { w32_src1 = $04 }   ; 2-byte pointer ($04-$05)
-!ifndef w32_src2 { w32_src2 = $06 }   ; 2-byte pointer ($06-$07)
-!ifndef w32_dst  { w32_dst  = $08 }   ; 2-byte pointer ($08-$09)
+.ifndef w32_src1
+  w32_src1 = $04                        ; 2-byte pointer ($04-$05)
+.endif
+.ifndef w32_src2
+  w32_src2 = $06                        ; 2-byte pointer ($06-$07)
+.endif
+.ifndef w32_dst
+  w32_dst  = $08                        ; 2-byte pointer ($08-$09)
+.endif
 
 ; --- ChaCha20 state ZP ---
-!ifndef cc20_round    { cc20_round    = $14 } ; double-round counter
-!ifndef cc20_qr_idx   { cc20_qr_idx   = $15 } ; quarter-round parameter index
-!ifndef cc20_data_ptr { cc20_data_ptr = $16 } ; 2-byte data pointer ($16-$17)
-!ifndef cc20_remain   { cc20_remain   = $18 } ; bytes remaining (low byte)
-!ifndef cc20_buf_pos  { cc20_buf_pos  = $19 } ; position within 64-byte keystream
+.ifndef cc20_round
+  cc20_round    = $14                   ; double-round counter
+.endif
+.ifndef cc20_qr_idx
+  cc20_qr_idx   = $15                  ; quarter-round parameter index
+.endif
+.ifndef cc20_data_ptr
+  cc20_data_ptr = $16                   ; 2-byte data pointer ($16-$17)
+.endif
+.ifndef cc20_remain
+  cc20_remain   = $18                   ; bytes remaining (low byte)
+.endif
+.ifndef cc20_buf_pos
+  cc20_buf_pos  = $19                   ; position within 64-byte keystream
+.endif
 
 ; --- ChaCha20 working state (64 bytes, ZP-resident per Step 1 / C1) ---
 ; Placed at $40..$7f — clear of $02-$1d (chacha/poly/word32 scratch) and
@@ -32,7 +52,9 @@
 ; and turns the `sta cc20_work,x` direct stores into zp,x addressing
 ; (4 cy vs 5 cy absolute,x). The host project may override if it wants
 ; to place cc20_work elsewhere in ZP.
-!ifndef cc20_work     { cc20_work     = $40 } ; 64 bytes: $40..$7f
+.ifndef cc20_work
+  cc20_work     = $40                   ; 64 bytes: $40..$7f
+.endif
 
 ; C7 (S8): cc20_keystream is an alias for cc20_work. chacha20_block used
 ; to copy its 64-byte result out of cc20_work into a separate RAM buffer
@@ -44,39 +66,53 @@
 ; the end of the round-add step, and every consumer is happy to read
 ; them from there. Aliasing the label eliminates the copy pass and
 ; reclaims 64 bytes of RAM in data_lib.
-!ifndef cc20_keystream { cc20_keystream = cc20_work }
+.ifndef cc20_keystream
+  cc20_keystream = cc20_work
+.endif
 
 ; --- Poly1305 ZP ---
-!ifndef poly_i     { poly_i     = $1a }   ; outer loop counter
-!ifndef poly_j     { poly_j     = $1b }   ; inner loop counter
-!ifndef poly_carry { poly_carry = $1c }   ; carry byte for multi-precision arith
-!ifndef poly_tmp   { poly_tmp   = $1d }   ; temp for multiply
+.ifndef poly_i
+  poly_i     = $1a                      ; outer loop counter
+.endif
+.ifndef poly_j
+  poly_j     = $1b                      ; inner loop counter
+.endif
+.ifndef poly_carry
+  poly_carry = $1c                      ; carry byte for multi-precision arith
+.endif
+.ifndef poly_tmp
+  poly_tmp   = $1d                      ; temp for multiply
+.endif
 
 ; --- General-purpose 16-bit pointers used by poly1305 / aead ---
-!ifndef zp_ptr1 { zp_ptr1 = $fb }        ; 2-byte pointer ($fb-$fc)
-!ifndef zp_ptr2 { zp_ptr2 = $fd }        ; 2-byte pointer ($fd-$fe)
+.ifndef zp_ptr1
+  zp_ptr1 = $fb                         ; 2-byte pointer ($fb-$fc)
+.endif
+.ifndef zp_ptr2
+  zp_ptr2 = $fd                         ; 2-byte pointer ($fd-$fe)
+.endif
 
 ; --- Build profile flag -----------------------------------------------------
 ; POLY1305_PROFILE_LONG selects "Profile A" (long-message / REU-assisted,
 ; primary optimization target) vs "Profile B" (stock C64, no REU, portable
 ; baseline). Profile A is the default.
 ;
-; Steps 6 and 7 will gate their new code paths on !ifdef POLY1305_PROFILE_LONG
+; Steps 6 and 7 will gate their new code paths on .ifdef POLY1305_PROFILE_LONG
 ; so that Profile B continues to assemble and pass the test suite without
 ; the Shoup per-r tables (Step 6) or the Donna-style fused wrap reduction
 ; (Step 7). At Step 5 this flag is scaffold-only: no runtime code consumes it.
 ;
 ; Select via the Makefile:
-;   make profile-a   -> acme -DPOLY1305_PROFILE_LONG=1 ...  (default)
-;   make profile-b   -> acme ...                            (flag undefined)
+;   make profile-a   -> ca65 -DPOLY1305_PROFILE_LONG=1 ...  (default)
+;   make profile-b   -> ca65 ...                            (flag undefined)
 ;
 ; Step 6 note: prior to Step 6 this file defaulted POLY1305_PROFILE_LONG
 ; on when no `-D` was passed (so Profile B *via default* was identical
 ; to Profile A). Once Step 6 introduces real Profile-A-only code (Shoup
 ; per-r tables), that default would silently force Profile A on any
-; caller that simply `!source`s this library. The default is therefore
+; caller that simply .include's this library. The default is therefore
 ; removed: callers that want Profile A must pass `-DPOLY1305_PROFILE_LONG=1`
-; to ACME, which the top-level Makefile's `profile-a` target already
+; to ca65, which the top-level Makefile's `profile-a` target already
 ; does. Absence of the symbol selects Profile B (portable baseline).
 
 ; --- Shoup per-r tables (Profile A only) ---
@@ -96,7 +132,7 @@
 ; These are *reservations of address space only* — the tables are
 ; initialized at runtime by shoup_init (called from poly1305_init),
 ; so the PRG image does not grow by 8 KB of zeros.
-!ifdef POLY1305_PROFILE_LONG {
+.ifdef POLY1305_PROFILE_LONG
     r_tab_lo = $6000
     r_tab_hi = $7000
-}
+.endif

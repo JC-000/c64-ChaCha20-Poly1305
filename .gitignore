@@ -1,4 +1,5 @@
 build/
+*.o
 *.pyc
 __pycache__/
 .vscode/

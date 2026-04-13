@@ -1,5 +1,5 @@
 ; =============================================================================
-; chacha20_lib.asm - ChaCha20 stream cipher (RFC 7539/8439)
+; chacha20_lib.s - ChaCha20 stream cipher (RFC 7539/8439)
 ;
 ; State layout: 16 x 32-bit words = 64 bytes (little-endian)
 ;   words[0-3]   = "expand 32-byte k" constants
@@ -13,12 +13,28 @@
 ; literal ZP addresses — no (w32_dst),y indirection, no JSR inside the QR.
 ; =============================================================================
 
+.include "constants_lib.s"
+
+; Cross-module imports: word32 primitives used by the test-only
+; chacha20_quarter_round entry point below.
+.import add32_to_dst, xor32_in_place
+.import rotr32_16, rotl32_12, rotl32_8, rotl32_7
+
+; Cross-module imports: data_lib state (main-RAM, not ZP).
+.import cc20_state, cc20_key, cc20_nonce, cc20_counter, cc20_remain_hi
+
+.export chacha20_init, chacha20_block, chacha20_quarter_round
+.export chacha20_encrypt
+.export cc20_qr_table, cc20_constants
+
+.segment "CODE"
+
 ; --- ChaCha20 constants ("expand 32-byte k" as LE uint32 words) ---
 cc20_constants:
-        !byte $65, $78, $70, $61     ; 0x61707865 "expa" (LE)
-        !byte $6e, $64, $20, $33     ; 0x3320646e "nd 3" (LE)
-        !byte $32, $2d, $62, $79     ; 0x79622d32 "2-by" (LE)
-        !byte $74, $65, $20, $6b     ; 0x6b206574 "te k" (LE)
+        .byte $65, $78, $70, $61     ; 0x61707865 "expa" (LE)
+        .byte $6e, $64, $20, $33     ; 0x3320646e "nd 3" (LE)
+        .byte $32, $2d, $62, $79     ; 0x79622d32 "2-by" (LE)
+        .byte $74, $65, $20, $6b     ; 0x6b206574 "te k" (LE)
 
 ; --- Quarter-round index table (retained for test suite compatibility) ---
 ; The main chacha20_block hot path no longer uses this table — it inlines
@@ -28,15 +44,15 @@ cc20_constants:
 ; patch in arbitrary (a,b,c,d) tuples and exercise a single QR.
 cc20_qr_table:
         ; Column rounds
-        !byte  0,  4,  8, 12          ; QR(0, 4, 8, 12)
-        !byte  1,  5,  9, 13          ; QR(1, 5, 9, 13)
-        !byte  2,  6, 10, 14          ; QR(2, 6, 10, 14)
-        !byte  3,  7, 11, 15          ; QR(3, 7, 11, 15)
+        .byte  0,  4,  8, 12          ; QR(0, 4, 8, 12)
+        .byte  1,  5,  9, 13          ; QR(1, 5, 9, 13)
+        .byte  2,  6, 10, 14          ; QR(2, 6, 10, 14)
+        .byte  3,  7, 11, 15          ; QR(3, 7, 11, 15)
         ; Diagonal rounds
-        !byte  0,  5, 10, 15          ; QR(0, 5, 10, 15)
-        !byte  1,  6, 11, 12          ; QR(1, 6, 11, 12)
-        !byte  2,  7,  8, 13          ; QR(2, 7,  8, 13)
-        !byte  3,  4,  9, 14          ; QR(3, 4,  9, 14)
+        .byte  0,  5, 10, 15          ; QR(0, 5, 10, 15)
+        .byte  1,  6, 11, 12          ; QR(1, 6, 11, 12)
+        .byte  2,  7,  8, 13          ; QR(2, 7,  8, 13)
+        .byte  3,  4,  9, 14          ; QR(3, 4,  9, 14)
 
 ; =============================================================================
 ; Inlined 32-bit op macros against literal ZP addresses
@@ -47,63 +63,63 @@ cc20_qr_table:
 ; =============================================================================
 
 ; w[dst] += w[src]  — 32-bit little-endian add-in-place
-!macro add32_zp .dst, .src {
+.macro add32_zp dst, src
         clc
-        lda .dst
-        adc .src
-        sta .dst
-        lda .dst+1
-        adc .src+1
-        sta .dst+1
-        lda .dst+2
-        adc .src+2
-        sta .dst+2
-        lda .dst+3
-        adc .src+3
-        sta .dst+3
-}
+        lda dst
+        adc src
+        sta dst
+        lda dst+1
+        adc src+1
+        sta dst+1
+        lda dst+2
+        adc src+2
+        sta dst+2
+        lda dst+3
+        adc src+3
+        sta dst+3
+.endmacro
 
 ; w[dst] ^= w[src]  — 32-bit xor-in-place
-!macro xor32_zp .dst, .src {
-        lda .dst
-        eor .src
-        sta .dst
-        lda .dst+1
-        eor .src+1
-        sta .dst+1
-        lda .dst+2
-        eor .src+2
-        sta .dst+2
-        lda .dst+3
-        eor .src+3
-        sta .dst+3
-}
+.macro xor32_zp dst, src
+        lda dst
+        eor src
+        sta dst
+        lda dst+1
+        eor src+1
+        sta dst+1
+        lda dst+2
+        eor src+2
+        sta dst+2
+        lda dst+3
+        eor src+3
+        sta dst+3
+.endmacro
 
 ; w[dst] <<<= 16  — swap halves of LE word: [b0 b1 b2 b3] -> [b2 b3 b0 b1]
 ; Uses Y as a temp (preserves X). Two independent byte swaps.
-!macro rotl32_16_zp .dst {
-        lda .dst
-        ldy .dst+2
-        sty .dst
-        sta .dst+2
-        lda .dst+1
-        ldy .dst+3
-        sty .dst+1
-        sta .dst+3
-}
+.macro rotl32_16_zp dst
+        lda dst
+        ldy dst+2
+        sty dst
+        sta dst+2
+        lda dst+1
+        ldy dst+3
+        sty dst+1
+        sta dst+3
+.endmacro
 
 ; w[dst] <<<= 8  — LE byte rotate left by 8: [b0 b1 b2 b3] -> [b3 b0 b1 b2]
 ; new_b0 = old_b3, new_b1 = old_b0, new_b2 = old_b1, new_b3 = old_b2
-!macro rotl32_8_zp .dst {
-        ldy .dst+3             ; save b3
-        lda .dst+2
-        sta .dst+3             ; b3' = b2
-        lda .dst+1
-        sta .dst+2             ; b2' = b1
-        lda .dst
-        sta .dst+1             ; b1' = b0
-        sty .dst               ; b0' = old b3
-}
+.macro rotl32_8_zp dst
+        ldy dst+3             ; save b3
+        lda dst+2
+        sta dst+3             ; b3' = b2
+        lda dst+1
+        sta dst+2             ; b2' = b1
+        lda dst
+        sta dst+1             ; b1' = b0
+        sty dst               ; b0' = old b3
+.endmacro
 
 ; w[dst] <<<= 4  — LE nibble rotate left by 4
 ;   new_b0 = (b0 << 4) | (b3 >> 4)
@@ -113,121 +129,121 @@ cc20_qr_table:
 ; We save b3 high nibble (wraps into b0 low), then process b3,b2,b1,b0 in
 ; that order so each low nibble comes from the *old* value of the previous
 ; byte. Uses zp_tmp1 as scratch for the wrap.
-!macro rotl32_4_zp .dst {
-        lda .dst+3
+.macro rotl32_4_zp dst
+        lda dst+3
         lsr
         lsr
         lsr
         lsr
         sta zp_tmp1            ; b3 >> 4 (wrap into b0 low)
 
-        lda .dst+3
+        lda dst+3
         asl
         asl
         asl
         asl
-        sta .dst+3             ; b3 = b3 << 4 (low nibble will be filled)
-        lda .dst+2
+        sta dst+3             ; b3 = b3 << 4 (low nibble will be filled)
+        lda dst+2
         lsr
         lsr
         lsr
         lsr
-        ora .dst+3
-        sta .dst+3             ; b3 = (b3 << 4) | (b2 >> 4)
+        ora dst+3
+        sta dst+3             ; b3 = (b3 << 4) | (b2 >> 4)
 
-        lda .dst+2
+        lda dst+2
         asl
         asl
         asl
         asl
-        sta .dst+2
-        lda .dst+1
+        sta dst+2
+        lda dst+1
         lsr
         lsr
         lsr
         lsr
-        ora .dst+2
-        sta .dst+2             ; b2 = (b2 << 4) | (b1 >> 4)
+        ora dst+2
+        sta dst+2             ; b2 = (b2 << 4) | (b1 >> 4)
 
-        lda .dst+1
+        lda dst+1
         asl
         asl
         asl
         asl
-        sta .dst+1
-        lda .dst
+        sta dst+1
+        lda dst
         lsr
         lsr
         lsr
         lsr
-        ora .dst+1
-        sta .dst+1             ; b1 = (b1 << 4) | (b0 >> 4)
+        ora dst+1
+        sta dst+1             ; b1 = (b1 << 4) | (b0 >> 4)
 
-        lda .dst
+        lda dst
         asl
         asl
         asl
         asl
         ora zp_tmp1
-        sta .dst               ; b0 = (b0 << 4) | (b3 >> 4)
-}
+        sta dst               ; b0 = (b0 << 4) | (b3 >> 4)
+.endmacro
 
 ; w[dst] <<<= 12  — rotl8 then rotl4
-!macro rotl32_12_zp .dst {
-        +rotl32_8_zp .dst
-        +rotl32_4_zp .dst
-}
+.macro rotl32_12_zp dst
+        rotl32_8_zp dst
+        rotl32_4_zp dst
+.endmacro
 
 ; w[dst] <<<= 1  — 32-bit rotate left by 1 (LE: start from LSB)
 ; Uses a branchless-ish carry wrap: after 4× rol, carry = old MSB bit.
-!macro rotl32_1_zp .dst {
+.macro rotl32_1_zp dst
         clc
-        lda .dst
+        lda dst
         rol
-        sta .dst
-        lda .dst+1
+        sta dst
+        lda dst+1
         rol
-        sta .dst+1
-        lda .dst+2
+        sta dst+1
+        lda dst+2
         rol
-        sta .dst+2
-        lda .dst+3
+        sta dst+2
+        lda dst+3
         rol
-        sta .dst+3
-        bcc +
-        lda .dst
+        sta dst+3
+        bcc :+
+        lda dst
         ora #$01
-        sta .dst
-+
-}
+        sta dst
+:
+.endmacro
 
 ; w[dst] <<<= 7  — rotl8 then rotr1. Since rotl8 is free-ish, we do
 ; rotl8 then rotate right by 1 to get a net <<< 7.
-!macro rotr32_1_zp .dst {
+.macro rotr32_1_zp dst
         clc
-        lda .dst+3
+        lda dst+3
         ror
-        sta .dst+3
-        lda .dst+2
+        sta dst+3
+        lda dst+2
         ror
-        sta .dst+2
-        lda .dst+1
+        sta dst+2
+        lda dst+1
         ror
-        sta .dst+1
-        lda .dst
+        sta dst+1
+        lda dst
         ror
-        sta .dst
-        bcc +
-        lda .dst+3
+        sta dst
+        bcc :+
+        lda dst+3
         ora #$80
-        sta .dst+3
-+
-}
+        sta dst+3
+:
+.endmacro
 
-!macro rotl32_7_zp .dst {
-        +rotl32_8_zp .dst
-        +rotr32_1_zp .dst
-}
+.macro rotl32_7_zp dst
+        rotl32_8_zp dst
+        rotr32_1_zp dst
+.endmacro
 
 ; =============================================================================
 ; Permuted-read add/xor macros
@@ -245,37 +261,37 @@ cc20_qr_table:
 ; =============================================================================
 
 ; dst ^= src (both with permutations).
-!macro xor32_perm .dst, .dp0, .dp1, .dp2, .dp3, .src, .sp0, .sp1, .sp2, .sp3 {
-        lda .dst + .dp0
-        eor .src + .sp0
-        sta .dst + .dp0
-        lda .dst + .dp1
-        eor .src + .sp1
-        sta .dst + .dp1
-        lda .dst + .dp2
-        eor .src + .sp2
-        sta .dst + .dp2
-        lda .dst + .dp3
-        eor .src + .sp3
-        sta .dst + .dp3
-}
+.macro xor32_perm dst, dp0, dp1, dp2, dp3, src, sp0, sp1, sp2, sp3
+        lda dst + dp0
+        eor src + sp0
+        sta dst + dp0
+        lda dst + dp1
+        eor src + sp1
+        sta dst + dp1
+        lda dst + dp2
+        eor src + sp2
+        sta dst + dp2
+        lda dst + dp3
+        eor src + sp3
+        sta dst + dp3
+.endmacro
 
 ; dst += src (both with permutations). Carry chain flows low→high logically.
-!macro add32_perm .dst, .dp0, .dp1, .dp2, .dp3, .src, .sp0, .sp1, .sp2, .sp3 {
+.macro add32_perm dst, dp0, dp1, dp2, dp3, src, sp0, sp1, sp2, sp3
         clc
-        lda .dst + .dp0
-        adc .src + .sp0
-        sta .dst + .dp0
-        lda .dst + .dp1
-        adc .src + .sp1
-        sta .dst + .dp1
-        lda .dst + .dp2
-        adc .src + .sp2
-        sta .dst + .dp2
-        lda .dst + .dp3
-        adc .src + .sp3
-        sta .dst + .dp3
-}
+        lda dst + dp0
+        adc src + sp0
+        sta dst + dp0
+        lda dst + dp1
+        adc src + sp1
+        sta dst + dp1
+        lda dst + dp2
+        adc src + sp2
+        sta dst + dp2
+        lda dst + dp3
+        adc src + sp3
+        sta dst + dp3
+.endmacro
 
 ; End-of-QR normalization: copy a word from offset-permuted physical layout
 ; back to natural byte order. Writes logical[j] = phys[P[j]] into phys[j].
@@ -286,34 +302,34 @@ cc20_qr_table:
 ; of byte swaps. For rotl-8 / rotl-24, we cycle through 4 bytes using Y
 ; as a single-register scratch.
 
-!macro normalize_rot16 .base {
+.macro normalize_rot16 base
         ; P = (2,3,0,1): swap b[0]<->b[2], b[1]<->b[3]
-        lda .base+0
-        ldy .base+2
-        sty .base+0
-        sta .base+2
-        lda .base+1
-        ldy .base+3
-        sty .base+1
-        sta .base+3
-}
+        lda base+0
+        ldy base+2
+        sty base+0
+        sta base+2
+        lda base+1
+        ldy base+3
+        sty base+1
+        sta base+3
+.endmacro
 
-!macro normalize_rot24 .base {
+.macro normalize_rot24 base
         ; Current P = (1,2,3,0): logical[j] = phys[(j+1) mod 4].
         ; We want phys[j] := logical[j] for all j.
         ; new_phys[0] = old_phys[1]
         ; new_phys[1] = old_phys[2]
         ; new_phys[2] = old_phys[3]
         ; new_phys[3] = old_phys[0]
-        ldy .base+0             ; save old phys[0]
-        lda .base+1
-        sta .base+0
-        lda .base+2
-        sta .base+1
-        lda .base+3
-        sta .base+2
-        sty .base+3
-}
+        ldy base+0             ; save old phys[0]
+        lda base+1
+        sta base+0
+        lda base+2
+        sta base+1
+        lda base+3
+        sta base+2
+        sty base+3
+.endmacro
 
 ; =============================================================================
 ; Quarter-round macro (C3: rot-8/16 as offset rename)
@@ -338,40 +354,40 @@ cc20_qr_table:
 ;   R=16 : (2,3,0,1)   rotl-16 renamed
 ;   R=24 : (1,2,3,0)   rotl-24 renamed
 ; =============================================================================
-!macro cc20_qr .ia, .ib, .ic, .id {
+.macro cc20_qr ia, ib, ic, id
         ; --- 1. a += b;   d ^= a;   d <<<= 16 ---
         ; All natural. d <<<= 16 is a pure rename (no code emitted).
-        +add32_zp    cc20_work+4*.ia, cc20_work+4*.ib
-        +xor32_zp    cc20_work+4*.id, cc20_work+4*.ia
+        add32_zp    cc20_work+4*ia, cc20_work+4*ib
+        xor32_zp    cc20_work+4*id, cc20_work+4*ia
         ; R_d = 16
 
         ; --- 2. c += d;   b ^= c;   b <<<= 12 ---
         ; d is at R=16, P=(2,3,0,1). c, b natural.
-        +add32_perm  cc20_work+4*.ic, 0,1,2,3, cc20_work+4*.id, 2,3,0,1
-        +xor32_zp    cc20_work+4*.ib, cc20_work+4*.ic
+        add32_perm  cc20_work+4*ic, 0,1,2,3, cc20_work+4*id, 2,3,0,1
+        xor32_zp    cc20_work+4*ib, cc20_work+4*ic
         ; b <<<= 12 = rename-8 (R_b += 8 → 8) + phys rotl-4
-        +rotl32_4_zp cc20_work+4*.ib
+        rotl32_4_zp cc20_work+4*ib
         ; R_b = 8, R_d = 16
 
         ; --- 3. a += b;   d ^= a;   d <<<= 8 ---
         ; b at R=8, P=(3,0,1,2). d at R=16, P=(2,3,0,1). a natural.
-        +add32_perm  cc20_work+4*.ia, 0,1,2,3, cc20_work+4*.ib, 3,0,1,2
-        +xor32_perm  cc20_work+4*.id, 2,3,0,1, cc20_work+4*.ia, 0,1,2,3
+        add32_perm  cc20_work+4*ia, 0,1,2,3, cc20_work+4*ib, 3,0,1,2
+        xor32_perm  cc20_work+4*id, 2,3,0,1, cc20_work+4*ia, 0,1,2,3
         ; d <<<= 8 rename: R_d = 16 + 8 = 24, P=(1,2,3,0)
         ; R_b = 8, R_d = 24
 
         ; --- 4. c += d;   b ^= c;   b <<<= 7 ---
         ; d at R=24, P=(1,2,3,0). b at R=8, P=(3,0,1,2). c natural.
-        +add32_perm  cc20_work+4*.ic, 0,1,2,3, cc20_work+4*.id, 1,2,3,0
-        +xor32_perm  cc20_work+4*.ib, 3,0,1,2, cc20_work+4*.ic, 0,1,2,3
+        add32_perm  cc20_work+4*ic, 0,1,2,3, cc20_work+4*id, 1,2,3,0
+        xor32_perm  cc20_work+4*ib, 3,0,1,2, cc20_work+4*ic, 0,1,2,3
         ; b <<<= 7 = rename-8 (R_b += 8 → 16) + phys rotr-1
-        +rotr32_1_zp cc20_work+4*.ib
+        rotr32_1_zp cc20_work+4*ib
         ; R_b = 16, R_d = 24
 
         ; --- End of QR: normalize b and d back to natural order ---
-        +normalize_rot16 cc20_work+4*.ib
-        +normalize_rot24 cc20_work+4*.id
-}
+        normalize_rot16 cc20_work+4*ib
+        normalize_rot24 cc20_work+4*id
+.endmacro
 
 ; =============================================================================
 ; chacha20_quarter_round - Perform one quarter-round on cc20_work
@@ -389,9 +405,9 @@ cc20_qr_table:
 ; =============================================================================
 
 ; Set w32_dst to cc20_work + word_index*4 (index from cc20_qr_table[X+.off])
-!macro cc20_set_dst .tbl_off {
+.macro cc20_set_dst tbl_off
         ldx cc20_qr_idx
-        lda cc20_qr_table+.tbl_off,x
+        lda cc20_qr_table+tbl_off,x
         asl
         asl                    ; *4 for byte offset
         clc
@@ -400,11 +416,11 @@ cc20_qr_table:
         lda #>cc20_work
         adc #0
         sta w32_dst+1
-}
+.endmacro
 
-!macro cc20_set_src1 .tbl_off {
+.macro cc20_set_src1 tbl_off
         ldx cc20_qr_idx
-        lda cc20_qr_table+.tbl_off,x
+        lda cc20_qr_table+tbl_off,x
         asl
         asl
         clc
@@ -413,42 +429,42 @@ cc20_qr_table:
         lda #>cc20_work
         adc #0
         sta w32_src1+1
-}
+.endmacro
 
 chacha20_quarter_round:
-        +cc20_set_src1 1
-        +cc20_set_dst 0
+        cc20_set_src1 1
+        cc20_set_dst 0
         jsr add32_to_dst        ; a += b
 
-        +cc20_set_src1 0
-        +cc20_set_dst 3
+        cc20_set_src1 0
+        cc20_set_dst 3
         jsr xor32_in_place      ; d ^= a
         jsr rotr32_16           ; d <<<= 16
 
-        +cc20_set_src1 3
-        +cc20_set_dst 2
+        cc20_set_src1 3
+        cc20_set_dst 2
         jsr add32_to_dst        ; c += d
 
-        +cc20_set_src1 2
-        +cc20_set_dst 1
+        cc20_set_src1 2
+        cc20_set_dst 1
         jsr xor32_in_place      ; b ^= c
         jsr rotl32_12           ; b <<<= 12
 
-        +cc20_set_src1 1
-        +cc20_set_dst 0
+        cc20_set_src1 1
+        cc20_set_dst 0
         jsr add32_to_dst        ; a += b
 
-        +cc20_set_src1 0
-        +cc20_set_dst 3
+        cc20_set_src1 0
+        cc20_set_dst 3
         jsr xor32_in_place      ; d ^= a
         jsr rotl32_8            ; d <<<= 8
 
-        +cc20_set_src1 3
-        +cc20_set_dst 2
+        cc20_set_src1 3
+        cc20_set_dst 2
         jsr add32_to_dst        ; c += d
 
-        +cc20_set_src1 2
-        +cc20_set_dst 1
+        cc20_set_src1 2
+        cc20_set_dst 1
         jsr xor32_in_place      ; b ^= c
         jsr rotl32_7            ; b <<<= 7
         rts
@@ -519,15 +535,15 @@ chacha20_block:
         sta cc20_round
 @double_round:
         ; --- Column rounds ---
-        +cc20_qr  0,  4,  8, 12
-        +cc20_qr  1,  5,  9, 13
-        +cc20_qr  2,  6, 10, 14
-        +cc20_qr  3,  7, 11, 15
+        cc20_qr  0,  4,  8, 12
+        cc20_qr  1,  5,  9, 13
+        cc20_qr  2,  6, 10, 14
+        cc20_qr  3,  7, 11, 15
         ; --- Diagonal rounds ---
-        +cc20_qr  0,  5, 10, 15
-        +cc20_qr  1,  6, 11, 12
-        +cc20_qr  2,  7,  8, 13
-        +cc20_qr  3,  4,  9, 14
+        cc20_qr  0,  5, 10, 15
+        cc20_qr  1,  6, 11, 12
+        cc20_qr  2,  7,  8, 13
+        cc20_qr  3,  4,  9, 14
 
         dec cc20_round
         beq @rounds_done
@@ -540,37 +556,37 @@ chacha20_block:
         ; as 16 × 4-byte adds against literal ZP addresses.
         ;
         ; We use a macro that expands to a single 4-byte add.
-!macro add_state_word .i {
+.macro add_state_word i
         clc
-        lda cc20_work+4*.i
-        adc cc20_state+4*.i
-        sta cc20_work+4*.i
-        lda cc20_work+4*.i+1
-        adc cc20_state+4*.i+1
-        sta cc20_work+4*.i+1
-        lda cc20_work+4*.i+2
-        adc cc20_state+4*.i+2
-        sta cc20_work+4*.i+2
-        lda cc20_work+4*.i+3
-        adc cc20_state+4*.i+3
-        sta cc20_work+4*.i+3
-}
-        +add_state_word 0
-        +add_state_word 1
-        +add_state_word 2
-        +add_state_word 3
-        +add_state_word 4
-        +add_state_word 5
-        +add_state_word 6
-        +add_state_word 7
-        +add_state_word 8
-        +add_state_word 9
-        +add_state_word 10
-        +add_state_word 11
-        +add_state_word 12
-        +add_state_word 13
-        +add_state_word 14
-        +add_state_word 15
+        lda cc20_work+4*i
+        adc cc20_state+4*i
+        sta cc20_work+4*i
+        lda cc20_work+4*i+1
+        adc cc20_state+4*i+1
+        sta cc20_work+4*i+1
+        lda cc20_work+4*i+2
+        adc cc20_state+4*i+2
+        sta cc20_work+4*i+2
+        lda cc20_work+4*i+3
+        adc cc20_state+4*i+3
+        sta cc20_work+4*i+3
+.endmacro
+        add_state_word 0
+        add_state_word 1
+        add_state_word 2
+        add_state_word 3
+        add_state_word 4
+        add_state_word 5
+        add_state_word 6
+        add_state_word 7
+        add_state_word 8
+        add_state_word 9
+        add_state_word 10
+        add_state_word 11
+        add_state_word 12
+        add_state_word 13
+        add_state_word 14
+        add_state_word 15
 
         ; 4. (C7 / S8) Keystream copy elided. cc20_keystream is an alias
         ;    for cc20_work (see constants_lib.asm), so the 64-byte

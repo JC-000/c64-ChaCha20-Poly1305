@@ -19,6 +19,25 @@
 ; Identity: a*b = floor((a+b)^2/4) - floor((a-b)^2/4)
 ; =============================================================================
 
+.include "constants_lib.s"
+
+; Cross-module imports: data_lib state.
+.import poly_h, poly_r, poly_s, poly_product, poly1305_tag
+.import aead_scratch, sqtab_ready
+
+.export poly1305_lib_init, poly1305_init, poly1305_clamp
+.export poly1305_multiply, poly1305_reduce
+.export poly1305_block, poly1305_update, poly1305_final
+.export sqtab_init, mul_8x8, poly_prod_lo, poly_prod_hi, poly_ripple
+.ifdef POLY1305_PROFILE_LONG
+.export shoup_init
+.ifdef POLY1305_REU
+.export poly1305_reu_restore
+.endif
+.endif
+
+.segment "CODE"
+
 ; Quarter-square table addresses (page-aligned for speed)
 sqtab_lo        = $8000         ; 512 bytes: low bytes of floor(n^2/4)
 sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
@@ -49,8 +68,8 @@ poly1305_lib_init:
         lda #1
         sta sqtab_ready
 
-!ifdef POLY1305_PROFILE_LONG {
-!ifdef POLY1305_REU {
+.ifdef POLY1305_PROFILE_LONG
+.ifdef POLY1305_REU
         ; DMA sqtab (1024 bytes at $8000) to REU bank 0, offset $0000.
         ; C64 → REU transfer (command = $90: stash, no autoload, no FF00 trigger).
         lda #$00
@@ -69,14 +88,14 @@ poly1305_lib_init:
         sta $DF0A               ; address control: increment both
         lda #$90                ; command: C64→REU, no autoload, execute
         sta $DF01
-}
-}
+.endif
+.endif
 
 @already_done:
         rts
 
-!ifdef POLY1305_PROFILE_LONG {
-!ifdef POLY1305_REU {
+.ifdef POLY1305_PROFILE_LONG
+.ifdef POLY1305_REU
 ; =============================================================================
 ; poly1305_reu_restore - DMA sqtab back from REU to main RAM
 ;
@@ -104,8 +123,8 @@ poly1305_reu_restore:
         lda #$91                ; command: REU→C64, no autoload, execute
         sta $DF01
         rts
-}
-}
+.endif
+.endif
 
 ; =============================================================================
 ; poly1305_init - Initialize Poly1305 state
@@ -140,15 +159,15 @@ poly1305_init:
         sta sqtab_ready
 @sqtab_done:
 
-!ifdef POLY1305_PROFILE_LONG {
+.ifdef POLY1305_PROFILE_LONG
         ; 4. Build Shoup per-r tables (Step 6 / P3, Profile A only).
         ;    Uses mul_8x8 (sqtab-backed) 4096 times, one per
         ;    (limb j, byte value x). Amortized across >= 2 blocks.
         jsr shoup_init
-}
+.endif
         rts
 
-!ifdef POLY1305_PROFILE_LONG {
+.ifdef POLY1305_PROFILE_LONG
 ; =============================================================================
 ; shoup_init - Populate r_tab_lo / r_tab_hi with T_j[x] = x * r[j]
 ;
@@ -170,44 +189,44 @@ poly1305_init:
 shoup_init:
         lda #0
         sta poly_j              ; reuse as j counter (0..15)
-.shoup_j_loop:
+shoup_j_loop:
         ; Patch store high bytes to (r_tab_lo + j*256) and (r_tab_hi + j*256).
         lda poly_j
         clc
         adc #>r_tab_lo
-        sta .shoup_sta_lo+2
+        sta shoup_sta_lo+2
         lda poly_j
         clc
         adc #>r_tab_hi
-        sta .shoup_sta_hi+2
+        sta shoup_sta_hi+2
 
         ; Patch the inner mul multiplier to r[j].
         ldy poly_j
         lda poly_r,y
-        sta .shoup_rj_val+1
+        sta shoup_rj_val+1
 
         ; Inner loop: x = 0..255.
         lda #0
         sta poly_i              ; reuse as x counter
-.shoup_x_loop:
+shoup_x_loop:
         lda poly_i              ; A = x (multiplicand)
-.shoup_rj_val: ldx #$00         ; X = r[j] (SMC, multiplier)
+shoup_rj_val: ldx #$00         ; X = r[j] (SMC, multiplier)
         jsr mul_8x8             ; -> poly_prod_lo / poly_prod_hi
         ldy poly_i
         lda poly_prod_lo
-.shoup_sta_lo: sta r_tab_lo,y   ; SMC high byte
+shoup_sta_lo: sta r_tab_lo,y   ; SMC high byte
         lda poly_prod_hi
-.shoup_sta_hi: sta r_tab_hi,y   ; SMC high byte
+shoup_sta_hi: sta r_tab_hi,y   ; SMC high byte
 
         inc poly_i
-        bne .shoup_x_loop        ; 256 iterations
+        bne shoup_x_loop        ; 256 iterations
 
         inc poly_j
         lda poly_j
         cmp #16
-        bne .shoup_j_loop
+        bne shoup_j_loop
         rts
-}
+.endif
 
 ; =============================================================================
 ; poly1305_clamp - Clamp r per RFC 7539
@@ -298,9 +317,9 @@ sqtab_init:
         rol
         sta sq_ad+1
         inc sq_ad
-        bne +
+        bne :+
         inc sq_ad+1
-+
+:
         clc
         lda sq_acc
         adc sq_ad
@@ -313,19 +332,19 @@ sqtab_init:
         sta sq_acc+2
 
         inc sq_i
-        bne +
+        bne :+
         inc sq_i+1
-+       lda sq_i+1
+:       lda sq_i+1
         cmp #2                  ; check if i reached 512 (0x200)
         beq @done
         jmp @loop
 @done:  rts
 
 ; Temporaries for sqtab_init
-sq_acc: !fill 3, 0              ; 24-bit accumulator for i^2
-sq_sh:  !fill 3, 0              ; 24-bit shifted result (i^2 / 4)
-sq_ad:  !fill 2, 0              ; 16-bit addition term (2i+1)
-sq_i:   !fill 2, 0              ; 16-bit index counter (0..511)
+sq_acc: .res 3, 0              ; 24-bit accumulator for i^2
+sq_sh:  .res 3, 0              ; 24-bit shifted result (i^2 / 4)
+sq_ad:  .res 2, 0              ; 16-bit addition term (2i+1)
+sq_i:   .res 2, 0              ; 16-bit index counter (0..511)
 
 ; =============================================================================
 ; mul_8x8 - 8-bit x 8-bit → 16-bit multiply using quarter-square table
@@ -336,8 +355,8 @@ sq_i:   !fill 2, 0              ; 16-bit index counter (0..511)
 ; Uses identity: a*b = sqtab[a+b] - sqtab[|a-b|]
 ; Clobbers: A, X, Y
 ; =============================================================================
-poly_prod_lo:   !byte 0
-poly_prod_hi:   !byte 0
+poly_prod_lo:   .byte 0
+poly_prod_hi:   .byte 0
 
 mul_8x8:
         sta mul_a               ; save A
@@ -355,10 +374,10 @@ mul_8x8:
         lda mul_a
         sec
         sbc mul_b
-        bcs +
+        bcs :+
         eor #$ff
         adc #1                  ; negate (carry was clear, so ADC adds 1)
-+       tay                     ; Y = |a-b| (always page 0, ≤255)
+:       tay                     ; Y = |a-b| (always page 0, ≤255)
 
         ; sqtab[sum] - sqtab[|diff|]
         lda mul_s_pg
@@ -383,9 +402,9 @@ mul_8x8:
         sta poly_prod_hi
         rts
 
-mul_a:          !byte 0
-mul_b:          !byte 0
-mul_s_pg:       !byte 0
+mul_a:          .byte 0
+mul_b:          .byte 0
+mul_s_pg:       .byte 0
 
 ; =============================================================================
 ; poly_ripple - propagate a set carry upward through poly_product starting
@@ -431,55 +450,55 @@ poly_ripple:
 ; Clobbers: A, X, Y
 ; =============================================================================
 
-; Macro: emit one partial product h[.i] * r[.j] — Profile B (schoolbook
+; Macro: emit one partial product h[i] * r[j] — Profile B (schoolbook
 ; via sqtab-backed mul_8x8). Profile A replaces this with Shoup per-r
-; table lookups (see +poly_pp_shoup below).
-!macro poly_pp .i, .j {
-        lda poly_h + .i
-        ldx poly_r + .j
+; table lookups (see poly_pp_shoup below).
+.macro poly_pp ia, ja
+        lda poly_h + ia
+        ldx poly_r + ja
         jsr mul_8x8             ; poly_prod_lo/hi = h[i] * r[j]
         clc
-        lda poly_product + (.i + .j)
+        lda poly_product + (ia + ja)
         adc poly_prod_lo
-        sta poly_product + (.i + .j)
-        lda poly_product + (.i + .j + 1)
+        sta poly_product + (ia + ja)
+        lda poly_product + (ia + ja + 1)
         adc poly_prod_hi
-        sta poly_product + (.i + .j + 1)
-        bcc +
-        ldx #(.i + .j + 2)
+        sta poly_product + (ia + ja + 1)
+        bcc :+
+        ldx #(ia + ja + 2)
         jsr poly_ripple
-+
-}
+:
+.endmacro
 
-!ifdef POLY1305_PROFILE_LONG {
-; Macro: Shoup-table partial product h[.i] * r[.j] — Profile A.
+.ifdef POLY1305_PROFILE_LONG
+; Macro: Shoup-table partial product h[i] * r[j] — Profile A.
 ;
-; Precondition on entry: X = poly_h + .i (loaded once per outer row).
-; The Shoup table at r_tab_lo + .j*256 holds T_j[x] = (x * r[j]) & $ff,
-; and r_tab_hi + .j*256 holds the high byte. Two page-indexed loads
+; Precondition on entry: X = poly_h + i (loaded once per outer row).
+; The Shoup table at r_tab_lo + j*256 holds T_j[x] = (x * r[j]) & $ff,
+; and r_tab_hi + j*256 holds the high byte. Two page-indexed loads
 ; replace the sqtab-based 8x8 multiply entirely.
 ;
-; Postcondition: X still equals poly_h + .i (reloaded from RAM only
+; Postcondition: X still equals poly_h + i (reloaded from RAM only
 ; on the rare ripple path).
 ;
 ; No branches depend on the *value* of h[i] or r[j]; the only branch
 ; (bcc) depends on carry-out from the addition, which is standard
 ; multi-precision arithmetic and CT-safe on 6502.
-!macro poly_pp_shoup .i, .j {
+.macro poly_pp_shoup ia, ja
         clc
-        lda r_tab_lo + (.j * 256), x
-        adc poly_product + (.i + .j)
-        sta poly_product + (.i + .j)
-        lda r_tab_hi + (.j * 256), x
-        adc poly_product + (.i + .j + 1)
-        sta poly_product + (.i + .j + 1)
-        bcc +
-        ldx #(.i + .j + 2)
+        lda r_tab_lo + (ja * 256), x
+        adc poly_product + (ia + ja)
+        sta poly_product + (ia + ja)
+        lda r_tab_hi + (ja * 256), x
+        adc poly_product + (ia + ja + 1)
+        sta poly_product + (ia + ja + 1)
+        bcc :+
+        ldx #(ia + ja + 2)
         jsr poly_ripple
-        ldx poly_h + .i         ; ripple clobbered X; restore row base
-+
-}
-}
+        ldx poly_h + ia         ; ripple clobbered X; restore row base
+:
+.endmacro
+.endif
 
 ; =============================================================================
 ; poly_reduce_shl6_tab - 256-entry LUT: tab[y] = (y & 3) << 6
@@ -494,37 +513,37 @@ poly_ripple:
 ; would be a CT violation. Aligning the base low byte to $00 makes the
 ; access strictly constant-time.
 ; =============================================================================
-        !align 255, 0
+        .align 256
 poly_reduce_shl6_tab:
-        !for .V, 0, 255 {
-            !byte (.V & 3) << 6
-        }
+        .repeat 256, V
+            .byte (V & 3) << 6
+        .endrepeat
 
 poly1305_multiply:
         ; Zero the product buffer (33 bytes) — unrolled store chain.
         lda #0
-        !for .Z, 0, 32 {
-            sta poly_product + .Z
-        }
+        .repeat 33, Z
+            sta poly_product + Z
+        .endrepeat
 
-!ifdef POLY1305_PROFILE_LONG {
+.ifdef POLY1305_PROFILE_LONG
         ; Fully unrolled 17x16 schoolbook via Shoup per-r tables (P3).
         ; X is hoisted out of the j loop: h[i] is constant for all 16
         ; inner iterations of a given row.
-        !for .I, 0, 16 {
-            ldx poly_h + .I
-            !for .J, 0, 15 {
-                +poly_pp_shoup .I, .J
-            }
-        }
-} else {
+        .repeat 17, I
+            ldx poly_h + I
+            .repeat 16, J
+                poly_pp_shoup I, J
+            .endrepeat
+        .endrepeat
+.else
         ; Fully unrolled 17x16 schoolbook: 272 partial products
-        !for .I, 0, 16 {
-            !for .J, 0, 15 {
-                +poly_pp .I, .J
-            }
-        }
-}
+        .repeat 17, I
+            .repeat 16, J
+                poly_pp I, J
+            .endrepeat
+        .endrepeat
+.endif
 
         ; Fall through to poly1305_reduce (fused Donna wrap).
 
@@ -557,10 +576,10 @@ poly1305_multiply:
 ; =============================================================================
 poly1305_reduce:
         ; 1. Copy low 130 bits of product → h (straight-line).
-        !for .K, 0, 15 {
-            lda poly_product + .K
-            sta poly_h + .K
-        }
+        .repeat 16, K
+            lda poly_product + K
+            sta poly_h + K
+        .endrepeat
         lda poly_product + 16
         and #$03
         sta poly_h + 16
@@ -581,17 +600,17 @@ poly1305_reduce:
         lda #0
         sta poly_carry
 
-        !for .K, 0, 16 {
-            ; --- form overflow byte .K in A.
-            lda poly_product + 16 + .K
+        .repeat 17, K
+            ; --- form overflow byte K in A.
+            lda poly_product + 16 + K
             lsr
-            lsr                     ; A = p[16+.K] >> 2 (bits 6..7 cleared)
-            !if .K < 16 {
+            lsr                     ; A = p[16+K] >> 2 (bits 6..7 cleared)
+            .if K < 16
                 sta poly_tmp        ; stash low 6 bits of ov
-                ldy poly_product + 17 + .K
+                ldy poly_product + 17 + K
                 lda poly_reduce_shl6_tab,y  ; A = (y & 3) << 6  (via 256-entry LUT)
-                ora poly_tmp        ; A = overflow byte .K
-            }
+                ora poly_tmp        ; A = overflow byte K
+            .endif
             sta poly_tmp            ; poly_tmp = ov (stash for ov*5)
 
             ; --- compute ov*5 into (poly_i : A) branch-free.
@@ -621,15 +640,15 @@ poly1305_reduce:
             adc #0
             sta poly_i              ; (poly_i : poly_tmp) = ov*5 + carry_in
 
-            ; --- add to h[.K], produce new carry_in for next k
+            ; --- add to h[K], produce new carry_in for next k
             clc
-            lda poly_h + .K
+            lda poly_h + K
             adc poly_tmp
-            sta poly_h + .K
+            sta poly_h + K
             lda poly_i
             adc #0
-            sta poly_carry          ; carry_in for iteration .K+1
-        }
+            sta poly_carry          ; carry_in for iteration K+1
+        .endrepeat
 
         rts
 

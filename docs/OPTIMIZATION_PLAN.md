@@ -92,13 +92,14 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S7 P4 Donna fused wrap (both profiles)  | `1889efd` |         45 946 |         11 949 |           2 216 477 |        -62.9% |
 | S8 A3-A6 + C7 AEAD/ChaCha glue (both)  | `202d0b3` |         44 922 |         12 122 |           2 197 974 |        -63.2% |
 | S10 sqtab one-time build + REU preload  | `860849c` |         44 920 |         12 119 |           2 109 228 |        -64.7% |
+| Port: ACME→ca65 toolchain               | `PENDING` |         44 922 |         12 122 |           2 109 212 |        -64.7% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
 hot path still goes through `(w32_dst),y` ZP-indirect indexed loads
 (5 cy), and only the two 64-byte copy loops (`state→work` and
 `work→keystream`) and the final `work += state` addressing get the
-`abs,x → zp,x` savings. ACME correctly emits `zp,x` for
+`abs,x → zp,x` savings. ca65 correctly emits `zp,x` for
 `lda/sta cc20_work,x` (verified: chacha20_lib is now 2 bytes shorter),
 but there are only ~128 such ops per block. **The −20 000 cy estimate
 implicitly assumed C2 (QR inlining) was bundled — it isn't realized
@@ -212,6 +213,29 @@ sqtab build was a per-packet fixed cost. REU backup/restore gated under
 `POLY1305_REU=1` inside `POLY1305_PROFILE_LONG` (Profile A only): DMA
 sqtab to REU bank 0 after build, `poly1305_reu_restore` can reload it
 from REU in ~1.1 k cy if the `$8000` region is ever clobbered.
+
+**Note on Port**: toolchain-only change, ACME → ca65 + ld65 (cc65
+suite), with each source file compiling to its own `.o` and the final
+PRG linked via `src/c64.cfg`. No algorithmic modifications — the
+byte-layout Poly1305 representation caveat and the bimodal
+packet-profile framing (Section 0) both still hold. Profile A
+`chacha20_block` = 44 922 cy, `poly1305_block` = 12 122 cy,
+`aead_encrypt n=1024` = 2 109 212 cy; all 8 headline metrics across
+both profiles land within 0.05% of the S10 baseline (comfortably
+inside bench spread). Tests 214/214 on both profiles, seed 7539. PRG
+grew +256 B on **both** profiles (Profile A 15 459 → 15 715 B; Profile
+B 17 040 → 17 296 B) — ld65's inter-object alignment padding around
+`poly_reduce_shl6_tab`'s `.align 256` at the CODE-segment .o-fragment
+join point, not code-bytes growth (confirmed by the identical +256 on
+both profiles, a padding-gap signature rather than code growth). The
+layout-sensitivity concern from S1 did **not** materialise: `c64.cfg`
+declares `align=$100` on CODE, so the extra padding snaps to whole
+pages and no inner branch in `chacha20_block`,
+`poly1305_multiply`, or the unrolled `poly1305_reduce` crossed a page
+boundary that wasn't already a page boundary in the monolithic ACME
+build. Forward note (not pursued in this PR): tightening the padding
+via an ld65 link-line reorder or by moving `poly_reduce_shl6_tab` into
+its own segment is a possible follow-up if the ~256 B matters later.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
@@ -527,7 +551,7 @@ P3 delta (~25 k cy per poly1305_block) but correct and portable.
 
 ### Profile gating
 
-- Implemented via ACME `!ifdef POLY1305_PROFILE_LONG` (Profile A) / else
+- Implemented via ca65 `.ifdef POLY1305_PROFILE_LONG` (Profile A) / else
   (Profile B). Default build is Profile A (`make` with
   `POLY1305_PROFILE_LONG` defined in `constants_lib.asm` or via a
   `make profile-a` / `make profile-b` dispatch target — added as a
