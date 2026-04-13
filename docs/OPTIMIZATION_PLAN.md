@@ -93,6 +93,7 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S8 A3-A6 + C7 AEAD/ChaCha glue (both)  | `202d0b3` |         44 922 |         12 122 |           2 197 974 |        -63.2% |
 | S10 sqtab one-time build + REU preload  | `860849c` |         44 920 |         12 119 |           2 109 228 |        -64.7% |
 | Port: ACME→ca65 toolchain               | `27e109f` |         44 922 |         12 122 |           2 109 212 |        -64.7% |
+| S11 incremental Shoup build             | `PENDING` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -236,6 +237,44 @@ boundary that wasn't already a page boundary in the monolithic ACME
 build. Forward note (not pursued in this PR): tightening the padding
 via an ld65 link-line reorder or by moving `poly_reduce_shl6_tab` into
 its own segment is a possible follow-up if the ~256 B matters later.
+
+**Note on S11**: incremental Shoup table build, Profile A only. Before
+S11, `shoup_init` built each of the 16 Shoup tables `T_j[k] = k * r[j]`
+by calling `mul_8x8` (sqtab-backed) 4096 times — once per `(j, k)` pair.
+That path dominated Profile A's per-packet `poly1305_init` fixed cost:
+measured at ~438 k cy (the S6 note undershot by 8× for the same
+reason). S11 replaces it with a per-`j` straight-line ripple-add loop:
+`T_j[0] = 0; T_j[k] = T_j[k-1] + r[j]` as a 16-bit running sum, with
+the low-byte `adc #rj` baked in via SMC on the inner loop and four
+more SMC page bytes swapping the `r_tab_{lo,hi}` destination each
+outer `j`. The running sum fits in 16 bits (max `255 * 255 = $FE01`),
+so the hi byte's `adc #0` ripple can never carry out and a single
+`clc` before `k=1` suffices for all 255 inner iterations. Feed-forward
+uses `lda r_tab_{lo,hi}+j*256-1, y` to read T_j[k-1] from just-written
+memory — the `-1` offset pays a fixed `abs,y` page-cross penalty (5 cy
+not 4) but avoids register-juggling around the missing `stx abs,y`
+opcode and keeps Y free as the index register. Inner loop cost: 29 cy
+(5 + 2 + 5 + 5 + 2 + 5 + 2 + 3). Total build: 16 × 255 × 29 ≈ 118 k cy
+plus ~50 cy per-j setup, vs ~438 k cy before. Profile A measured
+`aead_encrypt n=0` = **187 588 cy** (was 579 301 cy, **Δ = −391 713 cy,
+−67.6%**), well under the 250 k gate and beating the ~200 k target.
+`aead_encrypt n=1024` = **1 717 259 cy** (was 2 108 876, **Δ = −391 617
+cy, −18.6%**) — same absolute saving since the build is a fixed
+per-packet cost that amortizes identically regardless of packet
+length. `poly1305_block` = 11 952 cy (was 11 950, Δ +2 bench noise),
+`chacha20_block` = 44 921 cy (was 44 922, Δ −1 bench noise) — the
+per-block hot path is unchanged, as expected since only `shoup_init`
+(build-time) was edited and the Shoup-table *consumption* in
+`poly1305_multiply` reads the same T_j[k] values. Profile B is
+byte-identical to pre-S11 (entire change is `.ifdef
+POLY1305_PROFILE_LONG`); Profile B `chacha20_block = 44 921`,
+`poly1305_block = 38 819`, `aead_encrypt n=0 = 87 256`, `aead_encrypt
+n=1024 = 3 326 093` — all within ±0.01% bench noise of the Port
+baseline. Tests 214/214 on both profiles (seed 7539). Break-even for
+the Shoup path's amortization (now that the build itself is ~118 k
+instead of ~438 k) is ~4 blocks (64 B of message) for Profile A vs
+Profile B (100 332 cy n=0 penalty / 26 867 cy-per-block savings), down
+from ~18 blocks (≈290 B) before.
 
 Subsequent steps append a row here with their measured cycle counts and
 commit hash.
