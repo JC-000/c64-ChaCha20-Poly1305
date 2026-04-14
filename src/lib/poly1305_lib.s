@@ -20,6 +20,7 @@
 ; =============================================================================
 
 .include "constants_lib.s"
+.include "smc.inc"
 
 ; Cross-module imports: data_lib state.
 .import poly_h, poly_r, poly_s, poly_product, poly1305_tag
@@ -227,30 +228,30 @@ shoup_j_loop:
         lda poly_j
         clc
         adc #>r_tab_lo
-        sta shoup_z_lo+2
-        sta shoup_sta_lo+2
+        SMC_StoreHighByte shoup_z_lo
+        SMC_StoreHighByte shoup_sta_lo
         sec
         sbc #1
-        sta shoup_ld_lo+2
+        SMC_StoreHighByte shoup_ld_lo
         lda poly_j
         clc
         adc #>r_tab_hi
-        sta shoup_z_hi+2
-        sta shoup_sta_hi+2
+        SMC_StoreHighByte shoup_z_hi
+        SMC_StoreHighByte shoup_sta_hi
         sec
         sbc #1
-        sta shoup_ld_hi+2
+        SMC_StoreHighByte shoup_ld_hi
 
         ; Patch the inner `adc #rj` immediate to r[j].
         ldy poly_j
         lda poly_r,y
-        sta shoup_rj_val+1
+        SMC_StoreValue shoup_rj_val
 
         ; Seed T_j[0] = 0.
         ldy #0
         tya                     ; A = 0
-shoup_z_lo: sta r_tab_lo,y      ; SMC high byte — T_j[0].lo = 0
-shoup_z_hi: sta r_tab_hi,y      ; SMC high byte — T_j[0].hi = 0
+        SMC shoup_z_lo, { sta r_tab_lo,y }   ; SMC high byte — T_j[0].lo = 0
+        SMC shoup_z_hi, { sta r_tab_hi,y }   ; SMC high byte — T_j[0].hi = 0
 
         ; k-loop: Y runs k = 1..255, wraps to 0 to exit. Carry is clear
         ; entering the loop and is always clear at the bottom (because
@@ -258,12 +259,12 @@ shoup_z_hi: sta r_tab_hi,y      ; SMC high byte — T_j[0].hi = 0
         iny                     ; Y = 1
         clc
 shoup_k_loop:
-shoup_ld_lo:  lda r_tab_lo-1, y ; SMC high byte — prev_lo = T_j[k-1]
-shoup_rj_val: adc #$00          ; SMC immediate = r[j]
-shoup_sta_lo: sta r_tab_lo,y    ; SMC high byte — T_j[k].lo
-shoup_ld_hi:  lda r_tab_hi-1, y ; SMC high byte — prev_hi = T_j[k-1].hi
-        adc #$00                ; + ripple carry from lo add
-shoup_sta_hi: sta r_tab_hi,y    ; SMC high byte — T_j[k].hi
+        SMC shoup_ld_lo,  { lda r_tab_lo-1, y } ; SMC high byte — prev_lo = T_j[k-1]
+        SMC shoup_rj_val, { adc #$00 }          ; SMC immediate = r[j]
+        SMC shoup_sta_lo, { sta r_tab_lo,y }    ; SMC high byte — T_j[k].lo
+        SMC shoup_ld_hi,  { lda r_tab_hi-1, y } ; SMC high byte — prev_hi = T_j[k-1].hi
+        adc #$00                                ; + ripple carry from lo add
+        SMC shoup_sta_hi, { sta r_tab_hi,y }    ; SMC high byte — T_j[k].hi
         iny
         bne shoup_k_loop        ; 255 iterations (y wraps 1..255 → 0)
 
@@ -502,20 +503,18 @@ ct_mul_8x8:
         ; --- Compute sum = a + b and SMC-patch the two abs,x hi bytes ---
         tya                             ; A = b
         clc
-smc_sum_a_imm:
-        adc #$00                        ; SMC imm = a; A = (a+b).lo, C = page
+        SMC smc_sum_a_imm, { adc #$00 } ; SMC imm = a; A = (a+b).lo, C = page
         tax                             ; X = (a+b) & $FF
         lda #>sqtab_lo
         adc #0                          ; $80 or $81 (C already folded in above)
-        sta smc_lo_addr+2               ; patch sqtab_lo abs,x hi byte
+        SMC_StoreHighByte smc_lo_addr   ; patch sqtab_lo abs,x hi byte
         adc #(>sqtab_hi - >sqtab_lo)    ; C=0 after prior adc #0, so += 2
-        sta smc_hi_addr+2               ; patch sqtab_hi abs,x hi byte
+        SMC_StoreHighByte smc_hi_addr   ; patch sqtab_hi abs,x hi byte
 
         ; --- Branchless |a-b| → Y (sign-mask flip-and-negate) ---
         tya                             ; A = b
         sec
-smc_diff_a_imm:
-        sbc #$00                        ; SMC imm = a; A = b-a, C=1 iff b>=a
+        SMC smc_diff_a_imm, { sbc #$00 }; SMC imm = a; A = b-a, C=1 iff b>=a
         sta ct_diff_raw
         lda #$00
         sbc #$00                        ; C=1: 0; C=0: $FF (sign mask)
@@ -526,13 +525,11 @@ smc_diff_a_imm:
         tay                             ; Y = |a-b| (in [0,255])
 
         ; --- Table-lookup subtract: sqtab[a+b] − sqtab[|a-b|] ---
-smc_lo_addr:
-        lda $8000,x                     ; SMC base: sqtab_lo or sqtab_lo+256
+        SMC smc_lo_addr, { lda $8000,x } ; SMC base: sqtab_lo or sqtab_lo+256
         sec
         sbc sqtab_lo,y                  ; sqtab_lo[|a-b|]
         sta poly_prod_lo
-smc_hi_addr:
-        lda $8200,x                     ; SMC base: sqtab_hi or sqtab_hi+256
+        SMC smc_hi_addr, { lda $8200,x } ; SMC base: sqtab_hi or sqtab_hi+256
         sbc sqtab_hi,y                  ; sqtab_hi[|a-b|]
         sta poly_prod_hi
         rts
@@ -681,8 +678,8 @@ poly1305_multiply:
         ; mult66 path): no ZP pointer pair is needed.
         .repeat 16, J
             lda poly_r + J
-            sta smc_sum_a_imm+1
-            sta smc_diff_a_imm+1
+            SMC_StoreValue smc_sum_a_imm
+            SMC_StoreValue smc_diff_a_imm
             .repeat 17, I
                 poly_pp_ct_mul I, J
             .endrepeat

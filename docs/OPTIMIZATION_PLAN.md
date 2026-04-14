@@ -98,6 +98,8 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S13 C8 prelude + C5 row-0 bake (partial) | `e22e445` |         44 480 |         11 950 |           1 709 243 |        -71.4% |
 | CT fix: F1+F2+F3 ct_mul_8x8 (Prof A)    | `dc4c575` |         43 135 |         11 948 |           1 686 764 |        -71.8% |
 | CT fix: F1+F2+F3 ct_mul_8x8 (Prof B)    | `dc4c575` |         43 135 |         37 844 |           3 259 490 |        -45.4% |
+| Task #9: SMC macro wiring (cosmetic, A) | `3d560b5` |         43 135 |         11 948 |           1 686 757 |         ~0.0% |
+| Task #9: SMC macro wiring (cosmetic, B) | `3d560b5` |         43 132 |         37 844 |           3 259 490 |         ~0.0% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -574,6 +576,44 @@ but remains comfortably below the sprint-0 baseline and above the
 pre-S12 shape on n=0. The authoritative CT design document is
 `audit_drafts/F3_FIX_DESIGN.md` (specifically §3.1 for the adopted
 CT-Quarter-Square shape).
+
+**Note on Task #9 — SMC macro wiring (cosmetic refactor, post-CT-fix)**.
+Task #9, deferred out of the sprint-2 port and re-blocked behind the
+v0.3.0 release so the cosmetic work would not happen inside the audit
+window, replaces the hand-rolled `sta @label+1` / `sta label+2`
+patches at all five real SMC sites in the library with the matching
+`smc.inc` macros (`SMC`, `SMC_StoreValue`, `SMC_StoreLowByte`,
+`SMC_StoreHighByte`). The literal placeholder bytes inside each
+`SMC label, { statement }` block are preserved exactly (`#$00`,
+`jmp $0000`, `lda $8000,x`, etc.) instead of being switched to
+`SMC_Value` / `SMC_AbsAdr`, so the generated PRG is bit-identical to
+the CT-fix baseline on both profiles
+(`313300ff4d86cefc6d3b195563c1383d` for Profile A and
+`a0e4b682fa454c6b8e2d8a04297333ab` for Profile B). Sites wired:
+(1) `chacha20poly1305_lib.s @partial_smc` aead partial-block
+copy-chain dispatch (A4 from S8); (2) `chacha20poly1305_lib.s
+@zfill_smc` matching zero-fill chain dispatch; (3)
+`poly1305_lib.s shoup_init` Profile-A incremental Shoup-table build
+— six `SMC_StoreHighByte` page-byte patches and one
+`SMC_StoreValue shoup_rj_val` immediate (S11); (4)
+`poly1305_lib.s ct_mul_8x8` self-patched
+`SMC_StoreHighByte smc_lo_addr` / `smc_hi_addr` abs,x hi-byte
+patches inside the primitive (CT-fix F3); (5)
+`poly1305_lib.s poly1305_multiply` caller-baked
+`SMC_StoreValue smc_sum_a_imm` / `smc_diff_a_imm` immediate patches
+in the Profile-B partial-product J-outer loop (CT-fix F3 caller).
+No SMC sites were left hand-rolled; the storage-byte writes
+elsewhere in the library that match a `sta X+1` shape (e.g.
+`sta zp_ptr1+1`, `sta cc20_data_ptr+1`, `sta sq_acc+1`,
+`sta dst+1` inside `add32_zp`) are not SMC — they address the
+second byte of an ordinary multi-byte ZP storage variable or a ZP
+word macro argument, and the smc.inc macros do not apply to them.
+Bench cycles match the CT-fix baseline within VICE measurement
+noise (single-digit cycles on two metrics, exact match on the rest)
+— see the two PENDING rows in the progression table. The cosmetic
+benefit is removal of the off-by-one footgun: future SMC site
+edits cannot accidentally flip `+1` (operand low byte) and `+2`
+(operand high byte) because the macro selects the offset by name.
 
 ---
 
