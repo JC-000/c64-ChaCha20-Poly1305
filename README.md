@@ -43,30 +43,50 @@ secret data).
 
 ## Performance
 
-Optimization sprint S0-S10 results (cycles, measured via CIA timer in
-VICE):
+v0.3.0 cycle counts (cycles, measured via CIA timer in VICE,
+`tools/benchmark_chacha20_poly1305.py --seed 7539`, 3 samples,
+min per routine):
 
-| routine              | S0 baseline | Profile A (S10) |   change | Profile B (S10) |   change |
-|----------------------|------------:|----------------:|---------:|----------------:|---------:|
-| `chacha20_block`     |     149 987 |          44 920 |  -70.0%  |          44 922 |  -70.0%  |
-| `poly1305_block`     |      53 270 |          12 119 |  -77.2%  |          38 760 |  -27.2%  |
-| `aead_encrypt` n=0   |     251 330 |         579 280 | +130.5%  |          87 210 |  -65.3%  |
-| `aead_encrypt` n=1024|   5 974 048 |       2 109 228 |  -64.7%  |       3 326 084 |  -44.3%  |
+| routine              | S0 baseline |     Profile A |   change |     Profile B |   change |
+|----------------------|------------:|--------------:|---------:|--------------:|---------:|
+| `chacha20_block`     |     149 987 |        43 135 |  -71.2%  |        43 135 |  -71.2%  |
+| `poly1305_block`     |      53 270 |        11 948 |  -77.6%  |        37 844 |  -28.9%  |
+| `aead_encrypt` n=0   |     251 330 |       186 182 |  -25.9%  |        84 560 |  -66.4%  |
+| `aead_encrypt` n=1024|   5 974 048 |     1 686 764 |  -71.8%  |     3 259 490 |  -45.4%  |
 
-Profile A n=0 is higher than baseline due to Shoup table-build cost
-(~490 k cy per-packet); this amortizes rapidly at n >= 256. Step 10
-reduced n=0 by 89 k cy (sqtab one-time build). Profile B n=0 dropped
-to 87 k cy -- 65% below the original baseline. See
+Profile A's n=0 cost (186 k cy) is the per-packet `poly1305_init`
+incremental Shoup-table build (S11), down from ~579 k cy in
+`v0.2-optimized`; it amortizes rapidly at n >= 256. Profile B's n=0
+runs in 84 k cy -- **−66.4%** below the sprint-0 baseline. See
 `docs/OPTIMIZATION_PLAN.md` for the full per-step progression table,
-per-byte breakdowns, and estimate-vs-measured analysis.
+per-byte breakdowns, and estimate-vs-measured analysis, and
+`docs/REPRO_CHECK.md` §4 for the post-CT-fix bench table.
 
 ## Constant-time guarantees
 
-All code paths are constant-time with respect to secret data (key, r, s,
-h, plaintext, ciphertext, tag). The `poly1305_multiply` schoolbook runs
-every partial product unconditionally (no early-exit on zero). Tag
-comparison uses an OR-accumulator pattern. The 6502 has no data cache,
-so instruction timing is deterministic.
+The library is **constant-time by internal review** with respect to
+secret data (key, `r`, `s`, `h`, plaintext, ciphertext, tag). Every
+branch under `src/lib/` and `src/main.s` was per-branch-classified
+in v0.3.0; the audit verdict and per-branch table live in
+`docs/AUDIT.md` and `docs/CT_ANALYSIS.md`. Three pre-existing CT
+findings (F1 `poly1305_final` h≥p mask-blend, F2 ChaCha20 single-bit
+rotate branchless rewrite, F3 Profile B branchless `ct_mul_8x8`)
+were resolved in v0.3.0; see `docs/design/ct_mul_8x8.md` for the
+F3 design memo.
+
+Validation evidence shipped alongside this release:
+
+- **30 000 / 30 000** random AEAD vectors (15 000 per profile)
+  cross-checked against `pyca/cryptography`'s reference
+  `ChaCha20Poly1305` (`tools/audit_cross_check.py`).
+- **65 536 / 65 536** exhaustive `(a, b)` pairs in `[0,255]²`
+  brute-forced for the new `ct_mul_8x8` primitive
+  (`tools/ct_mul_brute_check.py`).
+- **214 / 214** RFC 7539 fixed-vector test suite passes on both
+  profiles at seed 7539.
+
+This is an **internal audit**, not a third-party security review.
+The library is intended for hobbyist and research use.
 
 ## Public symbols (library API)
 
@@ -107,4 +127,66 @@ test/
 tools/
   test_chacha20_poly1305.py    214-test suite (VICE + harness)
   benchmark_chacha20_poly1305.py  CIA-timer benchmark suite
+  audit_cross_check.py         30 000 random AEAD vectors vs pyca
+  ct_mul_brute_check.py        65 536 exhaustive ct_mul_8x8 pairs
+examples/
+  smoke_test/                  minimal external-consumer template
+                               (own Makefile / cfg / main, RFC 7539
+                               §2.8.2 KAT on both profiles)
 ```
+
+## Documentation
+
+Consumer-facing docs ship under `docs/` and are versioned alongside
+the source:
+
+- [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — wiring the library
+  into a downstream ca65 build (call sequence, ZP layout, profile
+  selection, testing from a consumer project).
+- [`docs/API.md`](docs/API.md) — public symbol reference.
+- [`docs/MEMORY_MAP.md`](docs/MEMORY_MAP.md) — fixed ZP slots and
+  table addresses promised stable across v0.3.x.
+- [`docs/AUDIT.md`](docs/AUDIT.md) — top-level constant-time audit
+  verdict and methodology.
+- [`docs/CT_ANALYSIS.md`](docs/CT_ANALYSIS.md) — per-branch CT
+  classification and the F1/F2/F3 Resolution section.
+- [`docs/REPRO_CHECK.md`](docs/REPRO_CHECK.md) — reproducibility
+  fingerprints and the post-CT-fix bench table.
+- [`docs/design/ct_mul_8x8.md`](docs/design/ct_mul_8x8.md) —
+  branchless 8×8 multiply design memo (Profile B F3 fix).
+- [`docs/OPTIMIZATION_PLAN.md`](docs/OPTIMIZATION_PLAN.md) — the
+  full optimization-sprint progression table and notes.
+
+The minimal external-consumer template is
+[`examples/smoke_test/`](examples/smoke_test/), which builds and
+passes the RFC 7539 §2.8.2 AEAD known-answer vector on both
+profiles from a fully consumer-owned build tree.
+
+## Releases
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
+The current series is **v0.3.x**; tagged releases are published on
+the [GitHub releases page](https://github.com/JC-000/c64-ChaCha20-Poly1305/releases).
+v0.3.x is backward-compatible within the series (public entry
+points and the memory map documented in `docs/MEMORY_MAP.md` are
+frozen). A planned **v0.4.0** breaking release will make ZP slots
+and table base addresses configurable via ca65 `-D` defines; see
+the v0.3.0 changelog entry's "API stability" subsection for
+details.
+
+Reference build fingerprints for v0.3.x (md5 of
+`build/profile-*/c64_chacha20_poly1305.prg`):
+
+- profile-a: `313300ff4d86cefc6d3b195563c1383d`
+- profile-b: `a0e4b682fa454c6b8e2d8a04297333ab`
+
+## Credits
+
+- ChaCha20 and Poly1305 algorithms by D. J. Bernstein; RFC 8439
+  AEAD construction by Y. Nir and A. Langley.
+- [`ca65hl`](https://github.com/Movax12/ca65hl) macro pack by
+  Movax12 — vendored under `src/include/ca65hl/` with its
+  upstream LICENSE preserved at `src/include/ca65hl/LICENSE`.
+- `smc.inc` self-modifying-code helper macros from the
+  [cc65](https://cc65.github.io/) project — vendored under
+  `src/include/smc.inc`.
