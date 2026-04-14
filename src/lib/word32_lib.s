@@ -282,10 +282,26 @@ rotr32_7:
         jsr rotr32_8
         ; fall through to rotl32_1
 
-; rotl32_1 - Rotate left 32 bits by 1
+; =============================================================================
+; rotl32_1 - Rotate left 32 bits by 1 (branchless)
+;
+; Pointer-based companion to the rotl32_1_zp macro in chacha20_lib.s. The
+; production ChaCha20 hot path uses the `_zp` macro; this subroutine is
+; test-only reachable (via the rotation unit test and via
+; chacha20_quarter_round which is itself test-only). It is kept as a
+; stable label for the test harness and has been rewritten branchless
+; as part of the v0.3.0 CT fix (F2 generalization) so no rotation
+; primitive in the library leaks a wrap-bit via a `bcc` branch.
+;
+; Preserves: X
+; Clobbers: A, Y
+; =============================================================================
 rotl32_1:
-        ; Little-endian left shift: start from LSB (byte 0)
-        clc
+        ; Pre-extract old bit 31 (hi-byte MSB) into C.
+        ldy #3
+        lda (w32_dst),y
+        asl                    ; C = old bit 31, A discarded
+        ; rol-through the four bytes from LSB up.
         ldy #0
         lda (w32_dst),y
         rol
@@ -302,13 +318,6 @@ rotl32_1:
         lda (w32_dst),y
         rol
         sta (w32_dst),y
-        ; carry = old MSB, wraps to bit 0 of byte 0
-        bcc @done
-        ldy #0
-        lda (w32_dst),y
-        ora #$01
-        sta (w32_dst),y
-@done:
         rts
 
 ; =============================================================================
@@ -439,13 +448,23 @@ rotl32_12:
         jmp rotl32_4           ; tail call
 
 ; =============================================================================
-; rotr32_1 - Rotate right 32 bits by 1
-; Little-endian right shift: start from MSB (byte 3)
+; rotr32_1 - Rotate right 32 bits by 1 (branchless)
+;
+; Pointer-based companion to the rotr32_1_zp macro in chacha20_lib.s.
+; Test-only reachable (rotation unit test + chacha20_quarter_round tail
+; call via rotl32_7). Rewritten branchless as part of the v0.3.0 CT
+; fix (F2 generalization) so no rotation primitive leaks a wrap-bit
+; via a `bcc` branch.
+;
 ; Preserves: X
 ; Clobbers: A, Y
 ; =============================================================================
 rotr32_1:
-        clc
+        ; Pre-extract old bit 0 (lo-byte LSB) into C.
+        ldy #0
+        lda (w32_dst),y
+        lsr                    ; C = old bit 0, A discarded
+        ; ror-through the four bytes from MSB down.
         ldy #3
         lda (w32_dst),y
         ror
@@ -462,13 +481,6 @@ rotr32_1:
         lda (w32_dst),y
         ror
         sta (w32_dst),y
-        ; carry = old LSB, wraps to bit 7 of byte 3
-        bcc @done
-        ldy #3
-        lda (w32_dst),y
-        ora #$80
-        sta (w32_dst),y
-@done:
         rts
 
 ; =============================================================================
