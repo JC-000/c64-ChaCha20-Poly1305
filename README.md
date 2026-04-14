@@ -187,6 +187,18 @@ Reference build fingerprints for v0.3.x (md5 of
 - [`ca65hl`](https://github.com/Movax12/ca65hl) macro pack by
   Movax12 — vendored under `src/include/ca65hl/` with its
   upstream LICENSE preserved at `src/include/ca65hl/LICENSE`.
-- `smc.inc` self-modifying-code helper macros from the
-  [cc65](https://cc65.github.io/) project — vendored under
+- `smc.inc` self-modifying-code helper macros by Christian Krüger
+  (zlib-licensed, see file header) — vendored under
   `src/include/smc.inc`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Vendored third-party code under `src/include/` retains its upstream
+licenses:
+
+- `ca65hl/` — MIT (Copyright © 2022 Julian Terrell), see
+  `src/include/ca65hl/LICENSE`.
+- `smc.inc` — zlib license (Copyright © 2016 Christian Krüger),
+  see the comment header at the top of `src/include/smc.inc`.

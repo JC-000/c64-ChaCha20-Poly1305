@@ -6,12 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.1] — 2026-04-12
+## [0.3.1] — 2026-04-14
 
 A patch release on top of v0.3.0 covering two post-release polish
-PRs. The shipped library binaries are **bit-identical to v0.3.0**
-on both profiles; consumers who already integrate v0.3.0 PRGs need
+PRs plus a small set of distribution and documentation cleanups.
+The shipped library binaries are **bit-identical to v0.3.0** on
+both profiles; consumers who already integrate v0.3.0 PRGs need
 not re-integrate for v0.3.1.
+
+### Added
+- **`LICENSE` at repo root — MIT** (Copyright © 2026 JC-000).
+  Vendored third-party code under `src/include/` retains upstream
+  licenses: `ca65hl/` MIT (Julian Terrell), `smc.inc` zlib license
+  (Christian Krüger). README gains a short License section.
 
 ### Changed
 - **SMC sites now use `src/include/smc.inc` macros** (PR #17).
