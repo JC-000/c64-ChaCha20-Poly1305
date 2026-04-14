@@ -194,50 +194,34 @@ cc20_qr_table:
         rotl32_4_zp dst
 .endmacro
 
-; w[dst] <<<= 1  — 32-bit rotate left by 1 (LE: start from LSB)
-; Uses a branchless-ish carry wrap: after 4× rol, carry = old MSB bit.
+; w[dst] <<<= 1  — 32-bit rotate left by 1 (LE: start from LSB).
+; F2 fix (v0.3.0 CT): branchless. Pre-extract the wrap bit (old bit 31
+; of dst) into C via asl on dst+3, then rol-rmw the four bytes. The
+; wrap bit feeds back in as the new LSB of dst via the initial rol.
+; CT: no data-dependent branches. Also a net win vs the old
+; lda/rol/sta cascade (25 cy vs 37/44 cy old best/worst).
 .macro rotl32_1_zp dst
-        clc
-        lda dst
-        rol
-        sta dst
-        lda dst+1
-        rol
-        sta dst+1
-        lda dst+2
-        rol
-        sta dst+2
         lda dst+3
-        rol
-        sta dst+3
-        bcc :+
-        lda dst
-        ora #$01
-        sta dst
-:
+        asl             ; C = old bit 31 of dst
+        rol dst         ; dst:   (old<<1) | C_in; C_out = old bit 7
+        rol dst+1
+        rol dst+2
+        rol dst+3
 .endmacro
 
-; w[dst] <<<= 7  — rotl8 then rotr1. Since rotl8 is free-ish, we do
-; rotl8 then rotate right by 1 to get a net <<< 7.
+; w[dst] >>>= 1  — 32-bit rotate right by 1.
+; F2 fix (v0.3.0 CT): branchless. Pre-extract the wrap bit (old bit 0
+; of dst) into C via lsr on dst, then ror-rmw from dst+3 down. The
+; wrap bit feeds back in as the new MSB of dst+3.
+; Note on naming: this macro is still called from rotl32_7_zp (rotl8
+; then rotr1) to realise ChaCha20's <<< 7.
 .macro rotr32_1_zp dst
-        clc
-        lda dst+3
-        ror
-        sta dst+3
-        lda dst+2
-        ror
-        sta dst+2
-        lda dst+1
-        ror
-        sta dst+1
         lda dst
-        ror
-        sta dst
-        bcc :+
-        lda dst+3
-        ora #$80
-        sta dst+3
-:
+        lsr             ; C = old bit 0 of dst
+        ror dst+3
+        ror dst+2
+        ror dst+1
+        ror dst
 .endmacro
 
 .macro rotl32_7_zp dst

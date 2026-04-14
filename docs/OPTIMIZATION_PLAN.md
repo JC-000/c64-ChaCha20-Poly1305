@@ -96,6 +96,8 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S11 incremental Shoup build             | `3782fbc` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 | S12 Profile B P2+P7+mult66              | `291925a` |         44 921 |         11 952 |           1 717 259 |        -71.3% |
 | S13 C8 prelude + C5 row-0 bake (partial) | `e22e445` |         44 480 |         11 950 |           1 709 243 |        -71.4% |
+| CT fix: F1+F2+F3 ct_mul_8x8 (Prof A)    | `dc4c575` |         43 135 |         11 948 |           1 686 764 |        -71.8% |
+| CT fix: F1+F2+F3 ct_mul_8x8 (Prof B)    | `dc4c575` |         43 135 |         37 844 |           3 259 490 |        -45.4% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
@@ -472,6 +474,106 @@ structural step changes that shape** (S2 for C5 site 2, limb→byte
 for P4 Donna, per-call call-setup for mult66). Future sprint steps
 should re-derive per-step estimates against the current code shape
 rather than transcribing from the plan's original per-item numbers.
+
+**Note on CT fix (post-v0.2, blocks v0.3.0)**. Audit-reader review of
+the v0.2-optimized shape surfaced three constant-time findings on
+secret-dependent code paths, plus one dead-code item. All four are
+fixed together in this hotfix; the performance budget for v0.3.0 is
+voided in favour of correctness.
+
+- **F1 — `poly1305_final` h≥p branch**. Final reduction was `and #$04
+  / beq @no_reduce`, taking data-dependent branches based on whether
+  `(h+5)` overflows 2^130. Replaced with a branchless mask-blend:
+  build a mask byte `$FF`/`$00` via `and #$04 / cmp #$01 / lda #0 /
+  sbc #0 / eor #$FF`, then a straight-line 17-byte loop
+  `lda h / eor product / and mask / eor h / sta h` conditionally
+  selects the reduced value without branching. Paper-check of the
+  mask build confirms the four truth-table cases. Cost: ~+280 cy on
+  the per-tag final step (negligible vs n=1024 packet cost).
+
+- **F2 — `rotl32_1_zp` / `rotr32_1_zp` wrap branches**. The macro
+  versions used `bcc :+` to skip the wrap-around byte of the ZP
+  rotation, so the cycle count varied 37/44 cy with the high/low bit
+  of the input. Rewrote as a flat `asl / rol chain` (rotl) and `lsr
+  / ror chain` (rotr): pre-extract the wrap bit into C, then do a
+  four-byte `rol`/`ror` read-modify-write chain against the ZP
+  word. Both variants are now 25 cy flat. **Net win**: 80 calls per
+  chacha20_block × (37/44 − 25) cy ≈ **−1 346 cy per block**,
+  measured identically on both profiles.
+
+- **F3 — `mult66` `(zp),y` page-cross leak (Profile B only)**. S12's
+  `mult66` quarter-square primitive used `(zp),y`-indexed loads into
+  two 512-byte `sqtab2_lo`/`sqtab2_hi` tables; the 5→6 cy page-cross
+  penalty on `(zp),y` is a secret-dependent leak whenever
+  `(a+b) & $FF` crosses a page boundary. Structural revert: dropped
+  mult66 + the sqtab2 build step, and introduced a new CT-clean
+  primitive `ct_mul_8x8` in `poly1305_lib.s` modeled on the pre-S12
+  `mul_8x8` shape but with two branchless patches:
+  1. `abs,x` loads into `sqtab_lo`/`sqtab_hi` with the high byte of
+     the load address **SMC-patched per-call** based on the carry-out
+     of `(a+b)` — so the load is always `abs,x` (4 cy, no page-cross
+     penalty), and the `(a+b) >= 256` bit is folded into the address
+     hi byte rather than a branch.
+  2. Sign-mask branchless `|a-b|` via `sec / sbc / sta diff / lda #0
+     / sbc #0 / sta sign_mask / eor diff / sec / sbc sign_mask`,
+     producing `$00`/`$FF` from the borrow-out without a conditional
+     branch. Full design in
+     `.claude/tasks/.../audit_drafts/F3_FIX_DESIGN.md` §3.1.
+
+  Also saves **−512 B BSS** by dropping the second sqtab pair. The
+  caller in `poly1305_multiply` now writes two SMC immediate bytes
+  per partial product (`smc_sum_a_imm+1`, `smc_diff_a_imm+1`)
+  instead of the three mult66 slots.
+
+- **Dead-code rewrite (deviation from brief)**. The brief called for
+  deleting `rotl32_1` / `rotr32_1` in `word32_lib.s`. On inspection
+  these are not actually dead: `rotr32_7` falls through to
+  `rotl32_1`, and `rotl32_7` tail-calls `rotr32_1`, and both
+  `rotl32_7`/`rotr32_7` are in the test harness's hard-required
+  label list (`tools/test_chacha20_poly1305.py:1018`, which
+  `sys.exit(1)`s on missing labels). The task brief forbids editing
+  the test harness. Decision: **rewrite branchless in-place** rather
+  than delete. Same CT cleanliness benefit as the F2 fix; preserves
+  the test surface. Surfaced in the commit body.
+
+**Measured cycle impact (seed 7539, 3-sample min)**:
+
+- Profile A: `chacha20_block` 43 135 cy (−1 346, F2 win);
+  `poly1305_block` 11 948 cy (flat); `aead_encrypt n=0` 186 182 cy
+  (−877); `aead_encrypt n=1024` 1 686 764 cy (−22 405, **−1.31%**,
+  now −71.8% vs sprint-0 baseline). Profile A is a small net **win**
+  on every metric — F1 and F3 don't touch its hot path (Shoup tables
+  bypass `ct_mul_8x8` at runtime), and F2 is pure benefit.
+- Profile B: `chacha20_block` 43 135 cy (−1 346, F2 win);
+  `poly1305_block` 37 844 cy (**+10 649 cy, +39.16%** — F3, 272
+  partial-products per block × ~39 cy/pp primitive overhead vs
+  mult66); `aead_encrypt n=0` 84 560 cy (+10 287, +13.85%);
+  `aead_encrypt n=1024` 3 259 490 cy (**+668 852, +25.82%**, now
+  **−45.4% vs sprint-0** baseline — still the best Profile B
+  result before S12). The regression is honest and expected: mult66
+  collapsed the per-call overhead of a reusable primitive into an
+  inlined page-indexed dance that happened to be fast *and* leaky.
+  Removing the leak removes the shortcut.
+
+**Correctness gates** (all PASS): 214/214 tests both profiles;
+15000/15000 `tools/audit_cross_check.py` vs pyca/cryptography on
+Profile A (397.7 s) and Profile B (743.3 s); 65 536/65 536
+brute-force check of `ct_mul_8x8` against Python `a*b` reference
+via `tools/ct_mul_brute_check.py` (2.7 s). PRG md5 stable across
+two clean rebuilds — Profile A
+`313300ff4d86cefc6d3b195563c1383d`, Profile B
+`a0e4b682fa454c6b8e2d8a04297333ab`.
+
+**Profile A is essentially unchanged structurally** — the Shoup
+per-r tables still own the n=1024 hot path, so F3 (which lives in
+Profile B's `poly1305_multiply`) has no runtime effect there. The
+small Profile A wins are pure F2 credit. The v0.2-optimized
+"−64.7% at n=1024" narrative is preserved for Profile A and
+strengthened to **−71.8%** by F2 alone. Profile B gives up ground
+but remains comfortably below the sprint-0 baseline and above the
+pre-S12 shape on n=0. The authoritative CT design document is
+`audit_drafts/F3_FIX_DESIGN.md` (specifically §3.1 for the adopted
+CT-Quarter-Square shape).
 
 ---
 
