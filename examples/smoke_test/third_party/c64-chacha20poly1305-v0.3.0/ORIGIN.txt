@@ -1,0 +1,35 @@
+c64-ChaCha20-Poly1305 vendored library snapshot
+=================================================
+
+Upstream:  https://github.com/JC-000/c64-ChaCha20-Poly1305
+Tag:       v0.3.0 (simulated; library contents taken from current HEAD)
+Commit:    83f208f54e15c290a6ac082ed9b562c87d8748c3
+Unpacked:  examples/smoke_test/third_party/c64-chacha20poly1305-v0.3.0/
+
+This directory is a snapshot simulation of what a downstream consumer
+(e.g. c64-wireguard, c64-https) would unpack from a GitHub release
+tarball:
+
+    tar xzf c64-chacha20poly1305-v0.3.0.tar.gz
+    mv c64-ChaCha20-Poly1305-0.3.0 third_party/c64-chacha20poly1305-v0.3.0
+
+Contents mirrored from the upstream repo at the listed commit:
+
+    src/lib/*.s           library sources (chacha20, poly1305, AEAD, data,
+                          word32, constants — the ca65 modules that link
+                          into the consumer's build)
+    src/include/ca65hl/   vendored ca65hl macro package (BSD-3-Clause,
+                          see ca65hl/LICENSE)
+    src/include/smc.inc   self-modifying-code helpers
+    src/c64.cfg           upstream linker config (for reference only —
+                          this example uses its own smoke_test.cfg at
+                          the parent directory)
+
+The consumer's build (see ../../Makefile) points ca65 at
+src/lib/ + src/include/ and links the library objects together with
+the consumer's own main module (../../smoke_test.s) against the
+consumer's own linker config (../../smoke_test.cfg).
+
+No edits have been made to the vendored files. A real release would
+ship these under a top-level c64-ChaCha20-Poly1305-0.3.0/ directory;
+the flatter layout here just shortens the example paths.
