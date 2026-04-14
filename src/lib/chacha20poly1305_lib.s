@@ -24,6 +24,7 @@
 ; =============================================================================
 
 .include "constants_lib.s"
+.include "smc.inc"
 
 ; Cross-module imports: chacha20_lib entry points.
 .import chacha20_init, chacha20_block, chacha20_encrypt
@@ -344,13 +345,12 @@ aead_process_padded:
         asl                     ; 6k
         clc
         adc #<@cp_base
-        sta @partial_smc+1
+        SMC_StoreLowByte @partial_smc
         lda #0
         adc #>@cp_base
-        sta @partial_smc+2
+        SMC_StoreHighByte @partial_smc
         ldy #0
-@partial_smc:
-        jmp $0000
+        SMC @partial_smc, { jmp $0000 }
 @cp_base:
 @cp15:  lda (zp_ptr1),y
         sta aead_scratch,y
@@ -408,13 +408,12 @@ aead_process_padded:
         adc zp_tmp2             ; 3m
         clc
         adc #<@zf1
-        sta @zfill_smc+1
+        SMC_StoreLowByte @zfill_smc
         lda #0
         adc #>@zf1
-        sta @zfill_smc+2
+        SMC_StoreHighByte @zfill_smc
         lda #0
-@zfill_smc:
-        jmp $0000
+        SMC @zfill_smc, { jmp $0000 }
 @zf1:   sta aead_scratch+1
 @zf2:   sta aead_scratch+2
 @zf3:   sta aead_scratch+3
