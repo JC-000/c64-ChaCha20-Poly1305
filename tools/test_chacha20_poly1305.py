@@ -18,7 +18,6 @@ import json
 import os
 import random
 import struct
-import subprocess
 import sys
 import time
 
@@ -995,21 +994,18 @@ def main():
     random.seed(seed)
     print(f"Random seed: {seed} (reproduce with --seed {seed})")
 
-    # Build unless caller says otherwise
-    if not os.environ.get("C64_SKIP_BUILD"):
-        print("Building...")
-        subprocess.run(["make", "clean"], capture_output=True,
-                       cwd=PROJECT_ROOT)
-        result = subprocess.run(["make"], capture_output=True, text=True,
-                                cwd=PROJECT_ROOT)
-        if result.returncode != 0:
-            print(f"Build failed:\n{result.stderr}")
-            sys.exit(1)
-
+    # The test harness does NOT auto-rebuild — callers must pre-build the
+    # target profile via `make profile-a` or `make profile-b`. This matches
+    # tools/benchmark_chacha20_poly1305.py and examples/smoke_test/run_smoke_test.py.
+    # The C64_SKIP_BUILD env var is retained as a no-op for backward
+    # compatibility with pre-v0.3.x callers.
     if not os.path.exists(PRG_PATH):
-        print(f"FATAL: {PRG_PATH} not found after build")
+        print(f"FATAL: {PRG_PATH} not found.")
+        print("Pre-build the target profile before running this harness:")
+        print("  make profile-a   # long-message optimized")
+        print("  make profile-b   # short-message optimized")
         sys.exit(1)
-    print(f"Built: {PRG_PATH}")
+    print(f"Using: {PRG_PATH}")
 
     labels = Labels.from_file(LABELS_PATH)
     required = [

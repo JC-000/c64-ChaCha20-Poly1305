@@ -305,3 +305,13 @@ wiring is correct and you can move on to your real consumer code.
 
 See `examples/smoke_test/run_smoke_test.py` for a minimal
 VICE-based pass/fail harness that you can adapt into your CI.
+
+### Testing from a consumer project
+
+**Test harness convention**: `tools/test_chacha20_poly1305.py` expects
+the caller to pre-build the target profile via `make profile-a` or
+`make profile-b`. It does NOT auto-rebuild. This matches
+`tools/benchmark_chacha20_poly1305.py` and
+`examples/smoke_test/run_smoke_test.py`. The older `C64_SKIP_BUILD=1`
+env var is retained as a no-op for backward compatibility with
+pre-v0.3.x callers.
