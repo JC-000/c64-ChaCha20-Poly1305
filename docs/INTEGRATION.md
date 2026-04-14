@@ -1,10 +1,4 @@
-# Integration guide (draft)
-
-> **Drafted by**: task #13 integrator, 2026-04-12.
-> **To be compiled into**: `docs/INTEGRATION.md` by task #15.
-> **Cross-links to fill in**: `docs/MEMORY_MAP.md` (task #11),
-> `docs/API.md` (task #11), `docs/CT_ANALYSIS.md` (task #11),
-> `CHANGELOG.md` (task #14).
+# Integration guide
 
 ## Overview
 
@@ -167,7 +161,7 @@ position-independent so long as it is assembled into a contiguous
 region — but the sqtab / Shoup table addresses listed above are
 hard-coded in `poly1305_lib.s` and will NOT move with the segment.
 
-See `docs/MEMORY_MAP.md` (task #11) for the authoritative byte-level
+See `docs/MEMORY_MAP.md` for the authoritative byte-level
 map, including I/O register usage (`$DF01..$DF0A` REU DMA registers,
 Profile A `POLY1305_REU=1` only).
 
@@ -205,7 +199,7 @@ call it once at boot.
 
 ## API reference
 
-See `docs/API.md` (task #11) for the full public symbol list,
+See `docs/API.md` for the full public symbol list,
 calling conventions, clobbered registers, and per-routine cycle
 counts. The `examples/smoke_test/smoke_test.s` program exercises the
 subset that actually matters for a consumer (init + encrypt +
