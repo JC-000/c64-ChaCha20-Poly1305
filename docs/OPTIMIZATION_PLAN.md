@@ -98,8 +98,8 @@ aead_encrypt n=1024 (cy), delta vs baseline (aead_encrypt n=1024).
 | S13 C8 prelude + C5 row-0 bake (partial) | `e22e445` |         44 480 |         11 950 |           1 709 243 |        -71.4% |
 | CT fix: F1+F2+F3 ct_mul_8x8 (Prof A)    | `dc4c575` |         43 135 |         11 948 |           1 686 764 |        -71.8% |
 | CT fix: F1+F2+F3 ct_mul_8x8 (Prof B)    | `dc4c575` |         43 135 |         37 844 |           3 259 490 |        -45.4% |
-| Task #9: SMC macro wiring (cosmetic, A) | PENDING   |         43 135 |         11 948 |           1 686 757 |         ~0.0% |
-| Task #9: SMC macro wiring (cosmetic, B) | PENDING   |         43 132 |         37 844 |           3 259 490 |         ~0.0% |
+| Task #9: SMC macro wiring (cosmetic, A) | `3d560b5` |         43 135 |         11 948 |           1 686 757 |         ~0.0% |
+| Task #9: SMC macro wiring (cosmetic, B) | `3d560b5` |         43 132 |         37 844 |           3 259 490 |         ~0.0% |
 
 **Note on S1**: the `chacha20_block` delta is only −89 cy (vs plan
 estimate −20 000 cy). C1 in isolation does not eliminate much: the QR
