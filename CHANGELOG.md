@@ -6,6 +6,71 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-14
+
+A patch release on top of v0.3.0 covering two post-release polish
+PRs plus a small set of distribution and documentation cleanups.
+The shipped library binaries are **bit-identical to v0.3.0** on
+both profiles; consumers who already integrate v0.3.0 PRGs need
+not re-integrate for v0.3.1.
+
+### Added
+- **`LICENSE` at repo root — MIT** (Copyright © 2026 JC-000).
+  Vendored third-party code under `src/include/` retains upstream
+  licenses: `ca65hl/` MIT (Julian Terrell), `smc.inc` zlib license
+  (Christian Krüger). README gains a short License section.
+
+### Changed
+- **SMC sites now use `src/include/smc.inc` macros** (PR #17).
+  Five hand-rolled self-modifying-code sites have been converted to
+  the matching `smc.inc` `SMC` / `SMC_StoreLowByte` /
+  `SMC_StoreHighByte` / `SMC_StoreValue` macros: the two AEAD
+  partial-block dispatch sites in `chacha20poly1305_lib.s`
+  (`@partial_smc`, `@zfill_smc`); the Profile A `shoup_init`
+  incremental Shoup-table build in `poly1305_lib.s` (six page-byte
+  patches plus one immediate); and the two Profile B `ct_mul_8x8`
+  primitive sites in `poly1305_lib.s` (the self-patched abs,x
+  hi-byte patches inside the primitive and the J-outer immediate
+  patches in `poly1305_multiply`). Placeholder bytes inside each
+  `SMC label, { statement }` block are preserved literally
+  (`#$00`, `lda $8000,x`, etc.), so the generated PRG is
+  bit-identical to v0.3.0 on both profiles. The cosmetic benefit
+  is removal of the `+1` / `+2` off-by-one footgun: future SMC
+  edits select the operand byte by name instead of by hand-counted
+  offset.
+
+### Fixed
+- **`tools/test_chacha20_poly1305.py` no longer destructively
+  auto-rebuilds** (PR #16). The test harness previously ran
+  `make clean && make` unconditionally at startup, which defaulted
+  to Profile A regardless of which profile had been pre-built.
+  This caused sequential in-session Profile A → Profile B
+  test-then-bench flows to silently return wrong-profile numbers
+  (a Profile B bench against a freshly-clobbered Profile A PRG).
+  The harness now expects the caller to pre-build via
+  `make profile-a` or `make profile-b` and fails loudly if
+  `build/c64_chacha20_poly1305.prg` is missing. The
+  `C64_SKIP_BUILD=1` environment variable is retained as a no-op
+  for backward compatibility with consumer scripts that set it.
+  Aligns the harness with the bench harness and `examples/smoke_test/`
+  pre-build conventions.
+
+### Docs
+- `docs/INTEGRATION.md` (PR #16): added a "Testing from a
+  consumer project" subsection documenting the pre-build
+  convention shared by `tools/test_chacha20_poly1305.py`,
+  `tools/benchmark_chacha20_poly1305.py`, and
+  `examples/smoke_test/run_smoke_test.py`.
+- `docs/OPTIMIZATION_PLAN.md` (PR #17): added a Task #9 row to
+  the progression table and a note explaining the cosmetic
+  refactor.
+
+### Security
+- **No security-relevant changes.** v0.3.0's constant-time posture
+  (F1/F2/F3 resolved, GREEN audit verdict in `docs/AUDIT.md`) is
+  unchanged. PRG binaries are bit-identical to v0.3.0; consumers
+  that ship v0.3.0 binaries need not re-integrate for v0.3.1.
+
 ## [0.3.0] — 2026-04-13
 
 First release of the library as an external-consumer target. Two
