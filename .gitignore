@@ -1,4 +1,5 @@
 build/
+examples/smoke_test/build/
 *.o
 *.pyc
 __pycache__/
