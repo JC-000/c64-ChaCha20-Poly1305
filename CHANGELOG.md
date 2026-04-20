@@ -6,6 +6,40 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Configurable REU destination for Profile A sqtab backup**
+  (issue #19). Two new `.ifndef`-guarded equates in
+  `src/lib/constants_lib.s` — `POLY1305_REU_BANK` (default `0`) and
+  `POLY1305_REU_OFFSET` (default `$0000`) — let downstream projects
+  relocate the 1 KB quarter-square table that `poly1305_lib_init`
+  stashes to REU under `POLY1305_REU=1`. Motivating use case:
+  co-installing this library with `c64-x25519`, which already
+  occupies REU banks 0-1. Override at assemble time via
+  `ca65 --asm-define POLY1305_REU_BANK=3
+  --asm-define POLY1305_REU_OFFSET=$1000`, or by `.include`'ing a
+  project-wide layout header that defines them before
+  `constants_lib.s` is included. The equates are gated on
+  `POLY1305_PROFILE_LONG` + `POLY1305_REU`, so Profile B and non-REU
+  Profile A builds are unaffected.
+
+### Changed
+- **Profile A + `POLY1305_REU=1` PRG grows by 8 bytes** at default
+  equates (issue #19). The compact 11-byte `lda #$00 / sta $DF04 /
+  sta $DF05 / sta $DF06` sequence inside `poly1305_lib_init`'s
+  stash block and `poly1305_reu_restore` is now a 15-byte
+  override-aware form (`lda #<POLY1305_REU_OFFSET` / `sta $DF04` /
+  `lda #>POLY1305_REU_OFFSET` / `sta $DF05` /
+  `lda #POLY1305_REU_BANK` / `sta $DF06`) because the three DMA
+  register destinations no longer share a value. +4 bytes per block
+  × 2 blocks = 8 bytes total. The shift propagates through labels
+  in `shoup_init`, `poly1305_clamp`, `sqtab_init`, and `mul_8x8`
+  until the `.align 256` boundary at `poly_reduce_shl6_tab` ($1D00)
+  absorbs it. Runtime semantics with default equates are unchanged.
+- **Non-REU Profile A PRG is bit-identical to v0.3.1** (md5
+  `313300ff4d86cefc6d3b195563c1383d` preserved). The new code lives
+  entirely inside `.ifdef POLY1305_REU`, so the default `make
+  profile-a` build does not touch it.
+
 ## [0.3.1] — 2026-04-14
 
 A patch release on top of v0.3.0 covering two post-release polish

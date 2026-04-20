@@ -147,4 +147,26 @@
 .ifdef POLY1305_PROFILE_LONG
     r_tab_lo = $6000
     r_tab_hi = $7000
+
+; --- REU DMA layout (Profile A + POLY1305_REU only) ---
+; When POLY1305_REU is defined, poly1305_lib_init stashes the 1 KB
+; quarter-square table to REU so that poly1305_reu_restore can reload
+; it in ~1.1k cycles if external code clobbers $8000..$83FF. The
+; destination bank/offset are overridable via these equates so that
+; downstream projects linking multiple REU consumers (e.g. both this
+; library and c64-x25519, which occupies banks 0-1) can allocate
+; non-conflicting REU regions. Defaults preserve pre-v0.3.2 behavior
+; (bank 0, offset $0000) — see CHANGELOG for the PRG byte-size note.
+;
+; Override at assemble time via `ca65 --asm-define POLY1305_REU_BANK=3`
+; or by .include'ing a project-wide layout header that defines these
+; before this file is .include'd.
+.ifdef POLY1305_REU
+  .ifndef POLY1305_REU_BANK
+    POLY1305_REU_BANK = 0
+  .endif
+  .ifndef POLY1305_REU_OFFSET
+    POLY1305_REU_OFFSET = $0000
+  .endif
+.endif
 .endif

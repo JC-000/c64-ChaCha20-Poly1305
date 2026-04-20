@@ -82,9 +82,11 @@ poly1305_lib_init:
 .ifdef POLY1305_REU
         ; DMA sqtab (1024 bytes at $8000) to REU bank 0, offset $0000.
         ; C64 → REU transfer (command = $90: stash, no autoload, no FF00 trigger).
-        lda #$00
+        lda #<POLY1305_REU_OFFSET
         sta $DF04               ; REU base address lo
+        lda #>POLY1305_REU_OFFSET
         sta $DF05               ; REU base address hi
+        lda #POLY1305_REU_BANK
         sta $DF06               ; REU bank
         lda #<sqtab_lo
         sta $DF02               ; C64 base address lo
@@ -116,9 +118,11 @@ poly1305_lib_init:
 ; Clobbers: A
 ; =============================================================================
 poly1305_reu_restore:
-        lda #$00
+        lda #<POLY1305_REU_OFFSET
         sta $DF04               ; REU base address lo
+        lda #>POLY1305_REU_OFFSET
         sta $DF05               ; REU base address hi
+        lda #POLY1305_REU_BANK
         sta $DF06               ; REU bank
         lda #<sqtab_lo
         sta $DF02               ; C64 base address lo

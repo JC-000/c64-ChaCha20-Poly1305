@@ -32,6 +32,17 @@ ld65 label output by the Makefile).
   `POLY1305_REU=1`, backs up the quarter-square table to REU for
   fast restore if clobbered.
 
+  The REU destination bank and offset are configurable via
+  `POLY1305_REU_BANK` (default `0`) and `POLY1305_REU_OFFSET` (default
+  `$0000`) so downstream projects that link multiple REU consumers
+  (e.g. this library alongside `c64-x25519`, which occupies REU banks
+  0-1) can allocate non-conflicting regions. Override at assemble
+  time via `ca65 --asm-define POLY1305_REU_BANK=3
+  --asm-define POLY1305_REU_OFFSET=$1000`, or by `.include`'ing a
+  project-wide layout header that defines these before
+  `constants_lib.s` is included. With the defaults the runtime
+  behaviour is identical to prior releases. See issue #19.
+
 - **Profile B** uses the portable quarter-square multiply (1 KB table).
   Lower per-packet init cost (87 k vs 579 k cy at n=0), better for
   short packets such as WireGuard handshakes and TLS 1.3 alerts.
