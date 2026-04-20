@@ -68,7 +68,7 @@ both: profile-a profile-b
 
 # Convert ld65 label format to VICE format (cosmetic; harness reads either).
 define FIXLABELS
-sed -i 's/^al \([0-9a-fA-F]*\)/al C:\1/' $(1)
+sed 's/^al \([0-9a-fA-F]*\)/al C:\1/' $(1) > $(1).tmp && mv $(1).tmp $(1)
 endef
 
 # ------------------------------------------------------------------------

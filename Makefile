@@ -51,7 +51,7 @@ all: profile-a
 
 # Convert ld65 label format (al XXXXXX .name) to VICE format (al C:XXXX .name)
 define FIXLABELS
-sed -i 's/^al \([0-9a-fA-F]*\)/al C:\1/' $(1)
+sed 's/^al \([0-9a-fA-F]*\)/al C:\1/' $(1) > $(1).tmp && mv $(1).tmp $(1)
 endef
 
 # ---- Profile A: POLY1305_PROFILE_LONG = 1 (default, "long message" path) ----
