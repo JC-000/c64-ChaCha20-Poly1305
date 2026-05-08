@@ -195,11 +195,74 @@ def measure_cycles(
     samples: int = 5,
     mhz: int = 1,
     capture_port: int = 11002,
-    capture_settle_seconds: float = 0.5,
+    capture_settle_seconds: float = 0.3,
     capture_drain_seconds: float = 0.5,
     per_iteration_timeout: float = 30.0,
+    sentinel_addr: int = 0x0350,
+    status_addr: int = 0x0351,
+    trampoline_addr: int = 0x0360,
+    rearm_addr: int = 0x0352,
 ) -> list[int]:
-    """Run ``addr`` ``samples`` times under DebugCapture and return cycle deltas."""
+    """Run ``addr`` ``samples`` times under DebugCapture and return per-sample cycle counts.
+
+    .. warning::
+
+       This path depends on the U64E FPGA UDP debug stream delivering
+       at least one cycle for every CPU PHI2 cycle in the capture
+       window. On healthy hardware/network at 1 MHz with 6510-only
+       mode, delivery ratio is ≈ 1.0 (probed at 1.029 here on a fresh
+       boot) and the marker parse hits every JSR/STA pair. After
+       sustained workload (e.g. a ~10 min adjacent test agent), the
+       same setup degrades to 30-90% delivery, sequence gaps run into
+       the thousands, and marker detection fails with a RuntimeError.
+       For benchmarking workloads where reliability matters more than
+       avoiding 6502 CIA programming, the in-RAM CIA-timer wrapper
+       used by ``tools/benchmark_chacha20_poly1305.py`` is the
+       fall-back: it shares the same wrapper code with the VICE path
+       and is cycle-exact (no UDP / FPGA rate path involved).
+
+    Strategy:
+
+    * Sets debug stream mode to ``"6510 Only"`` so every captured entry is
+      one PHI2 CPU cycle with the address bus reflecting the current
+      access. VIC cycles are filtered at the FPGA source.
+    * Sets CPU turbo to 1 MHz for the capture window — the only setting
+      where DebugCapture delivers a near-complete trace (the FPGA's UDP
+      emit cap is ~864k entries/sec, comfortably above 1 MHz).
+    * Pre-installs the trampoline (one warm-up SYS) BEFORE starting
+      capture. This keeps BASIC's SYS-handler activity out of the trace.
+    * Runs *samples* re-arms under capture; each re-arm fires exactly one
+      JSR through the trampoline.
+    * Parses the trace to find marker pairs: the JSR opcode fetch at
+      ``trampoline_addr`` (start) and the STA $0351 opcode fetch at
+      ``trampoline_addr + 3`` (end). Each pair brackets one routine
+      execution.
+    * Reports cycle count = (CPU cycles between markers) - 12, matching
+      the VICE CIA-timer wrapper convention (which subtracts a JSR + RTS
+      calibration baseline = 12 cy).
+
+    The 12-cycle subtraction breaks down as: 6 cy for the JSR opcode
+    itself (included in the marker window) + 6 cy for the routine's
+    final RTS (included in the routine body). VICE's wrapper measures
+    ``JSR target + body + ... + STA $0351`` against ``JSR rts_stub
+    + RTS + ... + STA $0351``, so the diff (and our cycle count - 12)
+    is the routine body excluding its final RTS.
+
+    :param target: TestTarget with ``backend == "u64"``.
+    :param client: Connected ``Ultimate64Client`` (NOT exposed on
+        ``TestTarget`` — caller must obtain via ``target.transport._client``
+        or by constructing one separately. See module docstring.)
+    :param addr: Routine entry-point address.
+    :param samples: Number of cycle samples to collect.
+    :param mhz: Must be 1 (DebugCapture is cycle-accurate only at 1 MHz).
+    :param capture_port: UDP port for the U64 to stream debug entries to.
+    :param capture_settle_seconds: Wait between turbo set and capture
+        start (FPGA settle time). Also used after stream_debug_start.
+    :param capture_drain_seconds: Wait after stream_debug_stop before
+        cap.stop() so trailing UDP packets reach us.
+    :param per_iteration_timeout: Per-sample sentinel-poll timeout.
+    :return: List of *samples* cycle counts.
+    """
     backend = getattr(target, "backend", None)
     if backend != "u64":
         raise RuntimeError(f"measure_cycles requires u64 backend, got {backend!r}")
@@ -208,23 +271,77 @@ def measure_cycles(
 
     from c64_test_harness import set_turbo_mhz
     from c64_test_harness.backends.u64_debug_capture import DebugCapture
+    from c64_test_harness.backends.ultimate64_helpers import (
+        DEBUG_MODE_6510,
+        get_debug_stream_mode,
+        set_debug_stream_mode,
+    )
 
     if mhz != 1:
         raise ValueError("DebugCapture is only cycle-accurate at 1 MHz")
+    if samples < 1:
+        raise ValueError("samples must be >= 1")
+
+    # Configure FPGA: 6510-only stream mode (clean CPU traces) + 1 MHz CPU.
+    orig_debug_mode = get_debug_stream_mode(client)
+    set_debug_stream_mode(client, DEBUG_MODE_6510)
     set_turbo_mhz(client, mhz)
     time.sleep(capture_settle_seconds)
 
+    # Warm-up: pre-install trampoline (or re-arm with new addr) BEFORE
+    # capture starts so BASIC SYS-handler noise stays out of the trace.
+    # run_subroutine() runs the routine once and parks at the BEQ loop.
+    run_subroutine(
+        target,
+        addr,
+        client=client,
+        timeout=per_iteration_timeout,
+        sentinel_addr=sentinel_addr,
+        status_addr=status_addr,
+        trampoline_addr=trampoline_addr,
+        rearm_addr=rearm_addr,
+    )
+
     local = _local_ip_for(client.host)
-    deltas: list[int] = []
-    cap = DebugCapture(port=capture_port)
+    # 8 MiB recv buffer (kern.ipc.maxsockbuf cap on macOS-26) — at 1 MHz
+    # with 6510-only mode the FPGA emits at the CPU rate (~4 MB/s of bus
+    # cycle entries). The bench interleaves REST calls with capture, and
+    # GIL-contended pauses during HTTP round-trips would otherwise overflow
+    # the socket buffer (visible as massive
+    # ``netstat -s -p udp | grep "full socket buffers"`` deltas). 8 MiB
+    # gives ~2 s of headroom which spans the longest single-routine
+    # capture window (aead_encrypt n=1024 ≈ 1.7 s wall clock at 1 MHz).
+    cap = DebugCapture(port=capture_port, recv_buf_size=8 * 1024 * 1024)
     cap.start()
     started = False
     try:
         client.stream_debug_start(f"{local}:{capture_port}")
         started = True
+        # Brief settle so the stream is steady when the first re-arm fires.
+        time.sleep(capture_settle_seconds)
+        transport = target.transport
         for _ in range(samples):
-            run_subroutine(target, addr, client=client, timeout=per_iteration_timeout)
-            time.sleep(capture_settle_seconds)
+            # Fast inline re-arm: minimum REST round-trips during the
+            # capture window. _u64_rearm does 4 REST calls (zero
+            # sentinel + zero status + flush-read + write rearm); we
+            # skip status zero (unread by measure) and the flush-read
+            # (the FIFO ordering of writes is sufficient on the U64
+            # REST API).
+            write_bytes(transport, sentinel_addr, bytes([0x00]))
+            write_bytes(transport, rearm_addr, bytes([_REARM_FIRE]))
+            # Poll sentinel — sleep coarsely so the recv thread gets the
+            # GIL during routine execution and drains the UDP buffer.
+            deadline = time.monotonic() + per_iteration_timeout
+            while time.monotonic() < deadline:
+                if read_bytes(transport, sentinel_addr, 1)[0] == _SENTINEL_DONE:
+                    break
+                time.sleep(0.05)
+            else:
+                raise TimeoutError(
+                    f"U64 trampoline did not complete within "
+                    f"{per_iteration_timeout}s at sentinel "
+                    f"${sentinel_addr:04X}"
+                )
     finally:
         if started:
             try:
@@ -233,8 +350,87 @@ def measure_cycles(
                 pass
         time.sleep(capture_drain_seconds)
         result = cap.stop()
+        # Best-effort restore of the original debug stream mode.
+        try:
+            set_debug_stream_mode(client, orig_debug_mode)
+        except Exception:
+            pass
 
-    cycles_per_sample = result.total_cycles // max(samples, 1)
-    for _ in range(samples):
-        deltas.append(cycles_per_sample)
-    return deltas
+    return _parse_marker_pairs(
+        result.trace,
+        jsr_addr=trampoline_addr,
+        sta_addr=trampoline_addr + 3,
+        expected_pairs=samples,
+        packets_dropped=result.packets_dropped,
+    )
+
+
+def _parse_marker_pairs(
+    trace: list,
+    *,
+    jsr_addr: int,
+    sta_addr: int,
+    expected_pairs: int,
+    packets_dropped: int,
+) -> list[int]:
+    """Extract per-sample CPU-cycle counts from a 6510-only trace.
+
+    Each iteration is bracketed by two markers on the address bus:
+
+    * ``jsr_addr`` — the JSR opcode fetch (start of one routine call).
+    * ``sta_addr`` — the STA $0351 opcode fetch immediately after the
+      routine returns.
+
+    Walks the trace finding the first ``jsr_addr`` cycle, then the next
+    ``sta_addr`` cycle, and counts entries between them (inclusive of
+    the JSR fetch, exclusive of the STA fetch). Subtracts 12 to drop
+    the JSR overhead (6 cy) and the routine's final RTS (6 cy), so the
+    returned number is the routine body excluding its final RTS — the
+    same convention the VICE CIA-timer wrapper reports.
+
+    :param trace: ``list[BusCycle]`` from ``DebugCaptureResult.trace``.
+    :param jsr_addr: Address of the trampoline JSR opcode (e.g. $0360).
+    :param sta_addr: Address of the trampoline STA $0351 opcode
+        (typically ``jsr_addr + 3``).
+    :param expected_pairs: Number of (jsr, sta) pairs we expect.
+    :param packets_dropped: Sequence-number gap count from the capture
+        (used only for diagnostics on length mismatch).
+    :return: List of cycle counts, one per matched pair.
+    :raises RuntimeError: If we found fewer pairs than expected and the
+        trace shows packet drops or appears truncated.
+    """
+    cycles: list[int] = []
+    n = len(trace)
+    i = 0
+    while i < n and len(cycles) < expected_pairs:
+        # Find next JSR fetch.
+        while i < n and trace[i].address != jsr_addr:
+            i += 1
+        if i >= n:
+            break
+        start = i
+        # Find the matching STA fetch (must come AFTER the JSR fetch).
+        j = i + 1
+        while j < n and trace[j].address != sta_addr:
+            j += 1
+        if j >= n:
+            break
+        # Cycles in [start, j): includes JSR (6 cy) + body (with final RTS).
+        # VICE convention subtracts 12 (JSR + RTS) to report body work.
+        count = j - start - 12
+        if count < 0:
+            # Defensive — would only happen if the trampoline was malformed.
+            count = 0
+        cycles.append(count)
+        # Advance past this pair to avoid re-matching.
+        i = j + 1
+
+    if len(cycles) < expected_pairs:
+        raise RuntimeError(
+            f"DebugCapture marker parse found {len(cycles)} of "
+            f"{expected_pairs} expected JSR/STA pairs at "
+            f"jsr=${jsr_addr:04X}/sta=${sta_addr:04X} "
+            f"(trace length={n}, packets_dropped={packets_dropped}). "
+            "Likely capture truncation or trampoline mis-alignment."
+        )
+    return cycles
