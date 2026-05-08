@@ -20,8 +20,22 @@ Usage:
 
 Requires: Python 3.10+, c64_test_harness, VICE x64sc.
 
-All timing is via the c64-test-harness ViceInstanceManager / jsr() API.
+All timing is via the c64-test-harness create_manager / jsr() API.
 Use `min` of N samples (VICE binary monitor occasionally injects stalls).
+
+Backend selection:
+    --backend vice  (default; honors $C64_BACKEND, fallback "vice")
+    --backend u64   (currently emits a banner and exits with no rows;
+                     see TODO below for the U64 cycle-timing path).
+
+TODO(u64): wire up cycle-accurate timing on Ultimate 64. The CIA1 chained
+Timer A+B wrapper itself is portable 6502, but the surrounding harness
+glue uses jsr() (VICE-only checkpoints). On U64 we'd need to (a) drop CPU
+to 1 MHz via set_turbo_mhz(client, 1) so DebugCapture is cycle-accurate,
+or (b) use a sentinel/poll trampoline pattern (see
+c64-test-harness/tests/test_u64_turbo_bench_live.py for the canonical
+shape) instead of jsr(). The c64-test skill REFERENCE.md and the
+"DebugCapture" section have the details.
 """
 
 import argparse
@@ -34,7 +48,7 @@ import time
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
     read_bytes,
     write_bytes,
     jsr,
@@ -309,17 +323,31 @@ def setup_aead_decrypt(transport, labels, msg_len):
 # Benchmark driver
 # ---------------------------------------------------------------------------
 
-def run(samples=DEFAULT_SAMPLES):
-    # Start VICE
+def run(samples=DEFAULT_SAMPLES, backend="vice"):
+    # Start emulator / connect to hardware
     if not os.path.exists(PRG_PATH):
         subprocess.run(["make"], cwd=PROJECT_ROOT, check=True)
+
+    if backend == "u64":
+        # Cycle-accurate timing on U64 needs a separate harness path
+        # (see TODO(u64) in module docstring). For now, emit a banner and
+        # produce no rows — keeps the CLI honest rather than printing
+        # garbage cycle numbers. Verifier should run with C64_BACKEND=vice
+        # (or pass --backend vice) until the U64 path is wired.
+        print("=" * 64)
+        print("benchmark_chacha20_poly1305: U64 backend selected.")
+        print("Cycle-accurate rows are not yet implemented for U64.")
+        print("Re-run with --backend vice (or unset C64_BACKEND) to bench.")
+        print("See module docstring TODO(u64) for the planned approach.")
+        print("=" * 64)
+        return []
 
     cfg = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
     labels = Labels.from_file(LABELS_PATH)
 
     results = []  # list of (name, cycles, spread)
 
-    with ViceInstanceManager(config=cfg) as mgr:
+    with create_manager(backend=backend, vice_config=cfg) as mgr:
         inst = mgr.acquire()
         transport = inst.transport
         # Let BASIC settle.
@@ -390,9 +418,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument(
+        "--backend",
+        choices=("vice", "u64"),
+        default=os.environ.get("C64_BACKEND", "vice").lower(),
+        help="Backend to bench against. Defaults to $C64_BACKEND or 'vice'. "
+             "U64 currently emits a banner and skips rows — see "
+             "TODO(u64) in module docstring.",
+    )
     args = ap.parse_args()
     VERBOSE = args.verbose
-    run(samples=args.samples)
+    run(samples=args.samples, backend=args.backend)
 
 
 if __name__ == "__main__":

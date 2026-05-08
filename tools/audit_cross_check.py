@@ -63,7 +63,7 @@ from cryptography.hazmat.primitives.poly1305 import Poly1305 as _PycaPoly1305
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
     read_bytes,
     write_bytes,
     jsr,
@@ -563,8 +563,10 @@ def main():
         log.line(f"         total = {total_vectors}")
         log.line("=" * 64)
 
+        backend = os.environ.get("C64_BACKEND", "u64").lower()
+
         t0 = time.time()
-        with ViceInstanceManager(config=config) as mgr:
+        with create_manager(backend=backend, vice_config=config) as mgr:
             inst = mgr.acquire()
             transport = inst.transport
             time.sleep(1.5)  # KERNAL settle

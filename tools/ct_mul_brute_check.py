@@ -30,7 +30,7 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
     read_bytes,
     write_bytes,
     jsr,
@@ -103,9 +103,10 @@ def main() -> int:
     shim = build_shim(ct_mul_addr, prod_lo, prod_hi)
 
     cfg = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+    backend = os.environ.get("C64_BACKEND", "u64").lower()
 
     t_start = time.time()
-    with ViceInstanceManager(config=cfg) as mgr:
+    with create_manager(backend=backend, vice_config=cfg) as mgr:
         inst = mgr.acquire()
         transport = inst.transport
         time.sleep(1.0)  # let BASIC settle before first jsr

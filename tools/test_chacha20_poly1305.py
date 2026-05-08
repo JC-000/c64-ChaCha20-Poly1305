@@ -24,7 +24,7 @@ import time
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
     read_bytes,
     write_bytes,
     jsr,
@@ -1037,10 +1037,12 @@ def main():
         sound=False,
     )
 
+    backend = os.environ.get("C64_BACKEND", "u64").lower()
+
     t0 = time.time()
-    with ViceInstanceManager(config=config) as mgr:
+    with create_manager(backend=backend, vice_config=config) as mgr:
         inst = mgr.acquire()
-        print(f"VICE PID={inst.pid}, port={inst.port}")
+        print(f"Backend={mgr.backend} PID={inst.pid}")
         transport = inst.transport
 
         # The library PRG is a thin shell whose entry routine just RTSes,
@@ -1049,7 +1051,7 @@ def main():
         # will talk directly to the binary monitor.
         time.sleep(1.5)
 
-        print("VICE ready, running tests...")
+        print("Target ready, running tests...")
         passed, failed = run_tests(transport, labels, seed)
         mgr.release(inst)
 
