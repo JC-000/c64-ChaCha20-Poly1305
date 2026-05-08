@@ -4,9 +4,7 @@ benchmark_chacha20_poly1305.py - Cycle-accurate benchmark for the
 ChaCha20-Poly1305 C64 library.
 
 Measures exact cycle counts for the primary hot-path routines in the
-ChaCha20, Poly1305, and AEAD layers using a chained CIA #1 Timer A+B
-32-bit cycle counter (Timer A alone overflows for most of these routines).
-Model and rationale are borrowed from c64-polyval/tools/benchmark_polyval.py.
+ChaCha20, Poly1305, and AEAD layers.
 
 Benchmarked routines:
   chacha20_block                  - one 64-byte keystream block (cold state)
@@ -18,24 +16,34 @@ Benchmarked routines:
 Usage:
     python3 tools/benchmark_chacha20_poly1305.py [--samples N] [--verbose]
 
-Requires: Python 3.10+, c64_test_harness, VICE x64sc.
-
-All timing is via the c64-test-harness create_manager / jsr() API.
-Use `min` of N samples (VICE binary monitor occasionally injects stalls).
+Requires: Python 3.10+, c64_test_harness, VICE x64sc (for vice backend) or
+an Ultimate 64 reachable via U64_HOST (for u64 backend).
 
 Backend selection:
     --backend vice  (default; honors $C64_BACKEND, fallback "vice")
-    --backend u64   (currently emits a banner and exits with no rows;
-                     see TODO below for the U64 cycle-timing path).
+    --backend u64   (cycle counts via the same CIA-timer wrapper as VICE,
+                     invoked through the trampoline shim from
+                     tools/_u64_helpers.py)
 
-TODO(u64): wire up cycle-accurate timing on Ultimate 64. The CIA1 chained
-Timer A+B wrapper itself is portable 6502, but the surrounding harness
-glue uses jsr() (VICE-only checkpoints). On U64 we'd need to (a) drop CPU
-to 1 MHz via set_turbo_mhz(client, 1) so DebugCapture is cycle-accurate,
-or (b) use a sentinel/poll trampoline pattern (see
-c64-test-harness/tests/test_u64_turbo_bench_live.py for the canonical
-shape) instead of jsr(). The c64-test skill REFERENCE.md and the
-"DebugCapture" section have the details.
+Cycle counting:
+    Both backends use a chained CIA #1 Timer A+B 32-bit cycle counter
+    installed at $C080. The wrapper does SEI; save CIA state; CIA setup;
+    JSR target; CIA stop; restore CIA state; CLI; RTS. Calibration
+    measures wrapper(rts_stub) overhead and subtracts it per sample.
+    min of N samples reported (VICE binary monitor and U64 REST API
+    occasionally inject stalls; min is the stable cycle-accurate number).
+
+    The wrapper is pure 6502 and runs identically on real U64 hardware.
+    The only backend-dependent piece is how the wrapper is invoked —
+    jsr() (VICE binary monitor breakpoint) on VICE, run_subroutine()
+    (sentinel-poll trampoline shim) on U64.
+
+    DebugCapture (UDP cycle-stream) was tried on U64 first per the
+    canonical c64-test pattern but observed ~60-90% packet drops on the
+    available U64E firmware/network combo, so the marker-based parse
+    in _u64_helpers.py:measure_cycles cannot detect every JSR/STA pair
+    pair reliably. CIA-timer-in-RAM is cycle-exact on both backends.
+    See _u64_helpers.py for the full diagnosis.
 """
 
 import argparse
@@ -49,10 +57,14 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
+    keyboard,
     read_bytes,
+    wait_for_text,
     write_bytes,
     jsr,
 )
+
+from _u64_helpers import run_subroutine
 
 # ---------------------------------------------------------------------------
 # Project paths
@@ -323,24 +335,231 @@ def setup_aead_decrypt(transport, labels, msg_len):
 # Benchmark driver
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# U64-specific setup helpers (use run_subroutine instead of jsr for prep)
+# ---------------------------------------------------------------------------
+
+def _u64_calibrate(target, samples=10):
+    """U64 variant of calibrate(): JSRs the wrapper via the trampoline shim."""
+    transport = target.transport
+    patch_target(transport, RTS_STUB_ADDR)
+    vals = []
+    for _ in range(samples):
+        run_subroutine(target, LONG_WRAPPER_ADDR, timeout=600.0)
+        vals.append(read_timer(transport))
+    overhead = min(vals)
+    spread = max(vals) - min(vals)
+    if VERBOSE or spread != 0:
+        print(f"  Calibration: overhead={overhead} cy, spread={spread}")
+    return overhead
+
+
+def _u64_verify_wrapper(target, overhead):
+    """U64 variant of verify_wrapper(): expects 501 cy for the LDX/DEX/BNE stub."""
+    transport = target.transport
+    stub = bytes([0xA2, 0x64, 0xCA, 0xD0, 0xFD, 0x60])
+    stub_addr = 0xC0F8
+    write_bytes(transport, stub_addr, stub)
+    patch_target(transport, stub_addr)
+    run_subroutine(target, LONG_WRAPPER_ADDR, timeout=600.0)
+    measured = read_timer(transport) - overhead
+    expected = 501
+    if measured != expected:
+        print(f"  Wrapper verify: measured={measured} expected={expected} "
+              f"(MISMATCH)")
+        sys.exit(1)
+    if VERBOSE:
+        print(f"  Wrapper verify: {measured} cy (OK)")
+
+
+def _u64_setup_poly1305_block(target, labels):
+    """U64 variant of setup_poly1305_block.
+
+    Same memory layout as the VICE path; the only difference is the
+    poly1305_init prep call uses run_subroutine() (backend-aware) rather
+    than the VICE-only jsr() checkpoint.
+    """
+    transport = target.transport
+    key = bytes.fromhex(
+        "85d6be7857556d337f4452fe42d506a8"  # r
+        "0103808afb0db2fd4abff6af4149f51b"  # s
+    )
+    write_bytes(transport, labels["poly_r"], key[:16])
+    write_bytes(transport, labels["poly_s"], key[16:])
+    run_subroutine(target, labels["poly1305_init"], timeout=60.0)
+    write_bytes(transport, SCRATCH_BUF, b"Cryptographic Fo")
+    write_ptr(transport, labels["zp_ptr1"], SCRATCH_BUF)
+    # poly1305_block reads A on entry for the high bit; install a tiny
+    # shim at $C1E0 that loads A=1 then JMPs to poly1305_block. The
+    # routine's RTS pops the trampoline's return address (bypassing the
+    # JMP-only shim), so cycle accounting matches the VICE-shim path.
+    shim = bytes([0xA9, 0x01,                       # LDA #$01
+                  0x4C,                              # JMP abs
+                  labels["poly1305_block"] & 0xFF,
+                  (labels["poly1305_block"] >> 8) & 0xFF])
+    write_bytes(transport, 0xC1E0, shim)
+    return 0xC1E0
+
+
+def _u64_setup_aead_decrypt(target, labels, msg_len):
+    """U64 variant of setup_aead_decrypt.
+
+    Mirrors setup_aead_decrypt but uses run_subroutine() for the
+    aead_encrypt prep call so the trampoline shim drives the JSR on
+    hardware.
+    """
+    transport = target.transport
+    setup_aead_encrypt(transport, labels, msg_len)
+    run_subroutine(target, labels["aead_encrypt"], timeout=600.0)
+    tag = read_bytes(transport, labels["poly1305_tag"], 16)
+    write_bytes(transport, labels["aead_tag"], tag)
+    return labels["aead_decrypt"]
+
+
+# ---------------------------------------------------------------------------
+# U64 backend driver
+# ---------------------------------------------------------------------------
+
+def _run_u64(samples):
+    """U64 cycle-bench driver.
+
+    The U64 path uses the SAME chained CIA #1 Timer A+B wrapper as the
+    VICE path — the wrapper is pure 6502 and runs identically on real
+    hardware. The only backend-dependent piece is how the wrapper is
+    invoked (jsr() on VICE, run_subroutine() trampoline shim on U64),
+    so we drive the same install_wrapper / calibrate / verify_wrapper
+    helpers and re-use the existing measure() reduction (min, max-min)
+    via a thin u64_measure() shim.
+
+    Why not the shim's measure_cycles() (DebugCapture markers)?
+    -----------------------------------------------------------
+    The brief asked for DebugCapture, but on U64E firmware 3.14d in our
+    setup the FPGA UDP debug stream hits a packet-drop floor of 60-90%
+    after a sustained workload (the audit-tools agent's prior cycle).
+    Even with 8 MiB SO_RCVBUF and minimal REST traffic during capture,
+    sequence gaps run into the thousands and the JSR/STA marker pairs
+    cannot be reliably detected. CIA-timer-in-RAM is cycle-exact, has
+    no rate cap, and shares 100% of the wrapper code with VICE.
+    measure_cycles() remains in the shim for future use when the
+    debug-stream path is healthy (it returned ~1.5% deviation on a
+    fresh-boot smoke test); see _u64_helpers.py for the diagnosis.
+
+    Returns the same list-of-(name, cycles, spread) shape so the
+    existing _print_results() formatter applies unchanged.
+    """
+    labels = Labels.from_file(LABELS_PATH)
+    results = []  # list of (name, cycles, spread)
+
+    mgr = create_manager(backend="u64")
+    inner = getattr(mgr, "_manager", None)
+    if inner is not None and hasattr(inner, "_lock_timeout"):
+        inner._lock_timeout = 1800.0
+
+    with mgr:
+        with mgr.instance() as target:
+            transport = target.transport
+            client = transport._client
+
+            # Sideload + RUN to reach the same BASIC-READY state VICE
+            # gets via -autostart. Mirrors tools/audit_cross_check.py.
+            client.WRITE_MEM_QUERY_THRESHOLD = 128
+            client.reset()
+            time.sleep(2.0)
+            _ = wait_for_text(transport, "READY", timeout=30.0)
+            with open(PRG_PATH, "rb") as f:
+                prg = f.read()
+            load_addr = prg[0] | (prg[1] << 8)
+            write_bytes(transport, load_addr, prg[2:])
+            keyboard.send_text(transport, "RUN\r")
+            time.sleep(2.0)
+            grid = wait_for_text(transport, "READY", timeout=30.0)
+            if grid is None and VERBOSE:
+                print("  warning: BASIC READY prompt not seen within 30s")
+
+            install_wrapper(transport)
+            overhead = _u64_calibrate(target, samples=10)
+            _u64_verify_wrapper(target, overhead)
+
+            def _u64_measure_one(target_addr):
+                """Run the CIA wrapper around target_addr `samples` times via
+                the trampoline shim, return (min, max-min) cycle tuple.
+                """
+                patch_target(transport, target_addr)
+                vals = []
+                for _ in range(samples):
+                    run_subroutine(target, LONG_WRAPPER_ADDR, timeout=600.0)
+                    vals.append(read_timer(transport) - overhead)
+                return min(vals), max(vals) - min(vals)
+
+            # --- chacha20_block ---
+            setup_chacha20_block(transport, labels)
+            cyc, spr = _u64_measure_one(labels["chacha20_block"])
+            results.append(("chacha20_block (64 B keystream)", cyc, spr))
+
+            # --- poly1305_block (r/s/sqtab ready, A=1 shim) ---
+            shim_addr = _u64_setup_poly1305_block(target, labels)
+            cyc, spr = _u64_measure_one(shim_addr)
+            results.append(("poly1305_block (16 B, mul+reduce)", cyc, spr))
+
+            # --- aead_encrypt for various sizes ---
+            for msg_len in [0, 64, 128, 512, 1024]:
+                tgt = setup_aead_encrypt(transport, labels, msg_len)
+                cyc, spr = _u64_measure_one(tgt)
+                results.append((f"aead_encrypt n={msg_len:4d}", cyc, spr))
+
+            # --- aead_decrypt for various sizes (resetup per sample) ---
+            for msg_len in [0, 64, 128, 512, 1024]:
+                # In-place decrypt destroys the ciphertext; resetup
+                # before each sample by re-running aead_encrypt.
+                vals = []
+                for _ in range(samples):
+                    tgt = _u64_setup_aead_decrypt(target, labels, msg_len)
+                    patch_target(transport, tgt)
+                    run_subroutine(target, LONG_WRAPPER_ADDR, timeout=600.0)
+                    vals.append(read_timer(transport) - overhead)
+                results.append((
+                    f"aead_decrypt n={msg_len:4d}",
+                    min(vals), max(vals) - min(vals),
+                ))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Result formatter (shared by both backends — preserves byte-identical output)
+# ---------------------------------------------------------------------------
+
+def _print_results(results):
+    print()
+    print("=" * 64)
+    print(f"{'routine':<40s} {'cycles':>12s} {'spread':>8s}")
+    print("-" * 64)
+    for name, cyc, spr in results:
+        print(f"{name:<40s} {cyc:>12d} {spr:>8d}")
+    print("=" * 64)
+
+    # cycles-per-byte derived column for AEAD rows
+    print()
+    print("Derived cycles/byte (aead_encrypt, excluding n=0):")
+    for name, cyc, _ in results:
+        if name.startswith("aead_encrypt") and " n=   0" not in name:
+            try:
+                n = int(name.split("n=")[1])
+            except ValueError:
+                continue
+            if n > 0:
+                print(f"  {name}: {cyc/n:8.1f} cy/byte")
+
+
 def run(samples=DEFAULT_SAMPLES, backend="vice"):
     # Start emulator / connect to hardware
     if not os.path.exists(PRG_PATH):
         subprocess.run(["make"], cwd=PROJECT_ROOT, check=True)
 
     if backend == "u64":
-        # Cycle-accurate timing on U64 needs a separate harness path
-        # (see TODO(u64) in module docstring). For now, emit a banner and
-        # produce no rows — keeps the CLI honest rather than printing
-        # garbage cycle numbers. Verifier should run with C64_BACKEND=vice
-        # (or pass --backend vice) until the U64 path is wired.
-        print("=" * 64)
-        print("benchmark_chacha20_poly1305: U64 backend selected.")
-        print("Cycle-accurate rows are not yet implemented for U64.")
-        print("Re-run with --backend vice (or unset C64_BACKEND) to bench.")
-        print("See module docstring TODO(u64) for the planned approach.")
-        print("=" * 64)
-        return []
+        results = _run_u64(samples)
+        _print_results(results)
+        return results
 
     cfg = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
     labels = Labels.from_file(LABELS_PATH)
@@ -389,27 +608,7 @@ def run(samples=DEFAULT_SAMPLES, backend="vice"):
 
         mgr.release(inst)
 
-    # Print table
-    print()
-    print("=" * 64)
-    print(f"{'routine':<40s} {'cycles':>12s} {'spread':>8s}")
-    print("-" * 64)
-    for name, cyc, spr in results:
-        print(f"{name:<40s} {cyc:>12d} {spr:>8d}")
-    print("=" * 64)
-
-    # cycles-per-byte derived column for AEAD rows
-    print()
-    print("Derived cycles/byte (aead_encrypt, excluding n=0):")
-    for name, cyc, _ in results:
-        if name.startswith("aead_encrypt") and " n=   0" not in name:
-            try:
-                n = int(name.split("n=")[1])
-            except ValueError:
-                continue
-            if n > 0:
-                print(f"  {name}: {cyc/n:8.1f} cy/byte")
-
+    _print_results(results)
     return results
 
 
@@ -419,12 +618,15 @@ def main():
     ap.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument(
+        "--seed", type=int, default=None,
+        help="Accepted for CLI compatibility with audit_cross_check; the "
+             "bench uses fixed RFC 7539 vectors and ignores --seed.",
+    )
+    ap.add_argument(
         "--backend",
         choices=("vice", "u64"),
         default=os.environ.get("C64_BACKEND", "vice").lower(),
-        help="Backend to bench against. Defaults to $C64_BACKEND or 'vice'. "
-             "U64 currently emits a banner and skips rows — see "
-             "TODO(u64) in module docstring.",
+        help="Backend to bench against. Defaults to $C64_BACKEND or 'vice'.",
     )
     args = ap.parse_args()
     VERBOSE = args.verbose
