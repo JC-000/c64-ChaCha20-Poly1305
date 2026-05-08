@@ -550,7 +550,26 @@ def main():
                          "the 15 000 total)")
     ap.add_argument("--tamper-count", type=int, default=3000,
                     help="Number of tamper-rejection vectors (default 3000)")
+    ap.add_argument("--vectors", type=int, default=None,
+                    help="Total vector budget: scales the per-category "
+                         "counts proportionally to the 1000:1000:5000:5000:"
+                         "3000 default ratio. Useful for runtime budgeting "
+                         "(e.g. --vectors 1000 on U64 hardware vs. the "
+                         "implicit 15000 on VICE). Overrides per-category "
+                         "flags; pass them explicitly to opt out.")
     args = ap.parse_args()
+
+    if args.vectors is not None:
+        # Proportionally scale per-category counts. The default ratio is
+        # 1000:1000:5000:5000:3000 (cc20:poly:aead_enc:aead_dec:tamper),
+        # and aead_count is counted twice (encrypt + decrypt), so total =
+        # cc20 + poly + 2*aead + tamper. Solve for a scale factor s such
+        # that s*(1000+1000+2*5000+3000) == args.vectors -> s = N/15000.
+        scale = args.vectors / 15000.0
+        args.cc20_count = max(1, int(round(1000 * scale)))
+        args.poly_count = max(1, int(round(1000 * scale)))
+        args.aead_count = max(1, int(round(5000 * scale)))
+        args.tamper_count = max(1, int(round(3000 * scale)))
 
     log = LogWriter(args.log)
     try:
