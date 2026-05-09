@@ -5,3 +5,9 @@ examples/smoke_test/build/
 __pycache__/
 .vscode/
 *.swp
+
+# Serena: ignore regenerable/local state, track project.yml + memories
+.serena/cache/
+.serena/logs/
+.serena/hook_data/
+.serena/project.local.yml
