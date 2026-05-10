@@ -654,7 +654,16 @@ def run(samples=DEFAULT_SAMPLES, backend="vice"):
         _print_results(results)
         return results
 
-    cfg = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+    cfg = ViceConfig(
+        prg_path=PRG_PATH,
+        warp=True,
+        ntsc=True,
+        sound=False,
+        # macOS-26 + VICE 3.10 hangs in kernal IEC busy-wait under the
+        # default VirtualFS autostart (mode 0); RAM-injection (mode 1)
+        # bypasses the IEC path and boots cleanly.
+        extra_args=["-autostartprgmode", "1"],
+    )
     labels = Labels.from_file(LABELS_PATH)
 
     results = []  # list of (name, cycles, spread)

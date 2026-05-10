@@ -1050,6 +1050,10 @@ def main():
         warp=True,
         ntsc=True,
         sound=False,
+        # macOS-26 + VICE 3.10 hangs in kernal IEC busy-wait under the
+        # default VirtualFS autostart (mode 0); RAM-injection (mode 1)
+        # bypasses the IEC path and boots cleanly.
+        extra_args=["-autostartprgmode", "1"],
     )
 
     backend = os.environ.get("C64_BACKEND", "u64").lower()
