@@ -238,29 +238,40 @@ def _expected_wrapper_cycles(backend: str) -> int:
     return 501
 
 
+U64_JITTER_FLOOR = 50  # known per-sample CIA-timer jitter on U64E (~43 cy)
+
+
 def _wrapper_tolerance_window(backend, calibration_spread, calibration_samples):
     """Compute (lo, hi) tolerance window for the verify-stub measurement.
 
     VICE: exact match (spread=0, no margin).
-    U64:  501 + jitter, where jitter is sourced from the calibration
-          spread.  When the calibration produced enough samples (>=5)
-          we use observed spread plus a small safety margin; otherwise
-          we fall back to a known-good fixed band and warn.
+    U64:  501 +/- jitter, where jitter is the larger of the observed
+          calibration spread and a known floor (`U64_JITTER_FLOOR`).
+          The floor matters because the calibration's no-op samples
+          and the verify's stub sample are independent draws from the
+          same distribution: even when calibration's 20 samples happen
+          to all land at the fast end (spread=0), the verify can still
+          land at the slow end (501 + 43), and conversely if calibration
+          catches the slow tail and verify is fast (501 - 43).  The
+          window must absorb that worst-case differential.
     """
     nominal = _expected_wrapper_cycles(backend)
     if backend != "u64":
         # Deterministic backend — exact match.
         return nominal, nominal, False
     if calibration_samples >= 5:
-        # Observed jitter is the dominant noise source.  Add a safety
-        # margin so transient spikes on a single verify run don't trip
-        # the gate (the calibration only ran N times, not infinity).
-        margin = max(calibration_spread, 10)
-        return nominal, nominal + calibration_spread + margin, False
+        # The dominant noise source is the per-sample CIA-jitter,
+        # bounded by the larger of observed and known.  Apply
+        # symmetrically because the verify and overhead samples are
+        # independent draws (slow verify with fast calibration shifts
+        # measured up; fast verify with slow calibration shifts it
+        # down by the same amount).
+        jitter = max(calibration_spread, U64_JITTER_FLOOR)
+        return nominal - jitter, nominal + jitter, False
     # Fallback if calibration was too short to characterize jitter.
     print("  Wrapper verify: WARNING — calibration produced <5 samples, "
-          "using fixed fallback window 480..580")
-    return 480, 580, True
+          "using fixed fallback window 440..580")
+    return 440, 580, True
 
 
 def verify_wrapper(transport, overhead, calibration_spread=0,
