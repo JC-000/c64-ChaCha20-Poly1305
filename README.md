@@ -54,7 +54,8 @@ secret data).
 
 ## Performance
 
-v0.3.0 cycle counts (cycles, measured via CIA timer in VICE,
+v0.3.0 cycle counts (cycles, measured via CIA timer, identical on
+VICE and Ultimate 64 hardware backends to within ±0.2%,
 `tools/benchmark_chacha20_poly1305.py --seed 7539`, 3 samples,
 min per routine):
 
@@ -72,6 +73,28 @@ runs in 84 k cy -- **−66.4%** below the sprint-0 baseline. See
 `docs/OPTIMIZATION_PLAN.md` for the full per-step progression table,
 per-byte breakdowns, and estimate-vs-measured analysis, and
 `docs/REPRO_CHECK.md` §4 for the post-CT-fix bench table.
+
+## Test/audit/bench backends
+
+As of **v0.4.0**, the four tooling scripts under `tools/` run on
+either VICE (default) or Ultimate 64 hardware. Select at runtime:
+
+```
+# VICE (default — no env vars needed)
+python3 tools/test_chacha20_poly1305.py
+
+# Ultimate 64 over the network
+C64_BACKEND=u64 U64_HOST=10.43.23.81 python3 tools/test_chacha20_poly1305.py
+C64_BACKEND=u64 U64_HOST=10.43.23.81 python3 tools/audit_cross_check.py --vectors 1000
+C64_BACKEND=u64 U64_HOST=10.43.23.81 python3 tools/ct_mul_brute_check.py
+C64_BACKEND=u64 U64_HOST=10.43.23.81 python3 tools/benchmark_chacha20_poly1305.py --backend u64
+```
+
+The shim at `tools/_u64_helpers.py` routes 6502 `jsr` calls and
+cycle measurements through the right transport for each backend, so
+the same test/audit/bench flows produce equivalent results on both.
+Library PRG output is unchanged — only the validation harness picks
+up the new backend support.
 
 ## Constant-time guarantees
 
@@ -176,14 +199,13 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current series is **v0.3.x**; tagged releases are published on
-the [GitHub releases page](https://github.com/JC-000/c64-ChaCha20-Poly1305/releases).
-v0.3.x is backward-compatible within the series (public entry
-points and the memory map documented in `docs/MEMORY_MAP.md` are
-frozen). A planned **v0.4.0** breaking release will make ZP slots
-and table base addresses configurable via ca65 `-D` defines; see
-the v0.3.0 changelog entry's "API stability" subsection for
-details.
+The current release is **v0.4.0**, which adds Ultimate 64 hardware
+backend support to the four `tools/*.py` validation scripts and
+makes the Profile A REU stash destination configurable via
+`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` (issue #19). Library
+PRG output is unchanged from v0.3.1 on the default-equate paths.
+Tagged releases are published on the
+[GitHub releases page](https://github.com/JC-000/c64-ChaCha20-Poly1305/releases).
 
 Reference build fingerprints for v0.3.x (md5 of
 `build/profile-*/c64_chacha20_poly1305.prg`):

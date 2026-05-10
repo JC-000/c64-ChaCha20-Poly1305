@@ -4,9 +4,42 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-05-10
+
+First release with **Ultimate 64 (U64) hardware backend support** for
+the validation tooling. The four tooling scripts under `tools/`
+(`test_chacha20_poly1305.py`, `audit_cross_check.py`,
+`ct_mul_brute_check.py`, `benchmark_chacha20_poly1305.py`) now route
+all 6502 `jsr` calls through a backend-agnostic shim, so the same
+test/audit/bench flows that ran on VICE in v0.3.x now also run on a
+real Ultimate 64 over the network at full silicon speed. Library
+PRGs (`build/c64_chacha20_poly1305.prg`) are unchanged on both
+profiles — the changes are entirely in the Python tooling and in two
+ca65 source equates that make the Profile A REU stash destination
+configurable.
 
 ### Added
+- **U64 backend across the four tooling scripts.** All four
+  `tools/*.py` scripts now select VICE or Ultimate 64 at runtime via
+  `C64_BACKEND={vice|u64}` (and `U64_HOST=<ip-or-hostname>` for U64).
+  VICE remains the default; existing flows are unaffected. Tested on
+  Ultimate 64 Elite firmware 3.14d at `10.43.23.81`.
+- **Backend-agnostic shim at `tools/_u64_helpers.py`.** New
+  `run_subroutine(manager, addr)` and `measure_cycles(manager, addr)`
+  helpers that dispatch on the underlying transport: on VICE they
+  call `c64_test_harness.execute.jsr` directly; on U64 they drive a
+  small trampoline at `$0360..$0377` that wraps `jsr <target>` with
+  a sentinel-write + status flag + re-arm flag, polled by the host
+  over the U64 control socket. `measure_cycles` returns true cycle
+  counts on both backends via the existing CIA-timer wrapper.
+- **`audit_cross_check.py --vectors N` CLI flag** for runtime
+  budgeting. Defaults to the v0.3.x value of 15 000 vectors per
+  profile. The U64 acceptance gate runs at `--vectors 1000` to fit a
+  ~20 min walltime; see harness issue
+  [#82](https://github.com/JC-000/c64-test-harness/issues/82).
+- **`benchmark_chacha20_poly1305.py --backend` CLI flag.** Was
+  previously hardcoded to `vice`; now accepts `vice` or `u64` and
+  defaults to whatever `C64_BACKEND` selects (VICE if unset).
 - **Configurable REU destination for Profile A sqtab backup**
   (issue #19). Two new `.ifndef`-guarded equates in
   `src/lib/constants_lib.s` — `POLY1305_REU_BANK` (default `0`) and
@@ -23,6 +56,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Profile A builds are unaffected.
 
 ### Changed
+- **`test_chacha20_poly1305`, `audit_cross_check`, `ct_mul_brute_check`,
+  `benchmark_chacha20_poly1305` route their JSRs through the
+  backend-agnostic shim** instead of calling
+  `c64_test_harness.execute.jsr` directly. The `tools/` flows pick
+  up VICE or U64 transparently from `C64_BACKEND` / `U64_HOST` with
+  no per-test code changes.
+- **Bench cycle measurement reworked.** VICE keeps the existing
+  CIA-timer wrapper unchanged; U64 reuses the same wrapper via the
+  shim, with a tolerance-window wrapper-verify (`501 ± jitter` on
+  VICE, `501 ± max(spread, 50)` on U64) sourced from the bench's own
+  calibration data. This absorbs the few-cycle silicon jitter
+  observed on real U64 hardware without weakening the VICE gate.
 - **Profile A + `POLY1305_REU=1` PRG grows by 8 bytes** at default
   equates (issue #19). The compact 11-byte `lda #$00 / sta $DF04 /
   sta $DF05 / sta $DF06` sequence inside `poly1305_lib_init`'s
@@ -39,6 +84,50 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `313300ff4d86cefc6d3b195563c1383d` preserved). The new code lives
   entirely inside `.ifdef POLY1305_REU`, so the default `make
   profile-a` build does not touch it.
+
+### Fixed
+- **VICE 3.10 + macOS-26 autostart hang.** The default
+  `-autostart` VirtualFS mode hangs in an IEC busy-wait on
+  macOS-26 builds of VICE 3.10 when the harness pre-loads a PRG.
+  All four `tools/*.py` scripts now pass `-autostartprgmode 1`
+  (RAM-injection autostart), which sidesteps the IEC path entirely.
+  No effect on Linux VICE flows.
+
+### Validation
+- **Acceptance gate on Ultimate 64 Elite (firmware 3.14d):**
+  Profile A and Profile B fully GREEN under the standard
+  `C64_BACKEND=u64 AUDIT_VECTORS=1000` baseline — 142/142 RFC 7539
+  fixed vectors per profile; 1 000/1 000 random AEAD vectors per
+  profile cross-checked against `pyca/cryptography`; 65 536/65 536
+  exhaustive `(a, b)` pairs for `ct_mul_8x8`; bench cycle counts
+  within ±0.2% of the v0.3.0 VICE baselines on every routine.
+- **VICE 3.10 + macOS-26 quick-verification:** probe 4/4,
+  `ct_mul_brute_check` 65 536/65 536, `test_chacha20_poly1305`
+  Profile A + Profile B 142/142 each. (Test-runner exit codes are
+  non-zero due to a harness teardown bug surfaced by this work,
+  tracked at harness issue
+  [#79](https://github.com/JC-000/c64-test-harness/issues/79); all
+  crypto assertions pass before the teardown `AttributeError`.)
+
+### Known limitations
+- **Audit reduced from 15 000 → 1 000 vectors per profile** in the
+  U64 acceptance gate, to fit a ~20 min walltime. VICE still runs
+  the full 15 000. Rationale and follow-on harness work tracked at
+  [#82](https://github.com/JC-000/c64-test-harness/issues/82).
+- **VICE gate exit-code hygiene blocked on harness
+  [#79](https://github.com/JC-000/c64-test-harness/issues/79).**
+  Test-runner returns non-zero on Profile A/B suites due to an
+  `AttributeError` in the harness teardown path, but every crypto
+  assertion passes before the failure. Crypto correctness is
+  verified; the exit-code cleanup is a downstream harness fix.
+
+### Follow-on harness work
+This release surfaced a portability backlog in the
+`JC-000/c64-test-harness` package, filed as
+[issues #76–#85](https://github.com/JC-000/c64-test-harness/issues?q=is%3Aissue+76..85).
+Resolving these will let v0.5.x simplify the
+`tools/_u64_helpers.py` shim and remove the harness-side
+workarounds.
 
 ## [0.3.1] — 2026-04-14
 

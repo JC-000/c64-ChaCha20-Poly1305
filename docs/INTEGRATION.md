@@ -227,23 +227,23 @@ for the design memo.
 ## Stability promise
 
 **v0.3.x is API-stable.** The public symbol names and their
-calling conventions will not change between v0.3.0, v0.3.1, … The
-memory-map collision list in this document will not change within
+calling conventions did not change between v0.3.0, v0.3.1, … The
+memory-map collision list in this document did not change within
 the v0.3.x series.
 
-**v0.4.0 is planned as a breaking release.** Known breaking changes:
+**v0.4.0 is API-stable on the default-equate paths.** Public
+symbol names, calling conventions, and the default memory-map
+collision list above are unchanged from v0.3.1. Consumers using
+`POLY1305_REU=1` on Profile A may now optionally relocate the REU
+stash destination via `POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`
+(see issue #19); leaving these undefined preserves v0.3.x
+behaviour. The full ZP / table-base relocation work originally
+planned for v0.4.0 is deferred to a later release; track that work
+on the `feat/v0.4.0-relocatable` branch and its successors.
 
-- `r_tab_lo/hi`, `sqtab_lo/hi` addresses become configurable via
-  `-D` defines, allowing consumers to relocate the library's tables
-  out of their own address space without patching the library
-  source.
-- Memory-map documentation will move from "fixed addresses" to
-  "defaults that can be overridden".
-
-Consumers following this integration guide on v0.3.x should be able
-to upgrade to v0.4.0 by (a) adding their preferred table-base
-`-D` defines to their ca65 flags, or (b) accepting the v0.3.x
-defaults unchanged.
+The v0.4.0 release also adds Ultimate 64 hardware backend support
+to the validation tooling — that is a tooling-only change and does
+not affect the library API or the linked PRG.
 
 ## Profile choice: A vs B
 
@@ -309,3 +309,22 @@ the caller to pre-build the target profile via `make profile-a` or
 `examples/smoke_test/run_smoke_test.py`. The older `C64_SKIP_BUILD=1`
 env var is retained as a no-op for backward compatibility with
 pre-v0.3.x callers.
+
+**Backend selection (v0.4.0+)**: all four `tools/*.py` scripts pick
+their 6502 backend from `C64_BACKEND` (`vice` default, or `u64`).
+For the Ultimate 64 backend, set `U64_HOST=<ip-or-hostname>`. The
+backend choice is transparent to consumers — the same scripts run
+the same validation on either backend, with cycle counts that match
+to within ±0.2%. See the `tools/_u64_helpers.py` shim for the
+backend-dispatch logic if you need to write your own U64-aware
+validation tool.
+
+**New CLI flags in v0.4.0**:
+
+- `tools/audit_cross_check.py --vectors N` — number of random AEAD
+  vectors per profile to cross-check against `pyca/cryptography`.
+  Defaults to the v0.3.x value of 15 000. Use `--vectors 1000` for
+  the standard U64 acceptance gate (~20 min walltime).
+- `tools/benchmark_chacha20_poly1305.py --backend {vice|u64}` —
+  select the bench backend explicitly. If omitted, follows
+  `C64_BACKEND` (which itself defaults to `vice`).
