@@ -24,11 +24,16 @@ import time
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
+    keyboard,
     read_bytes,
     write_bytes,
-    jsr,
+    wait_for_text,
 )
+
+# Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
+# trampoline + sentinel poll. Returns the post-JSR A register value.
+from _u64_helpers import run_subroutine
 
 # Independent ground-truth oracle: pyca/cryptography. Used by the
 # "cross-check vs pyca" tests below so that the expected values we compare
@@ -165,21 +170,23 @@ def set_w32_dst(transport, labels, addr):
     write_ptr(transport, labels["w32_dst"], addr)
 
 
-def c64_chacha20_init(transport, labels, key, nonce, counter=0):
+def c64_chacha20_init(target, labels, key, nonce, counter=0):
+    transport = target.transport
     write_bytes(transport, labels["cc20_key"], key)
     write_bytes(transport, labels["cc20_nonce"], nonce)
     write_bytes(transport, labels["cc20_counter"],
                 counter.to_bytes(4, 'little'))
-    jsr(transport, labels["chacha20_init"], timeout=30.0)
+    run_subroutine(target, labels["chacha20_init"], timeout=30.0)
 
 
-def c64_chacha20_block(transport, labels):
-    jsr(transport, labels["chacha20_block"], timeout=120.0)
-    return read_bytes(transport, labels["cc20_keystream"], 64)
+def c64_chacha20_block(target, labels):
+    run_subroutine(target, labels["chacha20_block"], timeout=120.0)
+    return read_bytes(target.transport, labels["cc20_keystream"], 64)
 
 
-def c64_chacha20_encrypt(transport, labels, key, nonce, data, counter=1):
-    c64_chacha20_init(transport, labels, key, nonce, counter)
+def c64_chacha20_encrypt(target, labels, key, nonce, data, counter=1):
+    c64_chacha20_init(target, labels, key, nonce, counter)
+    transport = target.transport
     buf = SCRATCH_BUF
     write_bytes(transport, buf, data)
     write_ptr(transport, labels["cc20_data_ptr"], buf)
@@ -187,39 +194,42 @@ def c64_chacha20_encrypt(transport, labels, key, nonce, data, counter=1):
     write_bytes(transport, labels["cc20_remain"], bytes([len(data) & 0xFF]))
     write_bytes(transport, labels["cc20_remain_hi"],
                 bytes([(len(data) >> 8) & 0xFF]))
-    jsr(transport, labels["chacha20_encrypt"], timeout=300.0)
+    run_subroutine(target, labels["chacha20_encrypt"], timeout=300.0)
     return read_bytes(transport, buf, len(data))
 
 
-def c64_poly1305_init(transport, labels, otk):
+def c64_poly1305_init(target, labels, otk):
+    transport = target.transport
     write_bytes(transport, labels["poly_r"], otk[:16])
     write_bytes(transport, labels["poly_s"], otk[16:])
-    jsr(transport, labels["poly1305_init"], timeout=60.0)
+    run_subroutine(target, labels["poly1305_init"], timeout=60.0)
 
 
-def c64_poly1305_update(transport, labels, data, buf=SCRATCH_BUF):
+def c64_poly1305_update(target, labels, data, buf=SCRATCH_BUF):
     """Single-shot update — max 255 bytes (poly1305_update uses 8-bit count)."""
     if len(data) == 0:
         return
     assert len(data) <= 255, "poly1305_update cc20_remain is 8-bit"
+    transport = target.transport
     write_bytes(transport, buf, data)
     write_ptr(transport, labels["zp_ptr1"], buf)
     write_bytes(transport, labels["cc20_remain"], bytes([len(data)]))
-    jsr(transport, labels["poly1305_update"], timeout=120.0)
+    run_subroutine(target, labels["poly1305_update"], timeout=120.0)
 
 
-def c64_poly1305_final(transport, labels):
-    jsr(transport, labels["poly1305_final"], timeout=30.0)
-    return read_bytes(transport, labels["poly1305_tag"], 16)
+def c64_poly1305_final(target, labels):
+    run_subroutine(target, labels["poly1305_final"], timeout=30.0)
+    return read_bytes(target.transport, labels["poly1305_tag"], 16)
 
 
-def c64_poly1305_mac(transport, labels, key, message):
-    c64_poly1305_init(transport, labels, key)
-    c64_poly1305_update(transport, labels, message)
-    return c64_poly1305_final(transport, labels)
+def c64_poly1305_mac(target, labels, key, message):
+    c64_poly1305_init(target, labels, key)
+    c64_poly1305_update(target, labels, message)
+    return c64_poly1305_final(target, labels)
 
 
-def c64_aead_encrypt(transport, labels, key, nonce, aad, plaintext):
+def c64_aead_encrypt(target, labels, key, nonce, aad, plaintext):
+    transport = target.transport
     write_bytes(transport, labels["aead_key"], key)
     write_bytes(transport, labels["aead_nonce"], nonce)
 
@@ -236,14 +246,15 @@ def c64_aead_encrypt(transport, labels, key, nonce, aad, plaintext):
     write_bytes(transport, labels["aead_data_len"],
                 struct.pack('<H', len(plaintext)))
 
-    jsr(transport, labels["aead_encrypt"], timeout=600.0)
+    run_subroutine(target, labels["aead_encrypt"], timeout=600.0)
 
     ct = read_bytes(transport, pt_buf, len(plaintext))
     tag = read_bytes(transport, labels["poly1305_tag"], 16)
     return ct, tag
 
 
-def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
+def c64_aead_decrypt(target, labels, key, nonce, aad, ciphertext, tag):
+    transport = target.transport
     write_bytes(transport, labels["aead_key"], key)
     write_bytes(transport, labels["aead_nonce"], nonce)
 
@@ -261,10 +272,10 @@ def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
                 struct.pack('<H', len(ciphertext)))
     write_bytes(transport, labels["aead_tag"], tag)
 
-    regs = jsr(transport, labels["aead_decrypt"], timeout=600.0)
-    pt = read_bytes(transport, ct_buf, len(ciphertext))
     # aead_decrypt returns A=0 on success, A=$ff on auth failure.
-    status = regs.get("a", regs.get("A", 0)) if isinstance(regs, dict) else 0
+    # run_subroutine returns that A byte directly on both VICE and U64.
+    status = run_subroutine(target, labels["aead_decrypt"], timeout=600.0)
+    pt = read_bytes(transport, ct_buf, len(ciphertext))
     return pt, ct_buf, status
 
 
@@ -272,9 +283,10 @@ def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
 # Tests
 # ============================================================================
 
-def test_rotations(transport, labels):
+def test_rotations(target, labels):
     """Test rotl32_{4,7,8,12} and rotr32_{1,4,7,8,12,16}."""
     passed = failed = 0
+    transport = target.transport
     test_values = [0x12345678, 0x80000001, 0xDEADBEEF, 0x00000001,
                    0xFFFFFFFF, 0x01020304, 0xF0E0D0C0]
     rotl = [4, 7, 8, 12]
@@ -290,7 +302,7 @@ def test_rotations(transport, labels):
                 continue
             write_bytes(transport, scratch, val_bytes)
             set_w32_dst(transport, labels, scratch)
-            jsr(transport, labels[label], timeout=30.0)
+            run_subroutine(target, labels[label], timeout=30.0)
             got = int.from_bytes(read_bytes(transport, scratch, 4), 'little')
             expected = rotl32(val, n)
             if got == expected:
@@ -308,7 +320,7 @@ def test_rotations(transport, labels):
                 continue
             write_bytes(transport, scratch, val_bytes)
             set_w32_dst(transport, labels, scratch)
-            jsr(transport, labels[label], timeout=30.0)
+            run_subroutine(target, labels[label], timeout=30.0)
             got = int.from_bytes(read_bytes(transport, scratch, 4), 'little')
             expected = rotr32(val, n)
             if got == expected:
@@ -323,9 +335,10 @@ def test_rotations(transport, labels):
     return passed, failed
 
 
-def test_chacha20_quarter_round(transport, labels):
+def test_chacha20_quarter_round(target, labels):
     """RFC 7539 §2.1.1: QR on isolated {a,b,c,d} = {0,1,2,3}."""
     passed = failed = 0
+    transport = target.transport
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
 
@@ -342,7 +355,7 @@ def test_chacha20_quarter_round(transport, labels):
         write_bytes(transport, labels["cc20_qr_table"], bytes([0, 1, 2, 3]))
         write_bytes(transport, labels["cc20_qr_idx"], bytes([0]))
 
-        jsr(transport, labels["chacha20_quarter_round"], timeout=30.0)
+        run_subroutine(target, labels["chacha20_quarter_round"], timeout=30.0)
 
         write_bytes(transport, labels["cc20_qr_table"], orig_table)
 
@@ -367,7 +380,7 @@ def test_chacha20_quarter_round(transport, labels):
     return passed, failed
 
 
-def test_chacha20_block(transport, labels):
+def test_chacha20_block(target, labels):
     passed = failed = 0
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
@@ -377,8 +390,8 @@ def test_chacha20_block(transport, labels):
         counter = vec["counter"]
         expected = bytes.fromhex(vec["expected_keystream"])
 
-        c64_chacha20_init(transport, labels, key, nonce, counter)
-        result = c64_chacha20_block(transport, labels)
+        c64_chacha20_init(target, labels, key, nonce, counter)
+        result = c64_chacha20_block(target, labels)
 
         if result == expected:
             passed += 1
@@ -392,7 +405,7 @@ def test_chacha20_block(transport, labels):
     return passed, failed
 
 
-def test_chacha20_encrypt(transport, labels):
+def test_chacha20_encrypt(target, labels):
     passed = failed = 0
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
@@ -403,7 +416,7 @@ def test_chacha20_encrypt(transport, labels):
         plaintext = bytes.fromhex(vec["plaintext"])
         expected = bytes.fromhex(vec["ciphertext"])
 
-        result = c64_chacha20_encrypt(transport, labels, key, nonce,
+        result = c64_chacha20_encrypt(target, labels, key, nonce,
                                       plaintext, counter)
         if result == expected:
             passed += 1
@@ -421,7 +434,7 @@ def test_chacha20_encrypt(transport, labels):
     return passed, failed
 
 
-def test_chacha20_encrypt_random(transport, labels, rng):
+def test_chacha20_encrypt_random(target, labels, rng):
     passed = failed = 0
     for size in [1, 63, 64, 127]:
         key = bytes(rng.randint(0, 255) for _ in range(32))
@@ -429,7 +442,7 @@ def test_chacha20_encrypt_random(transport, labels, rng):
         plaintext = bytes(rng.randint(0, 255) for _ in range(size))
 
         expected = chacha20_encrypt_ref(key, 1, nonce, plaintext)
-        result = c64_chacha20_encrypt(transport, labels, key, nonce, plaintext)
+        result = c64_chacha20_encrypt(target, labels, key, nonce, plaintext)
         if result == expected:
             passed += 1
             if VERBOSE:
@@ -442,13 +455,14 @@ def test_chacha20_encrypt_random(transport, labels, rng):
     return passed, failed
 
 
-def test_poly1305_clamp(transport, labels):
+def test_poly1305_clamp(target, labels):
     passed = failed = 0
+    transport = target.transport
 
     def do_clamp(r_val):
         write_bytes(transport, labels["poly_r"], r_val)
         write_bytes(transport, labels["poly_s"], bytes(16))
-        jsr(transport, labels["poly1305_clamp"], timeout=30.0)
+        run_subroutine(target, labels["poly1305_clamp"], timeout=30.0)
         return read_bytes(transport, labels["poly_r"], 16)
 
     def expected_clamp(r):
@@ -475,7 +489,7 @@ def test_poly1305_clamp(transport, labels):
     return passed, failed
 
 
-def test_poly1305_tag(transport, labels):
+def test_poly1305_tag(target, labels):
     passed = failed = 0
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
@@ -483,7 +497,7 @@ def test_poly1305_tag(transport, labels):
         key = bytes.fromhex(vec["key"])
         message = bytes.fromhex(vec["message"])
         expected = bytes.fromhex(vec["tag"])
-        result = c64_poly1305_mac(transport, labels, key, message)
+        result = c64_poly1305_mac(target, labels, key, message)
         if result == expected:
             passed += 1
             if VERBOSE:
@@ -496,7 +510,7 @@ def test_poly1305_tag(transport, labels):
     return passed, failed
 
 
-def test_poly1305_random(transport, labels, rng, count=4):
+def test_poly1305_random(target, labels, rng, count=4):
     passed = failed = 0
     for i in range(count):
         key = bytes(rng.randint(0, 255) for _ in range(32))
@@ -504,7 +518,7 @@ def test_poly1305_random(transport, labels, rng, count=4):
         message = bytes(rng.randint(0, 255) for _ in range(msg_len))
 
         expected = poly1305_ref(key, message)
-        result = c64_poly1305_mac(transport, labels, key, message)
+        result = c64_poly1305_mac(target, labels, key, message)
         if result == expected:
             passed += 1
             if VERBOSE:
@@ -519,7 +533,7 @@ def test_poly1305_random(transport, labels, rng, count=4):
     return passed, failed
 
 
-def test_aead_encrypt(transport, labels):
+def test_aead_encrypt(target, labels):
     passed = failed = 0
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
@@ -531,7 +545,7 @@ def test_aead_encrypt(transport, labels):
         expected_ct = bytes.fromhex(vec["ciphertext"])
         expected_tag = bytes.fromhex(vec["tag"])
 
-        ct, tag = c64_aead_encrypt(transport, labels, key, nonce, aad,
+        ct, tag = c64_aead_encrypt(target, labels, key, nonce, aad,
                                     plaintext)
         ct_ok = ct == expected_ct
         tag_ok = tag == expected_tag
@@ -551,7 +565,7 @@ def test_aead_encrypt(transport, labels):
     return passed, failed
 
 
-def test_aead_random(transport, labels, rng, count=3):
+def test_aead_random(target, labels, rng, count=3):
     passed = failed = 0
     for i in range(count):
         key = bytes(rng.randint(0, 255) for _ in range(32))
@@ -561,7 +575,7 @@ def test_aead_random(transport, labels, rng, count=3):
         aad = bytes(rng.randint(0, 255) for _ in range(aad_len))
         plaintext = bytes(rng.randint(0, 255) for _ in range(pt_len))
 
-        ct, tag = c64_aead_encrypt(transport, labels, key, nonce, aad,
+        ct, tag = c64_aead_encrypt(target, labels, key, nonce, aad,
                                     plaintext)
         expected_ct, expected_tag = aead_encrypt_ref(key, nonce, aad, plaintext)
 
@@ -581,10 +595,11 @@ def test_aead_random(transport, labels, rng, count=3):
     return passed, failed
 
 
-def test_aead_decrypt(transport, labels, rng):
+def test_aead_decrypt(target, labels, rng):
     """AEAD decrypt: valid tag should recover plaintext; tampered tag should
     leave ciphertext unmodified."""
     passed = failed = 0
+    transport = target.transport
 
     # --- Valid path ---
     key = bytes(rng.randint(0, 255) for _ in range(32))
@@ -593,7 +608,7 @@ def test_aead_decrypt(transport, labels, rng):
     plaintext = bytes(rng.randint(0, 255) for _ in range(32))
     ct, tag = aead_encrypt_ref(key, nonce, aad, plaintext)
 
-    pt_result, _, status = c64_aead_decrypt(transport, labels, key, nonce,
+    pt_result, _, status = c64_aead_decrypt(target, labels, key, nonce,
                                              aad, ct, tag)
     if pt_result == plaintext and status == 0:
         passed += 1
@@ -608,7 +623,7 @@ def test_aead_decrypt(transport, labels, rng):
     # --- Tampered path: ciphertext buffer should NOT be modified ---
     bad_tag = bytearray(tag)
     bad_tag[0] ^= 0x01
-    pt_result2, ct_buf, status2 = c64_aead_decrypt(transport, labels, key,
+    pt_result2, ct_buf, status2 = c64_aead_decrypt(target, labels, key,
                                                     nonce, aad, ct,
                                                     bytes(bad_tag))
     # Re-read ciphertext region to see if routine touched it.
@@ -668,7 +683,7 @@ def _pyca_aead_encrypt(key, nonce, aad, plaintext):
     return combined[:-16], combined[-16:]
 
 
-def test_chacha20_block_vs_pyca(transport, labels, rng, count=20):
+def test_chacha20_block_vs_pyca(target, labels, rng, count=20):
     """Cross-check ChaCha20 block keystream against pyca."""
     passed = failed = 0
     for i in range(count):
@@ -678,8 +693,8 @@ def test_chacha20_block_vs_pyca(transport, labels, rng, count=20):
 
         expected = _pyca_chacha20_keystream(key, counter, nonce, nblocks=1)
 
-        c64_chacha20_init(transport, labels, key, nonce, counter)
-        got = c64_chacha20_block(transport, labels)
+        c64_chacha20_init(target, labels, key, nonce, counter)
+        got = c64_chacha20_block(target, labels)
 
         if got == expected:
             passed += 1
@@ -696,7 +711,7 @@ def test_chacha20_block_vs_pyca(transport, labels, rng, count=20):
     return passed, failed
 
 
-def test_poly1305_vs_pyca(transport, labels, rng, count=20):
+def test_poly1305_vs_pyca(target, labels, rng, count=20):
     """Cross-check Poly1305 MAC against pyca."""
     passed = failed = 0
     # Lengths chosen to hit boundaries: empty, 1, <16, 15, 16, 17, 32, 64,
@@ -716,7 +731,7 @@ def test_poly1305_vs_pyca(transport, labels, rng, count=20):
             continue
 
         expected = _pyca_poly1305_tag(key, message)
-        got = c64_poly1305_mac(transport, labels, key, message)
+        got = c64_poly1305_mac(target, labels, key, message)
 
         if got == expected:
             passed += 1
@@ -742,7 +757,7 @@ AEAD_PT_SIZES = [0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 511, 512]
 AEAD_AAD_SIZES = [0, 1, 16, 255]
 
 
-def test_aead_vs_pyca(transport, labels, rng):
+def test_aead_vs_pyca(target, labels, rng):
     """Cross-check AEAD encrypt + decrypt + tamper rejection against pyca.
 
     For each (aad_len, pt_len) combo we:
@@ -775,7 +790,7 @@ def test_aead_vs_pyca(transport, labels, rng):
         pyca_ct, pyca_tag = _pyca_aead_encrypt(key, nonce, aad, plaintext)
 
         # --- 1. Encrypt on C64, compare to pyca ---
-        c64_ct, c64_tag = c64_aead_encrypt(transport, labels, key, nonce,
+        c64_ct, c64_tag = c64_aead_encrypt(target, labels, key, nonce,
                                             aad, plaintext)
         ct_ok = c64_ct == pyca_ct
         tag_ok = c64_tag == pyca_tag
@@ -797,7 +812,7 @@ def test_aead_vs_pyca(transport, labels, rng):
             continue  # skip decrypt checks if encrypt didn't match
 
         # --- 2. Decrypt pyca's (ct, tag) on C64 ---
-        pt_got, _, status = c64_aead_decrypt(transport, labels, key, nonce,
+        pt_got, _, status = c64_aead_decrypt(target, labels, key, nonce,
                                               aad, pyca_ct, pyca_tag)
         if pt_got == plaintext and status == 0:
             passed += 1
@@ -815,7 +830,7 @@ def test_aead_vs_pyca(transport, labels, rng):
         bad_tag = bytearray(pyca_tag)
         bad_tag[rng.randint(0, 15)] ^= 0x5A
         _, _, bad_tag_status = c64_aead_decrypt(
-            transport, labels, key, nonce, aad, pyca_ct, bytes(bad_tag))
+            target, labels, key, nonce, aad, pyca_ct, bytes(bad_tag))
         if bad_tag_status != 0:
             passed += 1
             if VERBOSE:
@@ -831,7 +846,7 @@ def test_aead_vs_pyca(transport, labels, rng):
             bad_ct = bytearray(pyca_ct)
             bad_ct[rng.randint(0, len(bad_ct) - 1)] ^= 0x5A
             _, _, bad_ct_status = c64_aead_decrypt(
-                transport, labels, key, nonce, aad, bytes(bad_ct), pyca_tag)
+                target, labels, key, nonce, aad, bytes(bad_ct), pyca_tag)
             if bad_ct_status != 0:
                 passed += 1
                 if VERBOSE:
@@ -843,7 +858,7 @@ def test_aead_vs_pyca(transport, labels, rng):
     return passed, failed
 
 
-def test_sanity_floor(transport, labels, rng):
+def test_sanity_floor(target, labels, rng):
     """Sanity floor: verify encryption actually transforms the plaintext.
 
     Catches a 'stub that just copies input to output' — if aead_encrypt
@@ -858,7 +873,7 @@ def test_sanity_floor(transport, labels, rng):
     nonce = bytes(rng.randint(1, 255) for _ in range(12))
     aad = b""
     plaintext = bytes(rng.randint(1, 255) for _ in range(64))
-    ct, tag = c64_aead_encrypt(transport, labels, key, nonce, aad, plaintext)
+    ct, tag = c64_aead_encrypt(target, labels, key, nonce, aad, plaintext)
 
     if ct != plaintext:
         passed += 1
@@ -888,7 +903,7 @@ def test_sanity_floor(transport, labels, rng):
     # itself is effectively nonzero for any real ChaCha20 key/nonce). This
     # catches 'AND-with-plaintext' style stubs.
     zero_pt = bytes(64)
-    zero_ct, zero_tag = c64_aead_encrypt(transport, labels, key, nonce,
+    zero_ct, zero_tag = c64_aead_encrypt(target, labels, key, nonce,
                                           aad, zero_pt)
     if zero_ct != zero_pt:
         passed += 1
@@ -922,37 +937,37 @@ def test_sanity_floor(transport, labels, rng):
 # Runner
 # ============================================================================
 
-def run_tests(transport, labels, seed):
+def run_tests(target, labels, seed):
     rng = random.Random(seed)
     total_passed = 0
     total_failed = 0
 
     test_groups = [
-        ("rotation functions", lambda: test_rotations(transport, labels)),
+        ("rotation functions", lambda: test_rotations(target, labels)),
         ("ChaCha20 quarter-round",
-         lambda: test_chacha20_quarter_round(transport, labels)),
-        ("ChaCha20 block", lambda: test_chacha20_block(transport, labels)),
+         lambda: test_chacha20_quarter_round(target, labels)),
+        ("ChaCha20 block", lambda: test_chacha20_block(target, labels)),
         ("ChaCha20 encrypt (RFC)",
-         lambda: test_chacha20_encrypt(transport, labels)),
+         lambda: test_chacha20_encrypt(target, labels)),
         ("ChaCha20 encrypt (random)",
-         lambda: test_chacha20_encrypt_random(transport, labels, rng)),
-        ("Poly1305 clamp", lambda: test_poly1305_clamp(transport, labels)),
+         lambda: test_chacha20_encrypt_random(target, labels, rng)),
+        ("Poly1305 clamp", lambda: test_poly1305_clamp(target, labels)),
         ("Poly1305 tag (RFC)",
-         lambda: test_poly1305_tag(transport, labels)),
+         lambda: test_poly1305_tag(target, labels)),
         ("Poly1305 random",
-         lambda: test_poly1305_random(transport, labels, rng)),
+         lambda: test_poly1305_random(target, labels, rng)),
         ("AEAD encrypt (RFC)",
-         lambda: test_aead_encrypt(transport, labels)),
-        ("AEAD random", lambda: test_aead_random(transport, labels, rng)),
-        ("AEAD decrypt", lambda: test_aead_decrypt(transport, labels, rng)),
+         lambda: test_aead_encrypt(target, labels)),
+        ("AEAD random", lambda: test_aead_random(target, labels, rng)),
+        ("AEAD decrypt", lambda: test_aead_decrypt(target, labels, rng)),
         ("ChaCha20 block vs pyca (cross-check)",
-         lambda: test_chacha20_block_vs_pyca(transport, labels, rng)),
+         lambda: test_chacha20_block_vs_pyca(target, labels, rng)),
         ("Poly1305 vs pyca (cross-check)",
-         lambda: test_poly1305_vs_pyca(transport, labels, rng)),
+         lambda: test_poly1305_vs_pyca(target, labels, rng)),
         ("AEAD vs pyca (cross-check)",
-         lambda: test_aead_vs_pyca(transport, labels, rng)),
+         lambda: test_aead_vs_pyca(target, labels, rng)),
         ("Sanity floor (ct != pt, tag != 0)",
-         lambda: test_sanity_floor(transport, labels, rng)),
+         lambda: test_sanity_floor(target, labels, rng)),
     ]
 
     for name, fn in test_groups:
@@ -1035,22 +1050,69 @@ def main():
         warp=True,
         ntsc=True,
         sound=False,
+        # macOS-26 + VICE 3.10 hangs in kernal IEC busy-wait under the
+        # default VirtualFS autostart (mode 0); RAM-injection (mode 1)
+        # bypasses the IEC path and boots cleanly.
+        extra_args=["-autostartprgmode", "1"],
     )
 
+    backend = os.environ.get("C64_BACKEND", "u64").lower()
+
     t0 = time.time()
-    with ViceInstanceManager(config=config) as mgr:
+    with create_manager(backend=backend, vice_config=config) as mgr:
         inst = mgr.acquire()
-        print(f"VICE PID={inst.pid}, port={inst.port}")
-        transport = inst.transport
+        print(f"Backend={mgr.backend} PID={inst.pid}")
 
-        # The library PRG is a thin shell whose entry routine just RTSes,
-        # so there's no BASIC "ready" prompt to wait on. Give KERNAL a
-        # moment to finish autoload, then proceed — subsequent jsr() calls
-        # will talk directly to the binary monitor.
-        time.sleep(1.5)
+        # UnifiedManager.acquire() does not auto-load a PRG on the U64
+        # backend (unlike VICE, where ViceConfig.prg_path is loaded by
+        # ViceProcess). Side-load the PRG via PUT writemem (avoiding the
+        # POST-body endpoints, which can return 'Could not read data
+        # from attachment' on degraded U64E fw 3.14d state) and drive
+        # `RUN` through the keyboard buffer to autostart.
+        if inst.backend == "u64":
+            # Harness gap: TestTarget does not expose the underlying
+            # Ultimate64Client; reach for it via the transport.
+            client = inst.transport._client
+            # Bump the PUT/POST split threshold so write_bytes never
+            # touches the POST writemem path. The firmware caps PUT at
+            # 128 bytes/call; write_bytes already chunks at 84 internally.
+            client.WRITE_MEM_QUERY_THRESHOLD = 128
+            # A previous test session may have left the CPU parked in
+            # the trampoline at $0360, so BASIC isn't draining the
+            # keyboard buffer. A soft reset returns the C64 to BASIC
+            # READY without resetting the FPGA / DMA controller.
+            client.reset()
+            time.sleep(2.0)
+            grid = wait_for_text(inst.transport, "READY", timeout=30.0)
+            if grid is None:
+                print("  warning: BASIC READY prompt not seen within 30s after reset")
+            with open(PRG_PATH, "rb") as f:
+                prg = f.read()
+            load_addr = prg[0] | (prg[1] << 8)
+            print(f"Sideloading PRG: load_addr=${load_addr:04X}, "
+                  f"body={len(prg) - 2} bytes")
+            t_load = time.time()
+            write_bytes(inst.transport, load_addr, prg[2:])
+            print(f"  sideload done in {time.time() - t_load:.1f}s")
+            keyboard.send_text(inst.transport, "RUN\r")
+            time.sleep(2.0)
+            grid = wait_for_text(inst.transport, "READY", timeout=30.0)
+            if grid is None:
+                print("  warning: BASIC READY prompt not seen within 30s after RUN")
+            # The reset above wiped the trampoline at $0360, so any
+            # cached "installed" state from a prior session no longer
+            # corresponds to live RAM. Clearing the attribute makes the
+            # very next run_subroutine() reinstall + re-trigger.
+            if hasattr(inst, "_u64_shim_state"):
+                delattr(inst, "_u64_shim_state")
+        else:
+            # VICE: ViceProcess loaded the PRG. The library entry is a
+            # thin shell that RTSes back to BASIC, so just give KERNAL
+            # a moment to finish autoload before issuing JSRs.
+            time.sleep(1.5)
 
-        print("VICE ready, running tests...")
-        passed, failed = run_tests(transport, labels, seed)
+        print("Target ready, running tests...")
+        passed, failed = run_tests(inst, labels, seed)
         mgr.release(inst)
 
     elapsed = time.time() - t0

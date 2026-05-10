@@ -30,11 +30,16 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
+    keyboard,
     read_bytes,
     write_bytes,
-    jsr,
+    wait_for_text,
 )
+
+# Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
+# trampoline + sentinel poll. Returns the post-JSR A register value.
+from _u64_helpers import run_subroutine
 
 PRG_PATH = os.path.join(PROJECT_ROOT, "build", "profile-b", "c64_chacha20_poly1305.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "profile-b", "labels.txt")
@@ -88,8 +93,10 @@ def build_shim(ct_mul_addr: int, prod_lo: int, prod_hi: int) -> bytes:
 def main() -> int:
     labels = Labels.from_file(LABELS_PATH)
     ct_mul_addr = labels["ct_mul_8x8"]
-    smc_sum_imm1 = labels["smc_sum_a_imm"] + 1   # immediate byte
-    smc_diff_imm1 = labels["smc_diff_a_imm"] + 1 # immediate byte
+    # Labels come from the SMC macro, which suffixes with `_SMC`. The
+    # operand byte sits at +1 from the JSR target opcode address.
+    smc_sum_imm1 = labels["smc_sum_a_imm_SMC"] + 1   # immediate byte
+    smc_diff_imm1 = labels["smc_diff_a_imm_SMC"] + 1 # immediate byte
     prod_lo = labels["poly_prod_lo"]
     prod_hi = labels["poly_prod_hi"]
     poly1305_lib_init = labels["poly1305_lib_init"]
@@ -102,16 +109,55 @@ def main() -> int:
 
     shim = build_shim(ct_mul_addr, prod_lo, prod_hi)
 
-    cfg = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+    cfg = ViceConfig(
+        prg_path=PRG_PATH,
+        warp=True,
+        ntsc=True,
+        sound=False,
+        # macOS-26 + VICE 3.10 hangs in kernal IEC busy-wait under the
+        # default VirtualFS autostart (mode 0); RAM-injection (mode 1)
+        # bypasses the IEC path and boots cleanly.
+        extra_args=["-autostartprgmode", "1"],
+    )
+    backend = os.environ.get("C64_BACKEND", "u64").lower()
 
     t_start = time.time()
-    with ViceInstanceManager(config=cfg) as mgr:
+    with create_manager(backend=backend, vice_config=cfg) as mgr:
         inst = mgr.acquire()
         transport = inst.transport
-        time.sleep(1.0)  # let BASIC settle before first jsr
+
+        # UnifiedManager.acquire() does not auto-load a PRG on the U64
+        # backend. Side-load via PUT writemem (avoiding the POST endpoints
+        # that returned 'Could not read data from attachment' on degraded
+        # U64E fw 3.14d state) and drive `RUN` through the keyboard buffer.
+        if inst.backend == "u64":
+            client = inst.transport._client
+            client.WRITE_MEM_QUERY_THRESHOLD = 128
+            client.reset()
+            time.sleep(2.0)
+            grid = wait_for_text(transport, "READY", timeout=30.0)
+            if grid is None:
+                print("  warning: BASIC READY prompt not seen within 30s "
+                      "after reset")
+            with open(PRG_PATH, "rb") as f:
+                prg = f.read()
+            load_addr = prg[0] | (prg[1] << 8)
+            print(f"Sideloading PRG: load_addr=${load_addr:04X}, "
+                  f"body={len(prg) - 2} bytes")
+            t_load = time.time()
+            write_bytes(transport, load_addr, prg[2:])
+            print(f"  sideload done in {time.time() - t_load:.1f}s")
+            keyboard.send_text(transport, "RUN\r")
+            time.sleep(2.0)
+            grid = wait_for_text(transport, "READY", timeout=30.0)
+            if grid is None:
+                print("  warning: BASIC READY prompt not seen within 30s "
+                      "after RUN")
+        else:
+            time.sleep(1.0)  # let BASIC settle before first jsr
 
         # Build sqtab_lo/hi (one-shot).
-        jsr(transport, poly1305_lib_init, timeout=30.0)
+        run_subroutine(inst, poly1305_lib_init, timeout=30.0)
 
         # Plant shim at $C000.
         write_bytes(transport, SHIM_ADDR, shim)
@@ -125,7 +171,7 @@ def main() -> int:
             write_bytes(transport, smc_diff_imm1, bytes([a]))
 
             # Run 256-b inner sweep; results land at $C200 / $C300.
-            jsr(transport, SHIM_ADDR, timeout=5.0)
+            run_subroutine(inst, SHIM_ADDR, timeout=5.0)
 
             lo = read_bytes(transport, RESULTS_LO, 256)
             hi = read_bytes(transport, RESULTS_HI, 256)

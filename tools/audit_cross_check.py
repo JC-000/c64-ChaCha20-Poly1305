@@ -63,11 +63,16 @@ from cryptography.hazmat.primitives.poly1305 import Poly1305 as _PycaPoly1305
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceInstanceManager,
+    create_manager,
+    keyboard,
     read_bytes,
     write_bytes,
-    jsr,
+    wait_for_text,
 )
+
+# Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
+# trampoline + sentinel poll. Returns the post-JSR A register value.
+from _u64_helpers import run_subroutine
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -147,21 +152,23 @@ def pyca_aead_encrypt(key, nonce, aad, plaintext):
 # C64 drivers (mirror test_chacha20_poly1305.py conventions)
 # ---------------------------------------------------------------------------
 
-def c64_chacha20_keystream(transport, labels, key, nonce, counter):
+def c64_chacha20_keystream(target, labels, key, nonce, counter):
     """Drive `chacha20_init` + `chacha20_block` and read 64 B keystream."""
+    transport = target.transport
     write_bytes(transport, labels["cc20_key"], key)
     write_bytes(transport, labels["cc20_nonce"], nonce)
     write_bytes(transport, labels["cc20_counter"], counter.to_bytes(4, "little"))
-    jsr(transport, labels["chacha20_init"], timeout=30.0)
-    jsr(transport, labels["chacha20_block"], timeout=120.0)
+    run_subroutine(target, labels["chacha20_init"], timeout=30.0)
+    run_subroutine(target, labels["chacha20_block"], timeout=120.0)
     return bytes(read_bytes(transport, labels["cc20_keystream"], 64))
 
 
-def c64_poly1305_mac(transport, labels, key, message):
+def c64_poly1305_mac(target, labels, key, message):
     """MAC an arbitrary-length message via init + (chunked) update + final."""
+    transport = target.transport
     write_bytes(transport, labels["poly_r"], key[:16])
     write_bytes(transport, labels["poly_s"], key[16:])
-    jsr(transport, labels["poly1305_init"], timeout=60.0)
+    run_subroutine(target, labels["poly1305_init"], timeout=60.0)
 
     pos = 0
     n = len(message)
@@ -170,7 +177,7 @@ def c64_poly1305_mac(transport, labels, key, message):
         write_bytes(transport, SCRATCH_BUF, chunk)
         write_ptr(transport, labels["zp_ptr1"], SCRATCH_BUF)
         write_bytes(transport, labels["cc20_remain"], bytes([len(chunk)]))
-        jsr(transport, labels["poly1305_update"], timeout=240.0)
+        run_subroutine(target, labels["poly1305_update"], timeout=240.0)
         pos += POLY_CHUNK
 
     tail = message[pos:]
@@ -178,9 +185,9 @@ def c64_poly1305_mac(transport, labels, key, message):
         write_bytes(transport, SCRATCH_BUF, tail)
         write_ptr(transport, labels["zp_ptr1"], SCRATCH_BUF)
         write_bytes(transport, labels["cc20_remain"], bytes([len(tail)]))
-        jsr(transport, labels["poly1305_update"], timeout=240.0)
+        run_subroutine(target, labels["poly1305_update"], timeout=240.0)
 
-    jsr(transport, labels["poly1305_final"], timeout=30.0)
+    run_subroutine(target, labels["poly1305_final"], timeout=30.0)
     return bytes(read_bytes(transport, labels["poly1305_tag"], 16))
 
 
@@ -197,20 +204,22 @@ def _aead_setup_buffers(transport, labels, key, nonce, aad):
     return aad_buf, data_buf
 
 
-def c64_aead_encrypt(transport, labels, key, nonce, aad, plaintext):
+def c64_aead_encrypt(target, labels, key, nonce, aad, plaintext):
+    transport = target.transport
     _, data_buf = _aead_setup_buffers(transport, labels, key, nonce, aad)
     if plaintext:
         write_bytes(transport, data_buf, plaintext)
     write_ptr(transport, labels["aead_data_ptr"], data_buf)
     write_bytes(transport, labels["aead_data_len"],
                 struct.pack("<H", len(plaintext)))
-    jsr(transport, labels["aead_encrypt"], timeout=600.0)
+    run_subroutine(target, labels["aead_encrypt"], timeout=600.0)
     ct = bytes(read_bytes(transport, data_buf, len(plaintext)))
     tag = bytes(read_bytes(transport, labels["poly1305_tag"], 16))
     return ct, tag
 
 
-def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
+def c64_aead_decrypt(target, labels, key, nonce, aad, ciphertext, tag):
+    transport = target.transport
     _, data_buf = _aead_setup_buffers(transport, labels, key, nonce, aad)
     if ciphertext:
         write_bytes(transport, data_buf, ciphertext)
@@ -218,11 +227,10 @@ def c64_aead_decrypt(transport, labels, key, nonce, aad, ciphertext, tag):
     write_bytes(transport, labels["aead_data_len"],
                 struct.pack("<H", len(ciphertext)))
     write_bytes(transport, labels["aead_tag"], tag)
-    regs = jsr(transport, labels["aead_decrypt"], timeout=600.0)
+    # aead_decrypt returns A=0 on success, A != 0 on auth failure.
+    # run_subroutine returns that A byte directly on both VICE and U64.
+    status = run_subroutine(target, labels["aead_decrypt"], timeout=600.0)
     pt = bytes(read_bytes(transport, data_buf, len(ciphertext)))
-    status = 0
-    if isinstance(regs, dict):
-        status = regs.get("a", regs.get("A", 0))
     return pt, status
 
 
@@ -260,7 +268,7 @@ def gen_aad_len(rng):
 # Category runners
 # ---------------------------------------------------------------------------
 
-def run_category_chacha20(transport, labels, rng, count, log):
+def run_category_chacha20(target, labels, rng, count, log):
     log.line(f"\n[1/5] chacha20_block keystream: {count} vectors")
     t0 = time.time()
     passed = failed = 0
@@ -271,7 +279,7 @@ def run_category_chacha20(transport, labels, rng, count, log):
         counter = rng.randint(0, 0xFFFFFFFF)
 
         expected = pyca_chacha20_keystream(key, counter, nonce)
-        got = c64_chacha20_keystream(transport, labels, key, nonce, counter)
+        got = c64_chacha20_keystream(target, labels, key, nonce, counter)
 
         if got == expected:
             passed += 1
@@ -299,7 +307,7 @@ def run_category_chacha20(transport, labels, rng, count, log):
     return passed, failed, elapsed
 
 
-def run_category_poly1305(transport, labels, rng, count, log):
+def run_category_poly1305(target, labels, rng, count, log):
     log.line(f"\n[2/5] poly1305 tag: {count} vectors")
     t0 = time.time()
     passed = failed = 0
@@ -310,7 +318,7 @@ def run_category_poly1305(transport, labels, rng, count, log):
         msg = rand_bytes(rng, msg_len)
 
         expected = pyca_poly1305_tag(key, msg)
-        got = c64_poly1305_mac(transport, labels, key, msg)
+        got = c64_poly1305_mac(target, labels, key, msg)
 
         if got == expected:
             passed += 1
@@ -338,7 +346,7 @@ def run_category_poly1305(transport, labels, rng, count, log):
     return passed, failed, elapsed
 
 
-def run_category_aead(transport, labels, rng, count, log):
+def run_category_aead(target, labels, rng, count, log):
     """Combined AEAD encrypt + decrypt cross-check.
 
     Each vector produces TWO checks (encrypt match and decrypt recovery),
@@ -367,7 +375,7 @@ def run_category_aead(transport, labels, rng, count, log):
         exp_ct, exp_tag = pyca_aead_encrypt(key, nonce, aad, pt)
 
         got_ct, got_tag = c64_aead_encrypt(
-            transport, labels, key, nonce, aad, pt)
+            target, labels, key, nonce, aad, pt)
         if got_ct == exp_ct and got_tag == exp_tag:
             enc_pass += 1
         else:
@@ -379,7 +387,7 @@ def run_category_aead(transport, labels, rng, count, log):
                 break
 
         rec_pt, status = c64_aead_decrypt(
-            transport, labels, key, nonce, aad, exp_ct, exp_tag)
+            target, labels, key, nonce, aad, exp_ct, exp_tag)
         if status == 0 and rec_pt == pt:
             dec_pass += 1
         else:
@@ -424,7 +432,7 @@ def run_category_aead(transport, labels, rng, count, log):
     return enc_pass, enc_fail, dec_pass, dec_fail, elapsed, decrypt_vectors
 
 
-def run_category_decrypt_tamper(transport, labels, rng, decrypt_vectors,
+def run_category_decrypt_tamper(target, labels, rng, decrypt_vectors,
                                 count, log):
     """Flip a single bit in ciphertext, tag, or aad and expect auth-fail.
 
@@ -454,16 +462,17 @@ def run_category_decrypt_tamper(transport, labels, rng, decrypt_vectors,
         choices.append("tag")  # always 16 bytes, always flippable
         if len(aad) > 0:
             choices.append("aad")
-        target = rng.choice(choices)
+        # Don't shadow the `target` parameter — pick a different local name.
+        tamper_field = rng.choice(choices)
 
-        if target == "ct":
+        if tamper_field == "ct":
             idx = rng.randint(0, len(ct) - 1)
             bit = 1 << rng.randint(0, 7)
             tampered_ct = bytes(b ^ bit if j == idx else b
                                 for j, b in enumerate(ct))
             tampered_tag = tag
             tampered_aad = aad
-        elif target == "tag":
+        elif tamper_field == "tag":
             idx = rng.randint(0, 15)
             bit = 1 << rng.randint(0, 7)
             tampered_ct = ct
@@ -479,7 +488,7 @@ def run_category_decrypt_tamper(transport, labels, rng, decrypt_vectors,
                                  for j, b in enumerate(aad))
 
         _, status = c64_aead_decrypt(
-            transport, labels, key, nonce, tampered_aad,
+            target, labels, key, nonce, tampered_aad,
             tampered_ct, tampered_tag)
 
         # aead_decrypt returns A=0 on success, A != 0 on auth failure.
@@ -488,7 +497,7 @@ def run_category_decrypt_tamper(transport, labels, rng, decrypt_vectors,
         else:
             failed += 1
             if first_fail is None:
-                first_fail = (i, target, idx, bit, key, nonce, aad, pt,
+                first_fail = (i, tamper_field, idx, bit, key, nonce, aad, pt,
                               ct, tag, tampered_ct, tampered_tag, tampered_aad)
             if failed >= 3:
                 break
@@ -541,15 +550,42 @@ def main():
                          "the 15 000 total)")
     ap.add_argument("--tamper-count", type=int, default=3000,
                     help="Number of tamper-rejection vectors (default 3000)")
+    ap.add_argument("--vectors", type=int, default=None,
+                    help="Total vector budget: scales the per-category "
+                         "counts proportionally to the 1000:1000:5000:5000:"
+                         "3000 default ratio. Useful for runtime budgeting "
+                         "(e.g. --vectors 1000 on U64 hardware vs. the "
+                         "implicit 15000 on VICE). Overrides per-category "
+                         "flags; pass them explicitly to opt out.")
     args = ap.parse_args()
+
+    if args.vectors is not None:
+        # Proportionally scale per-category counts. The default ratio is
+        # 1000:1000:5000:5000:3000 (cc20:poly:aead_enc:aead_dec:tamper),
+        # and aead_count is counted twice (encrypt + decrypt), so total =
+        # cc20 + poly + 2*aead + tamper. Solve for a scale factor s such
+        # that s*(1000+1000+2*5000+3000) == args.vectors -> s = N/15000.
+        scale = args.vectors / 15000.0
+        args.cc20_count = max(1, int(round(1000 * scale)))
+        args.poly_count = max(1, int(round(1000 * scale)))
+        args.aead_count = max(1, int(round(5000 * scale)))
+        args.tamper_count = max(1, int(round(3000 * scale)))
 
     log = LogWriter(args.log)
     try:
         rng = random.Random(args.seed)
 
         labels = Labels.from_file(LABELS_PATH)
-        config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True,
-                            sound=False)
+        config = ViceConfig(
+            prg_path=PRG_PATH,
+            warp=True,
+            ntsc=True,
+            sound=False,
+            # macOS-26 + VICE 3.10 hangs in kernal IEC busy-wait under the
+            # default VirtualFS autostart (mode 0); RAM-injection (mode 1)
+            # bypasses the IEC path and boots cleanly.
+            extra_args=["-autostartprgmode", "1"],
+        )
 
         total_vectors = (args.cc20_count + args.poly_count
                          + 2 * args.aead_count + args.tamper_count)
@@ -563,21 +599,52 @@ def main():
         log.line(f"         total = {total_vectors}")
         log.line("=" * 64)
 
+        backend = os.environ.get("C64_BACKEND", "u64").lower()
+
         t0 = time.time()
-        with ViceInstanceManager(config=config) as mgr:
+        with create_manager(backend=backend, vice_config=config) as mgr:
             inst = mgr.acquire()
-            transport = inst.transport
-            time.sleep(1.5)  # KERNAL settle
+
+            # UnifiedManager.acquire() does not auto-load a PRG on the
+            # U64 backend. Side-load via PUT writemem (avoiding the POST
+            # endpoints that returned 'Could not read data from
+            # attachment' on degraded U64E fw 3.14d state) and drive
+            # `RUN` through the keyboard buffer to autostart.
+            if inst.backend == "u64":
+                client = inst.transport._client
+                client.WRITE_MEM_QUERY_THRESHOLD = 128
+                client.reset()
+                time.sleep(2.0)
+                grid = wait_for_text(inst.transport, "READY", timeout=30.0)
+                if grid is None:
+                    log.line("  warning: BASIC READY prompt not seen "
+                             "within 30s after reset")
+                with open(PRG_PATH, "rb") as f:
+                    prg = f.read()
+                load_addr = prg[0] | (prg[1] << 8)
+                log.line(f"Sideloading PRG: load_addr=${load_addr:04X}, "
+                         f"body={len(prg) - 2} bytes")
+                t_load = time.time()
+                write_bytes(inst.transport, load_addr, prg[2:])
+                log.line(f"  sideload done in {time.time() - t_load:.1f}s")
+                keyboard.send_text(inst.transport, "RUN\r")
+                time.sleep(2.0)
+                grid = wait_for_text(inst.transport, "READY", timeout=30.0)
+                if grid is None:
+                    log.line("  warning: BASIC READY prompt not seen "
+                             "within 30s after RUN")
+            else:
+                time.sleep(1.5)  # KERNAL settle
 
             cc20_pass, cc20_fail, cc20_el = run_category_chacha20(
-                transport, labels, rng, args.cc20_count, log)
+                inst, labels, rng, args.cc20_count, log)
             poly_pass, poly_fail, poly_el = run_category_poly1305(
-                transport, labels, rng, args.poly_count, log)
+                inst, labels, rng, args.poly_count, log)
             enc_pass, enc_fail, dec_pass, dec_fail, aead_el, dec_vecs = \
-                run_category_aead(transport, labels, rng,
+                run_category_aead(inst, labels, rng,
                                   args.aead_count, log)
             tamp_pass, tamp_fail, tamp_el = run_category_decrypt_tamper(
-                transport, labels, rng, dec_vecs, args.tamper_count, log)
+                inst, labels, rng, dec_vecs, args.tamper_count, log)
 
             mgr.release(inst)
 
