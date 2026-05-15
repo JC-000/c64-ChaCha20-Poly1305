@@ -44,7 +44,7 @@ B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/chacha20poly1305_lib.o \
          $(PROFILE_B_DIR)/data_lib.o
 
-.PHONY: all clean run profile-a profile-b
+.PHONY: all clean run profile-a profile-b dist
 
 # Default build == Profile A (POLY1305_PROFILE_LONG defined).
 all: profile-a
@@ -121,3 +121,12 @@ run: profile-a
 
 clean:
 	rm -rf build
+
+# Reproducible source tarball for a tagged release.
+# Usage: make dist VERSION=v0.5.0
+dist:
+	@if [ -z "$(VERSION)" ]; then \
+	  echo "usage: make dist VERSION=v0.5.0" >&2; \
+	  exit 1; \
+	fi
+	@tools/build_release.sh $(VERSION)
