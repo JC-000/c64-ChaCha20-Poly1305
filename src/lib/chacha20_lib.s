@@ -23,6 +23,10 @@
 ; Cross-module imports: data_lib state (main-RAM, not ZP).
 .import cc20_state, cc20_key, cc20_nonce, cc20_counter, cc20_remain_hi
 
+; Cross-module imports: page-aligned nibble-swap LUTs used by the C4
+; branchless rotl32_4_zp macro. Defined in data_lib.s.
+.import chacha_nibswap_hi_tab, chacha_nibswap_lo_tab
+
 .export chacha20_init, chacha20_block, chacha20_quarter_round
 .export chacha20_encrypt
 .export cc20_qr_table, cc20_constants
@@ -121,71 +125,54 @@ cc20_qr_table:
         sty dst               ; b0' = old b3
 .endmacro
 
-; w[dst] <<<= 4  — LE nibble rotate left by 4
+; w[dst] <<<= 4  — LE nibble rotate left by 4 (C4: branchless LUT form).
 ;   new_b0 = (b0 << 4) | (b3 >> 4)
 ;   new_b1 = (b1 << 4) | (b0 >> 4)
 ;   new_b2 = (b2 << 4) | (b1 >> 4)
 ;   new_b3 = (b3 << 4) | (b2 >> 4)
-; We save b3 high nibble (wraps into b0 low), then process b3,b2,b1,b0 in
-; that order so each low nibble comes from the *old* value of the previous
-; byte. Uses zp_tmp1 as scratch for the wrap.
+; Stitches two 256-byte page-aligned LUTs (chacha_nibswap_hi_tab,
+; chacha_nibswap_lo_tab) across the four bytes in straight-line code.
+; Each (lda abs,x) is 4 cy with no page-cross penalty thanks to .align 256
+; — preserves CT (X is derived from secret state).
+;
+; Pre-save b3>>4 into zp_tmp1 (wraps into new_b0), then walk b3..b0:
+; each step keeps X = old b_i across the two LUT reads (hi_tab[b_i],
+; lo_tab[b_{i-1}]) before X is reloaded with b_{i-1}. 80 cy total
+; (vs ~124 cy for the prior asl/lsr/ora chain). Clobbers A and X.
 .macro rotl32_4_zp dst
-        lda dst+3
-        lsr
-        lsr
-        lsr
-        lsr
-        sta zp_tmp1            ; b3 >> 4 (wrap into b0 low)
+        ; Save (b3 >> 4) — wraps into new_b0's low nibble.
+        ldx dst+3
+        lda chacha_nibswap_lo_tab,x
+        sta zp_tmp1
 
-        lda dst+3
-        asl
-        asl
-        asl
-        asl
-        sta dst+3             ; b3 = b3 << 4 (low nibble will be filled)
-        lda dst+2
-        lsr
-        lsr
-        lsr
-        lsr
+        ; new_b3 = (b3 << 4) | (b2 >> 4)
+        lda chacha_nibswap_hi_tab,x   ; b3 << 4 (X still = old b3)
+        sta dst+3                      ; park hi half
+        ldx dst+2
+        lda chacha_nibswap_lo_tab,x   ; b2 >> 4
         ora dst+3
-        sta dst+3             ; b3 = (b3 << 4) | (b2 >> 4)
+        sta dst+3
 
-        lda dst+2
-        asl
-        asl
-        asl
-        asl
-        sta dst+2
-        lda dst+1
-        lsr
-        lsr
-        lsr
-        lsr
+        ; new_b2 = (b2 << 4) | (b1 >> 4)
+        lda chacha_nibswap_hi_tab,x   ; b2 << 4 (X still = old b2)
+        sta dst+2                      ; park hi half
+        ldx dst+1
+        lda chacha_nibswap_lo_tab,x   ; b1 >> 4
         ora dst+2
-        sta dst+2             ; b2 = (b2 << 4) | (b1 >> 4)
+        sta dst+2
 
-        lda dst+1
-        asl
-        asl
-        asl
-        asl
-        sta dst+1
-        lda dst
-        lsr
-        lsr
-        lsr
-        lsr
+        ; new_b1 = (b1 << 4) | (b0 >> 4)
+        lda chacha_nibswap_hi_tab,x   ; b1 << 4 (X still = old b1)
+        sta dst+1                      ; park hi half
+        ldx dst
+        lda chacha_nibswap_lo_tab,x   ; b0 >> 4
         ora dst+1
-        sta dst+1             ; b1 = (b1 << 4) | (b0 >> 4)
+        sta dst+1
 
-        lda dst
-        asl
-        asl
-        asl
-        asl
+        ; new_b0 = (b0 << 4) | (b3 >> 4 from zp_tmp1)
+        lda chacha_nibswap_hi_tab,x   ; b0 << 4 (X still = old b0)
         ora zp_tmp1
-        sta dst               ; b0 = (b0 << 4) | (b3 >> 4)
+        sta dst
 .endmacro
 
 ; w[dst] <<<= 12  — rotl8 then rotl4

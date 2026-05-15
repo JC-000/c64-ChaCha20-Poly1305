@@ -22,6 +22,7 @@
 .export aead_key, aead_nonce, aead_aad_ptr, aead_aad_len
 .export aead_data_ptr, aead_data_len, aead_tag, aead_scratch
 .export sqtab_ready
+.export chacha_nibswap_hi_tab, chacha_nibswap_lo_tab
 
 .segment "DATA"
 
@@ -100,3 +101,38 @@ aead_scratch:
 ; Checked by poly1305_init to skip redundant sqtab rebuilds (Step 10).
 sqtab_ready:
         .res 1
+
+.segment "CODE"
+
+; =============================================================================
+; chacha_nibswap_hi_tab - 256-entry LUT: tab[V] = (V << 4) & $FF
+;
+; Used by C4 branchless rotl-by-4 (`rotl32_4_zp` in chacha20_lib.s) to
+; produce the high-nibble half of `new_b_i = (b_i << 4) | (b_{(i-1) mod 4}
+; >> 4)` without a four-shift `asl` chain. Pairs with chacha_nibswap_lo_tab.
+;
+; **Page-aligned** so that `lda chacha_nibswap_hi_tab,x` never crosses a
+; page boundary. The index X is derived from secret state (ChaCha20 work
+; bytes), so an `abs,x` page-cross penalty (+1 cy) would create a data-
+; dependent timing variance — a CT violation. Aligning the table base low
+; byte to $00 makes the access strictly constant-time.
+; =============================================================================
+        .align 256
+chacha_nibswap_hi_tab:
+        .repeat 256, V
+            .byte (V << 4) & $FF
+        .endrepeat
+
+; =============================================================================
+; chacha_nibswap_lo_tab - 256-entry LUT: tab[V] = V >> 4
+;
+; Companion table to chacha_nibswap_hi_tab: produces the low-nibble half
+; of `new_b_i = (b_i << 4) | (b_{(i-1) mod 4} >> 4)`. Same CT rationale
+; as above — `abs,x` with secret index, page-aligned to suppress the
+; cross penalty.
+; =============================================================================
+        .align 256
+chacha_nibswap_lo_tab:
+        .repeat 256, V
+            .byte V >> 4
+        .endrepeat
