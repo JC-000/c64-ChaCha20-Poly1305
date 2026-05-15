@@ -4,6 +4,93 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-15
+
+Performance release: lands **C4 (branchless rotl-4 LUT)** on the
+ChaCha20 quarter-round. Measured −8.8% on `chacha20_block`, flowing
+through to −3.8% / −1.9% on `aead_encrypt n=1024` for Profile A /
+B vs v0.4.0. Library PRGs change on both profiles — consumers
+integrating PRG binaries directly should re-integrate; consumers
+linking from source see the change automatically.
+
+### Added
+- **Two page-aligned 256-byte LUTs in `src/lib/data_lib.s`**
+  (PR #24): `chacha_nibswap_hi_tab[V] = (V << 4) & $FF` and
+  `chacha_nibswap_lo_tab[V] = V >> 4`. Both `.align 256` in a new
+  `.segment "CODE"` block in `data_lib.s`. Used by the rewritten
+  `rotl32_4_zp` macro to stitch the four-byte nibble rotate in
+  straight-line code: `new_b_i = hi_tab[b_i] | lo_tab[b_{(i-1) mod 4}]`.
+
+### Changed
+- **`rotl32_4_zp` macro in `src/lib/chacha20_lib.s` rewritten as
+  the C4 branchless LUT form** (PR #24). Replaces the prior
+  asl/lsr/ora chain (~124 cy) with a straight-line stitch across
+  the two new LUTs (~80 cy). Saves ~44 cy per call × 8 inlined
+  sites in `chacha20_block`'s looped double-round body =
+  −3 804 cy / `chacha20_block` (matches PR #22's predicted
+  ~−3 520 cy; small overshoot from tighter register choice).
+  Constant-time posture preserved: no data-dependent branches,
+  `lda abs,x` against page-aligned tables eliminates the page-cross
+  timing dependency on the secret index. The macro now also
+  clobbers X (in addition to A and `zp_tmp1`); verified safe
+  against all call sites in `cc20_qr_body_rest`.
+- **Library PRG fingerprints updated.** v0.5.0 reference builds:
+  - profile-a: `4da465a262d966059acc2038710fde87` (16 424 B,
+    top CODE label `$4827`)
+  - profile-b: `fbcc2d509335ff8a40b8607c7fd74837` (17 448 B,
+    top CODE label `$4C27`)
+  Both profiles remain under the `$5000` benchmark-plaintext-buffer
+  floor. Size delta vs v0.4.0 is +685 B on both profiles: −128 B
+  from the smaller `chacha20_block` body, +173 B of `.align 256`
+  padding between `chacha20poly1305_lib.o` end and the new
+  `data_lib.o` CODE additions, +512 B of LUT data.
+
+### Performance
+
+v0.5.0 cycle counts (CIA timer, 3 samples min per routine, identical
+on VICE and Ultimate 64 within ±0.2%):
+
+| routine                | v0.4.0   | v0.5.0   | Δ |
+|------------------------|---------:|---------:|---:|
+| `chacha20_block` (A/B) |   43 135 |   39 331 | **−8.8%** |
+| `poly1305_block` (A)   |   11 948 |   11 951 | noise |
+| `poly1305_block` (B)   |   37 844 |   37 950 | noise |
+| `aead_encrypt n=0` (A) |  186 182 |  182 345 | −2.1% |
+| `aead_encrypt n=0` (B) |   84 560 |   80 749 | −4.5% |
+| `aead_encrypt n=1024` (A) | 1 686 764 | 1 623 299 | **−3.8%** |
+| `aead_encrypt n=1024` (B) | 3 259 490 | 3 196 264 | **−1.9%** |
+
+### Validation
+- **214 / 214** RFC 7539 fixed-vector test suite passes on Ultimate
+  64 (`C64_BACKEND=u64 python tools/test_chacha20_poly1305.py`).
+  The rotation sub-group is **70 / 70** — load-bearing correctness
+  check for the C4 macro (covers all 80 logical
+  `rotl32_4_zp` invocations per `chacha20_block` via the dynamic
+  `chacha20_quarter_round` test entry).
+- Profile A and Profile B PRG fingerprints reproducible from clean
+  checkout.
+
+### Security
+- **No CT posture regression.** The new macro has zero data-dependent
+  branches; both LUTs are `.align 256` so `lda abs,x` against them
+  is strictly constant-time. v0.4.0's GREEN audit verdict
+  (F1/F2/F3 resolved) carries forward unchanged — C4 modifies only
+  the ChaCha20 rotation primitive, which was already CT-clean in
+  v0.4.0 via the asl/lsr/ora chain; the LUT form preserves that
+  property by construction.
+
+### Re-implementation history
+- This release re-implements [PR #22](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/22),
+  which had originally landed C4 but was closed unmerged with its
+  head branch unrecoverable. The current implementation follows
+  the spec from the closed PR (macro identity, LUT shapes,
+  page-alignment rationale) but is byte-different from the lost
+  binary — PR #22's predicted md5 fingerprints
+  (`418ce549…` / `27a71517…`) reflected that PR's specific
+  register/sequencing choices, not the spec itself. The 214-test
+  suite is the load-bearing correctness check, and it passes
+  cleanly on both profiles.
+
 ## [0.4.0] — 2026-05-10
 
 First release with **Ultimate 64 (U64) hardware backend support** for

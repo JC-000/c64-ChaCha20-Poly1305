@@ -54,22 +54,33 @@ secret data).
 
 ## Performance
 
-v0.3.0 cycle counts (cycles, measured via CIA timer, identical on
+v0.5.0 cycle counts (cycles, measured via CIA timer, identical on
 VICE and Ultimate 64 hardware backends to within ±0.2%,
-`tools/benchmark_chacha20_poly1305.py --seed 7539`, 3 samples,
-min per routine):
+`tools/benchmark_chacha20_poly1305.py`, 3 samples, min per routine):
 
 | routine              | S0 baseline |     Profile A |   change |     Profile B |   change |
 |----------------------|------------:|--------------:|---------:|--------------:|---------:|
-| `chacha20_block`     |     149 987 |        43 135 |  -71.2%  |        43 135 |  -71.2%  |
-| `poly1305_block`     |      53 270 |        11 948 |  -77.6%  |        37 844 |  -28.9%  |
-| `aead_encrypt` n=0   |     251 330 |       186 182 |  -25.9%  |        84 560 |  -66.4%  |
-| `aead_encrypt` n=1024|   5 974 048 |     1 686 764 |  -71.8%  |     3 259 490 |  -45.4%  |
+| `chacha20_block`     |     149 987 |        39 331 |  -73.8%  |        39 332 |  -73.8%  |
+| `poly1305_block`     |      53 270 |        11 951 |  -77.6%  |        37 950 |  -28.8%  |
+| `aead_encrypt` n=0   |     251 330 |       182 345 |  -27.4%  |        80 749 |  -67.9%  |
+| `aead_encrypt` n=1024|   5 974 048 |     1 623 299 |  -72.8%  |     3 196 264 |  -46.5%  |
 
-Profile A's n=0 cost (186 k cy) is the per-packet `poly1305_init`
+v0.5.0 lands **C4** (branchless rotl-4 via two page-aligned 256-byte
+LUTs) on the ChaCha20 quarter-round, replacing the asl/lsr/ora chain
+in `rotl32_4_zp` (~124 cy → ~80 cy, −44 cy/call × 8 inlined sites in
+`chacha20_block`'s double-round body). Both profiles share identical
+ChaCha20 code so the win is the same on both:
+
+| routine               |   v0.4.0 |   v0.5.0 |   Δ vs v0.4.0 |
+|-----------------------|---------:|---------:|--------------:|
+| `chacha20_block`      |   43 135 |   39 331 |     **−8.8%** |
+| `aead_encrypt` n=1024 A | 1 686 764 | 1 623 299 |     −3.8%   |
+| `aead_encrypt` n=1024 B | 3 259 490 | 3 196 264 |     −1.9%   |
+
+Profile A's n=0 cost (182 k cy) is the per-packet `poly1305_init`
 incremental Shoup-table build (S11), down from ~579 k cy in
 `v0.2-optimized`; it amortizes rapidly at n >= 256. Profile B's n=0
-runs in 84 k cy -- **−66.4%** below the sprint-0 baseline. See
+runs in 81 k cy — **−67.9%** below the sprint-0 baseline. See
 `docs/OPTIMIZATION_PLAN.md` for the full per-step progression table,
 per-byte breakdowns, and estimate-vs-measured analysis, and
 `docs/REPRO_CHECK.md` §4 for the post-CT-fix bench table.
@@ -199,16 +210,22 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.4.0**, which adds Ultimate 64 hardware
-backend support to the four `tools/*.py` validation scripts and
-makes the Profile A REU stash destination configurable via
-`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` (issue #19). Library
-PRG output is unchanged from v0.3.1 on the default-equate paths.
-Tagged releases are published on the
+The current release is **v0.5.0**, which lands the C4 branchless
+rotl-4 LUT optimization on the ChaCha20 quarter-round (−8.8%
+`chacha20_block`, −3.8% / −1.9% AEAD encrypt at n=1024 for Profile
+A / B vs v0.4.0). Library PRGs change vs v0.4.0 — consumers
+integrating PRG binaries directly should re-integrate. Tagged
+releases are published on the
 [GitHub releases page](https://github.com/JC-000/c64-ChaCha20-Poly1305/releases).
 
-Reference build fingerprints for v0.3.x (md5 of
+Reference build fingerprints for v0.5.0 (md5 of
 `build/profile-*/c64_chacha20_poly1305.prg`):
+
+- profile-a: `4da465a262d966059acc2038710fde87`
+- profile-b: `fbcc2d509335ff8a40b8607c7fd74837`
+
+Prior-release fingerprints (v0.3.x / v0.4.0, bit-identical on the
+default-equate paths):
 
 - profile-a: `313300ff4d86cefc6d3b195563c1383d`
 - profile-b: `a0e4b682fa454c6b8e2d8a04297333ab`
