@@ -27,21 +27,27 @@ ld65 label output by the Makefile).
 - **Profile A** precomputes 8 KB of Shoup per-r multiplication tables
   at `poly1305_init` time (~490 k cy setup cost), reducing
   `poly1305_block` from 38 760 to 12 119 cy. Best for messages longer
-  than ~256 bytes, where the table-build amortizes. Target workloads:
+  than **~64 bytes**, where the table-build amortizes (measured A/B
+  crossover, see `docs/BENCH_NSWEEP_v0.5.0.md`). Target workloads:
   WireGuard data packets (~1280 B), TLS 1.3 bulk records. With
   `POLY1305_REU=1`, backs up the quarter-square table to REU for
   fast restore if clobbered.
 
-  The REU destination bank and offset are configurable via
-  `POLY1305_REU_BANK` (default `0`) and `POLY1305_REU_OFFSET` (default
-  `$0000`) so downstream projects that link multiple REU consumers
-  (e.g. this library alongside `c64-x25519`, which occupies REU banks
-  0-1) can allocate non-conflicting regions. Override at assemble
-  time via `ca65 --asm-define POLY1305_REU_BANK=3
-  --asm-define POLY1305_REU_OFFSET=$1000`, or by `.include`'ing a
-  project-wide layout header that defines these before
-  `constants_lib.s` is included. With the defaults the runtime
-  behaviour is identical to prior releases. See issue #19.
+  The REU destination bank and offset are configurable two ways:
+
+  1. **Assemble-time** (baseline, unchanged): `ca65 --asm-define
+     POLY1305_REU_BANK=3 --asm-define POLY1305_REU_OFFSET=$1000`, or
+     `.include` a project-wide layout header before `constants_lib.s`.
+     With the defaults (`bank=0`, `offset=$0000`) the runtime behaviour
+     is identical to prior releases.
+  2. **Runtime** (new in [Unreleased]): the library exports two
+     public RAM-backed cells — `poly1305_reu_sqtab_bank` (1 byte)
+     and `poly1305_reu_sqtab_offset` (2 bytes LE) — that consumers
+     may write to before calling `poly1305_lib_init`. Useful for
+     hosts linking multiple REU consumers (e.g. this library
+     alongside `c64-x25519`, which occupies REU banks 0-1) that need
+     to coordinate layout without rebuilding. See `docs/API.md`
+     §"REU layout configuration" for the protocol. See issue #19.
 
 - **Profile B** uses the portable quarter-square multiply (1 KB table).
   Lower per-packet init cost (87 k vs 579 k cy at n=0), better for
@@ -79,7 +85,9 @@ ChaCha20 code so the win is the same on both:
 
 Profile A's n=0 cost (182 k cy) is the per-packet `poly1305_init`
 incremental Shoup-table build (S11), down from ~579 k cy in
-`v0.2-optimized`; it amortizes rapidly at n >= 256. Profile B's n=0
+`v0.2-optimized`; the per-packet Shoup-table build amortizes
+rapidly at **n ≥ 64** (measured A/B crossover; see
+`docs/BENCH_NSWEEP_v0.5.0.md` for the full sweep). Profile B's n=0
 runs in 81 k cy — **−67.9%** below the sprint-0 baseline. See
 `docs/OPTIMIZATION_PLAN.md` for the full per-step progression table,
 per-byte breakdowns, and estimate-vs-measured analysis, and
