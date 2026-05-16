@@ -10,40 +10,48 @@
     - Profile A: PRG md5 `b1c2a68f3a39593231a5d3bd1c0f15db` (captured 2026-05-16 11:04:11 UTC)
     - Profile B: PRG md5 `4afe54d466ad92ca38b91c94a2ea2b36` (build; sweep blocked, see note below)
 
-> **Profile B U64 sweep blocked — root cause unconfirmed.** Five
-> consecutive runs of `tools/benchmark_chacha20_poly1305.py` on
-> Profile B against the integrated sprint-branch PRG on U64
-> returned an identical `Wrapper verify: measured=11
-> window=[451,551]` mismatch, across both `--sweep` mode and the
-> default n=0/n=1024 mode. The deterministic signature (the same
-> `11` cycle count every time, vs the expected ~500 cy
-> calibration spinner) is not consistent with queue contention or
-> a transient device state, but the proximate cause was not
-> isolated in this PR. Candidate hypotheses: PRG layout shifts
-> from the sprint (D-chacha-2 + `poly1305_final` fuse) interact
-> badly with wrapper-verify's hardcoded `$C0F8` calibration-stub
-> address; lingering U64 state from a recent operator-initiated
-> force-reboot that the harness lock doesn't recover from; or a
-> Profile-B-specific corner case in the wrapper installation path
-> that doesn't surface on VICE or on Profile A.
+> **U64 bench sweep blocked — device-state issue, NOT a Profile-B
+> regression.** An initial misdiagnosis (now retracted) framed this
+> as a Profile-B sprint regression. The actual situation: after the
+> earlier successful Profile A sweep, the U64 entered a state where
+> `tools/benchmark_chacha20_poly1305.py --verbose` reports
+> `Calibration: overhead=0 cy, spread=0 (samples=20)` followed by
+> `Wrapper verify: measured=11 window=[451,551] (MISMATCH)`. The
+> zero-spread calibration across 20 samples indicates the CIA
+> timers never arm (both A and B always read back $FFFF, so
+> `(0xFFFF - 0xFFFF) + (0xFFFF - 0xFFFF) * 0x10000 = 0`). The
+> identical `11`-cycle verify reading just confirms the same broken
+> timer readback on the verify spinner attempt.
+>
+> Re-testing Profile A reproduces the same `measured=11` mismatch
+> that previously blocked only Profile B, ruling out any
+> profile-specific or PRG-layout cause. The most likely proximate
+> cause is lingering device state from another operator's recent
+> force-reboot of the U64E that the per-session harness lock
+> doesn't reset. Confirmation pending: a documented `recover()`
+> path (soft `reset()` → optional `reboot()` escalation) exists in
+> the harness but I'm not invoking it unilaterally on a U64 shared
+> with other concurrent agents.
 >
 > What IS confirmed on U64 hardware:
 > - Profile A and Profile B each pass **214 / 214** correctness
 >   tests via the same `c64_test_harness` + `DeviceLock` path
->   that the bench uses (no `--sweep`).
-> - Profile A's full n-sweep on U64 matches VICE within **±0.13 %**
->   (max-row deviation), well inside the documented ±0.2 %
->   VICE/U64 parity claim. Because both profiles share the same
->   measurement infrastructure when it works, this is strong
->   indirect evidence that Profile B perf on U64 also tracks
->   VICE to ≲ 0.2 %.
+>   that the bench uses.
+> - Profile A's full n-sweep on U64 (captured during a healthy
+>   device window earlier in the session) matches VICE within
+>   **±0.13 %** (max-row deviation), well inside the documented
+>   ±0.2 % VICE/U64 parity claim. Because both profiles share the
+>   same measurement infrastructure when it works, this is strong
+>   indirect evidence that Profile B perf on U64 also tracks VICE
+>   to ≲ 0.2 %.
 >
-> Follow-up filed (see PR description). Suggested fixes to
-> investigate: anchor wrapper-verify's patch address from
-> `labels.txt` instead of hardcoded `$C0F8`-relative;
-> `--no-wrapper-verify` opt-out flag for known-good builds; or
-> add a harness-level reset/init step that's robust to
-> operator-initiated reboots.
+> Resolution path: device state needs to be restored to where the
+> CIA timers arm cleanly (via the canonical `recover()` path in
+> the harness, coordinated with the other operators sharing the
+> U64), then Profile B sweep can be re-run. No code or doc change
+> is required in this PR itself — the integrated build is
+> functionally correct on U64 (428 / 428 tests) and a Profile A
+> perf-parity datapoint is captured.
 
 | n (bytes) | Profile A (cy) | Profile B (cy) | A/B ratio |
 |----------:|---------------:|---------------:|----------:|
