@@ -1010,24 +1010,23 @@ poly1305_final:
         eor poly_h+16
         sta poly_h+16
 
-        ; --- Add s to h ---
+        ; --- Add s to h, write tag in same pass ---
+        ; Fused finalize: the original code did two separate 16-iter loops
+        ; (h+=s then copy h->tag). The output bytes are exactly the result
+        ; bytes of (h+s) low 16, so we can store to both poly_h,x and
+        ; poly1305_tag,x in one pass. INX and DEY don't touch carry, so the
+        ; ADC chain is preserved. Straight-line, constant-time (no new
+        ; data-dependent branch). Saves the second loop's overhead
+        ; (~177 cy/packet) plus the redundant lda poly_h,x reload.
         clc
         ldy #16                ; 16 bytes
         ldx #0
-@add_s:
+@add_s_out:
         lda poly_h,x
         adc poly_s,x
         sta poly_h,x
-        inx
-        dey                    ; DEY doesn't affect carry
-        bne @add_s
-
-        ; --- Output tag: low 16 bytes of h ---
-        ldx #0
-@output:
-        lda poly_h,x
         sta poly1305_tag,x
         inx
-        cpx #16
-        bcc @output
+        dey                    ; DEY doesn't affect carry
+        bne @add_s_out
         rts
