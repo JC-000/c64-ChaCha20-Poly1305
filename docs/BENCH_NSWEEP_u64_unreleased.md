@@ -10,24 +10,40 @@
     - Profile A: PRG md5 `b1c2a68f3a39593231a5d3bd1c0f15db` (captured 2026-05-16 11:04:11 UTC)
     - Profile B: PRG md5 `4afe54d466ad92ca38b91c94a2ea2b36` (build; sweep blocked, see note below)
 
-> **Profile B U64 sweep blocked on a bench-tool calibration
-> regression.** The `tools/benchmark_chacha20_poly1305.py`
-> wrapper-verify step (pre-sprint code) reproducibly returns
-> `measured=11 window=[451,551]` when run against the integrated
-> sprint-branch Profile B PRG on U64. The wrapper-verify code
-> writes a calibration stub at `$C0F8` and patches the wrapper
-> target to call it; PRG layout shifts from the sprint (D-chacha-2,
-> poly1305_final fuse) appear to land the patch on different
-> bytes in Profile B's binary, breaking the calibration. The
-> cryptographic code is unaffected: **Profile B passes 214/214
-> tests on U64** (12-minute test run, same backend, same PRG).
-> Profile A U64 sweep parity with VICE is ±0.13% (max-row
-> deviation), which is well within the documented ±0.2% VICE/U64
-> parity claim, providing strong indirect evidence that Profile
-> B's measured performance on U64 is also at VICE parity. Filed
-> as a follow-up: wrapper-verify needs a label-anchored patch
-> address instead of a hardcoded `$C0F8`-relative one, or a
-> `--no-wrapper-verify` flag for known-good builds.
+> **Profile B U64 sweep blocked — root cause unconfirmed.** Five
+> consecutive runs of `tools/benchmark_chacha20_poly1305.py` on
+> Profile B against the integrated sprint-branch PRG on U64
+> returned an identical `Wrapper verify: measured=11
+> window=[451,551]` mismatch, across both `--sweep` mode and the
+> default n=0/n=1024 mode. The deterministic signature (the same
+> `11` cycle count every time, vs the expected ~500 cy
+> calibration spinner) is not consistent with queue contention or
+> a transient device state, but the proximate cause was not
+> isolated in this PR. Candidate hypotheses: PRG layout shifts
+> from the sprint (D-chacha-2 + `poly1305_final` fuse) interact
+> badly with wrapper-verify's hardcoded `$C0F8` calibration-stub
+> address; lingering U64 state from a recent operator-initiated
+> force-reboot that the harness lock doesn't recover from; or a
+> Profile-B-specific corner case in the wrapper installation path
+> that doesn't surface on VICE or on Profile A.
+>
+> What IS confirmed on U64 hardware:
+> - Profile A and Profile B each pass **214 / 214** correctness
+>   tests via the same `c64_test_harness` + `DeviceLock` path
+>   that the bench uses (no `--sweep`).
+> - Profile A's full n-sweep on U64 matches VICE within **±0.13 %**
+>   (max-row deviation), well inside the documented ±0.2 %
+>   VICE/U64 parity claim. Because both profiles share the same
+>   measurement infrastructure when it works, this is strong
+>   indirect evidence that Profile B perf on U64 also tracks
+>   VICE to ≲ 0.2 %.
+>
+> Follow-up filed (see PR description). Suggested fixes to
+> investigate: anchor wrapper-verify's patch address from
+> `labels.txt` instead of hardcoded `$C0F8`-relative;
+> `--no-wrapper-verify` opt-out flag for known-good builds; or
+> add a harness-level reset/init step that's robust to
+> operator-initiated reboots.
 
 | n (bytes) | Profile A (cy) | Profile B (cy) | A/B ratio |
 |----------:|---------------:|---------------:|----------:|
