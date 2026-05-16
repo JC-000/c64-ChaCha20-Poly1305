@@ -47,11 +47,13 @@ Cycle counting:
 """
 
 import argparse
+import json
 import os
 import struct
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 from c64_test_harness import (
     Labels,
@@ -715,6 +717,332 @@ def run(samples=DEFAULT_SAMPLES, backend="vice"):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Packet-size sweep (--sweep)
+# ---------------------------------------------------------------------------
+#
+# Measures aead_encrypt cycle counts across a fixed list of plaintext sizes
+# using the same methodology as the default mode (min-of-N samples, chained
+# CIA Timer A+B 32-bit wrapper). One invocation tags a single profile; cross-
+# profile comparison is assembled by combining two invocations (Profile A
+# then Profile B) into the same JSON sidecar, from which the final markdown
+# table is rendered.
+#
+# Why a sidecar JSON? Each invocation only sees the PRG that was just built,
+# so a single run cannot produce the A-vs-B markdown directly. The JSON
+# sidecar (`<path>.json` next to the markdown) accumulates per-profile rows
+# across invocations and is the single source of truth the markdown is
+# regenerated from. This keeps the CLI additive — the existing n=0/n=1024
+# mode is unchanged.
+
+SWEEP_SIZES = (16, 32, 64, 128, 192, 256, 384, 512, 1024, 1500)
+SWEEP_DEFAULT_SAMPLES = 3  # consistent with v0.3.0 REPRO_CHECK methodology
+
+
+def _git_commit_short():
+    """Return the short HEAD commit hash, or 'unknown' if git is missing."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
+def _prg_md5():
+    """Return the md5 of the current build PRG, or 'unknown' if absent."""
+    try:
+        import hashlib
+        with open(PRG_PATH, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return "unknown"
+
+
+def _sweep_collect_vice(samples, sizes):
+    """Run the AEAD-encrypt sweep on VICE. Returns list of (n, cycles, spread).
+
+    Mirrors the VICE setup in `run()` exactly (same ViceConfig, same wrapper
+    install + calibrate + verify path) and re-uses `measure()` for each n.
+    """
+    cfg = ViceConfig(
+        prg_path=PRG_PATH,
+        warp=True,
+        ntsc=True,
+        sound=False,
+        extra_args=["-autostartprgmode", "1"],
+    )
+    labels = Labels.from_file(LABELS_PATH)
+    rows = []  # list of (n, cycles, spread)
+
+    with create_manager(backend="vice", vice_config=cfg) as mgr:
+        inst = mgr.acquire()
+        transport = inst.transport
+        time.sleep(1.0)
+
+        install_wrapper(transport)
+        calib_samples = 10
+        overhead, calib_spread = calibrate(transport, samples=calib_samples)
+        verify_wrapper(transport, overhead, calib_spread, calib_samples)
+
+        for n in sizes:
+            target = setup_aead_encrypt(transport, labels, n)
+            cyc, spr = measure(transport, target, overhead, samples)
+            rows.append((n, cyc, spr))
+            if VERBOSE:
+                print(f"  n={n:5d}  cy={cyc:>9d}  spread={spr}")
+
+        mgr.release(inst)
+
+    return rows
+
+
+def _sweep_collect_u64(samples, sizes):
+    """U64 variant of the sweep. Uses the same wrapper path as `_run_u64`."""
+    labels = Labels.from_file(LABELS_PATH)
+    rows = []
+
+    mgr = create_manager(backend="u64")
+    inner = getattr(mgr, "_manager", None)
+    if inner is not None and hasattr(inner, "_lock_timeout"):
+        inner._lock_timeout = 1800.0
+
+    with mgr:
+        with mgr.instance() as target:
+            transport = target.transport
+            client = transport._client
+            client.WRITE_MEM_QUERY_THRESHOLD = 128
+            client.reset()
+            time.sleep(2.0)
+            _ = wait_for_text(transport, "READY", timeout=30.0)
+            with open(PRG_PATH, "rb") as f:
+                prg = f.read()
+            load_addr = prg[0] | (prg[1] << 8)
+            write_bytes(transport, load_addr, prg[2:])
+            keyboard.send_text(transport, "RUN\r")
+            time.sleep(2.0)
+            _ = wait_for_text(transport, "READY", timeout=30.0)
+
+            install_wrapper(transport)
+            calib_samples = 20
+            overhead, calib_spread = _u64_calibrate(target, samples=calib_samples)
+            _u64_verify_wrapper(target, overhead, calib_spread, calib_samples)
+
+            for n in sizes:
+                tgt = setup_aead_encrypt(transport, labels, n)
+                patch_target(transport, tgt)
+                vals = []
+                for _ in range(samples):
+                    run_subroutine(target, LONG_WRAPPER_ADDR, timeout=600.0)
+                    vals.append(read_timer(transport) - overhead)
+                cyc = min(vals)
+                spr = max(vals) - min(vals)
+                rows.append((n, cyc, spr))
+                if VERBOSE:
+                    print(f"  n={n:5d}  cy={cyc:>9d}  spread={spr}")
+
+    return rows
+
+
+def _load_sidecar(path):
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_sidecar(path, data):
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+
+def _render_sweep_markdown(sidecar, sizes):
+    """Render the combined markdown table from accumulated sidecar data.
+
+    `sidecar` is a dict with shape:
+      {
+        "commit":      "<short hash>",
+        "generated":   "<UTC ISO timestamp>",
+        "samples":     N,
+        "backend":     "vice"|"u64",
+        "profiles": {
+          "A": { "prg_md5": "...", "captured_at": "...",
+                 "rows": {"16": [cy, spread], "32": [cy, spread], ...} },
+          "B": { ... }
+        }
+      }
+    Missing profiles render as "—" in the table.
+    """
+    commit = sidecar.get("commit", "unknown")
+    generated = sidecar.get("generated", "unknown")
+    samples = sidecar.get("samples", "?")
+    backend = sidecar.get("backend", "?")
+    profiles = sidecar.get("profiles", {})
+
+    lines = []
+    lines.append(f"# Packet-size sweep — `aead_encrypt` (HEAD {commit})")
+    lines.append("")
+    lines.append(f"- **Commit**: `{commit}` (v0.5.0 release tag baseline)")
+    lines.append(f"- **Generated**: {generated}")
+    lines.append(f"- **Methodology**: min-of-{samples} samples per (n, "
+                 f"profile); chained CIA #1 Timer A+B 32-bit cycle counter "
+                 f"in RAM at $C080.")
+    lines.append(f"- **Backend**: {backend}")
+    lines.append(f"- **Routine**: `aead_encrypt` over a 32-byte key, 12-byte "
+                 f"nonce, 0-byte AAD, n-byte plaintext (RFC 8439 key/nonce "
+                 f"vectors).")
+    lines.append("- **Noise floor**: ~5-7 k cy on AEAD measurements per "
+                 "`docs/REPRO_CHECK.md` §4. Differences within that band "
+                 "should be treated as noise, not signal. The first "
+                 "measured point of any sweep can exhibit a much larger "
+                 "spread (~90 k cy observed at n=16) due to VICE "
+                 "warm-up; the min-of-N reduction keeps the reported "
+                 "cycle count cycle-accurate, but the spread column on "
+                 "row 1 of a fresh sweep is not representative.")
+    lines.append("- **Build fingerprints**:")
+    for tag in ("A", "B"):
+        p = profiles.get(tag)
+        if p:
+            md5 = p.get("prg_md5", "unknown")
+            cap = p.get("captured_at", "?")
+            lines.append(f"    - Profile {tag}: PRG md5 `{md5}` "
+                         f"(captured {cap})")
+        else:
+            lines.append(f"    - Profile {tag}: (not captured)")
+    lines.append("")
+    lines.append("| n (bytes) | Profile A (cy) | Profile B (cy) | A/B ratio |")
+    lines.append("|----------:|---------------:|---------------:|----------:|")
+
+    rows_a = (profiles.get("A") or {}).get("rows", {})
+    rows_b = (profiles.get("B") or {}).get("rows", {})
+    for n in sizes:
+        ka, kb = str(n), str(n)
+        a = rows_a.get(ka)
+        b = rows_b.get(kb)
+        a_cy = a[0] if isinstance(a, list) and a else None
+        b_cy = b[0] if isinstance(b, list) and b else None
+        a_s = f"{a_cy:,}" if a_cy is not None else "—"
+        b_s = f"{b_cy:,}" if b_cy is not None else "—"
+        if a_cy is not None and b_cy:
+            ratio = a_cy / b_cy
+            r_s = f"{ratio:.3f}"
+        else:
+            r_s = "—"
+        lines.append(f"| {n:>9d} | {a_s:>14s} | {b_s:>14s} | {r_s:>9s} |")
+
+    lines.append("")
+    lines.append("Derived cycles/byte:")
+    lines.append("")
+    lines.append("| n (bytes) | A cy/byte | B cy/byte |")
+    lines.append("|----------:|----------:|----------:|")
+    for n in sizes:
+        a = rows_a.get(str(n))
+        b = rows_b.get(str(n))
+        a_cy = a[0] if isinstance(a, list) and a else None
+        b_cy = b[0] if isinstance(b, list) and b else None
+        a_s = f"{a_cy / n:.1f}" if a_cy is not None and n > 0 else "—"
+        b_s = f"{b_cy / n:.1f}" if b_cy is not None and n > 0 else "—"
+        lines.append(f"| {n:>9d} | {a_s:>9s} | {b_s:>9s} |")
+    lines.append("")
+    lines.append("Generated by `tools/benchmark_chacha20_poly1305.py --sweep`.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def run_sweep(samples, backend, profile_tag, md_path):
+    """Drive the AEAD packet-size sweep and persist results.
+
+    Parameters
+    ----------
+    samples : int
+        Samples per (n, profile) point. min reported.
+    backend : str
+        "vice" or "u64".
+    profile_tag : str
+        "A" or "B" — labels which profile the current PRG was built from.
+        The caller is responsible for running the matching `make profile-a`
+        or `make profile-b` before invoking this; the bench does NOT build.
+    md_path : str
+        Path to the markdown file to write/update. A `.json` sidecar with
+        the same basename is used to merge cross-profile results.
+
+    Returns
+    -------
+    list[(n, cycles, spread)]
+        Rows just collected, in `SWEEP_SIZES` order.
+    """
+    if not os.path.exists(PRG_PATH):
+        sys.exit(f"FATAL: {PRG_PATH} not found. Pre-build the target profile "
+                 f"with `make profile-a` or `make profile-b` before running "
+                 f"--sweep.")
+
+    print(f"Sweep: profile={profile_tag} backend={backend} "
+          f"samples={samples} sizes={list(SWEEP_SIZES)}")
+    print(f"  PRG: {PRG_PATH} md5={_prg_md5()}")
+
+    if backend == "u64":
+        rows = _sweep_collect_u64(samples, SWEEP_SIZES)
+    else:
+        rows = _sweep_collect_vice(samples, SWEEP_SIZES)
+
+    # Console summary so the run is useful even without a sidecar.
+    print()
+    print("=" * 64)
+    print(f"Sweep results (Profile {profile_tag}, {backend}, "
+          f"min-of-{samples})")
+    print("-" * 64)
+    print(f"{'n':>6s} {'cycles':>12s} {'spread':>8s} {'cy/byte':>10s}")
+    for n, cyc, spr in rows:
+        cpb = (cyc / n) if n > 0 else 0.0
+        print(f"{n:>6d} {cyc:>12d} {spr:>8d} {cpb:>10.1f}")
+    print("=" * 64)
+
+    if md_path:
+        sidecar_path = md_path + ".json"
+        sidecar = _load_sidecar(sidecar_path)
+        sidecar.setdefault("commit", _git_commit_short())
+        sidecar["generated"] = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+        # If samples differ across invocations, surface that; otherwise stamp.
+        prev = sidecar.get("samples")
+        sidecar["samples"] = samples if prev in (None, samples) else (
+            f"mixed (A/B may differ; latest={samples})"
+        )
+        sidecar["backend"] = backend
+        sidecar.setdefault("profiles", {})
+        sidecar["profiles"][profile_tag] = {
+            "prg_md5": _prg_md5(),
+            "captured_at": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            ),
+            "rows": {str(n): [cyc, spr] for n, cyc, spr in rows},
+        }
+        _save_sidecar(sidecar_path, sidecar)
+
+        md = _render_sweep_markdown(sidecar, SWEEP_SIZES)
+        os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
+        with open(md_path, "w") as f:
+            f.write(md)
+        print(f"\nWrote markdown: {md_path}")
+        print(f"Wrote sidecar:  {sidecar_path}")
+
+    return rows
+
+
 def main():
     global VERBOSE
     ap = argparse.ArgumentParser()
@@ -731,8 +1059,54 @@ def main():
         default=os.environ.get("C64_BACKEND", "vice").lower(),
         help="Backend to bench against. Defaults to $C64_BACKEND or 'vice'.",
     )
+    ap.add_argument(
+        "--sweep", action="store_true",
+        help=(
+            "Sweep mode: measure aead_encrypt across a fixed list of "
+            "packet sizes (16, 32, 64, 128, 192, 256, 384, 512, 1024, "
+            "1500). Requires --profile-tag. Default sample count is "
+            f"{SWEEP_DEFAULT_SAMPLES} (use --samples to override). The "
+            "default n=0/n=1024 mode is unaffected."
+        ),
+    )
+    ap.add_argument(
+        "--profile-tag",
+        choices=("A", "B"),
+        default=None,
+        help=(
+            "Required with --sweep: labels which profile the currently "
+            "built PRG corresponds to. Run `make profile-a` then "
+            "`--sweep --profile-tag A`, then `make profile-b` then "
+            "`--sweep --profile-tag B` to populate both columns."
+        ),
+    )
+    ap.add_argument(
+        "--sweep-md",
+        default=None,
+        help=(
+            "Path to a markdown file to render the sweep table into. A "
+            "JSON sidecar (`<path>.json`) accumulates results across "
+            "profile invocations so two runs (A then B) produce the full "
+            "comparison table. Optional — if omitted the table is "
+            "printed to stdout only."
+        ),
+    )
     args = ap.parse_args()
     VERBOSE = args.verbose
+
+    if args.sweep:
+        if args.profile_tag is None:
+            ap.error("--sweep requires --profile-tag {A,B}")
+        samples = args.samples if args.samples != DEFAULT_SAMPLES \
+            else SWEEP_DEFAULT_SAMPLES
+        run_sweep(
+            samples=samples,
+            backend=args.backend,
+            profile_tag=args.profile_tag,
+            md_path=args.sweep_md,
+        )
+        return
+
     run(samples=args.samples, backend=args.backend)
 
 
