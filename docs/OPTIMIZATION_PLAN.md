@@ -836,13 +836,25 @@ poly side alone.
   position. The donna-8 approach hard-codes these factors. Complex
   to derive but eliminates the entire 2-pass `ror` reduction and
   the `*5 + carry` loop. Worth ~8 k cy per block post-P1.
-- **Don't ignore REU**: c64-nist-curves (per project survey) cites REU
-  DMA'd multiplication rows as the top optimization in `fp256.asm`.
-  For Poly1305, REU DMA is equivalent to the Shoup table (preload 4 KB
-  from REU at `poly1305_init` instead of computing it). Same speed,
-  smaller perceived "precompute cost" (~5 k cy for a DMA burst vs
-  ~50 k cy for code-based precompute). **Only useful if we're willing
-  to make REU required for Profile A.**
+- **Don't ignore REU**:
+  > **[RETRACTED — see Section 6 Optional Step 10 retraction note.]**
+  > The "preload Shoup table from REU" idea below is broken: Poly1305's
+  > `r` is per-packet (derived from the OTK keystream at
+  > `chacha20poly1305_lib.s:149-155` and consumed by `shoup_init` at
+  > `poly1305_lib.s:223`), so the 4 KB / 8 KB Shoup tables are a function
+  > of that per-packet `r` and cannot be precomputed into REU and DMA'd
+  > back. This paragraph conflated Shoup tables with the genuinely
+  > r-independent `sqtab` (quarter-square table), which IS legitimately
+  > REU-cacheable and shipped as the `poly1305_reu_restore` path in S10.
+  > Original (wrong) text retained below for reference:
+  >
+  > c64-nist-curves (per project survey) cites REU
+  > DMA'd multiplication rows as the top optimization in `fp256.asm`.
+  > For Poly1305, REU DMA is equivalent to the Shoup table (preload 4 KB
+  > from REU at `poly1305_init` instead of computing it). Same speed,
+  > smaller perceived "precompute cost" (~5 k cy for a DMA burst vs
+  > ~50 k cy for code-based precompute). **Only useful if we're willing
+  > to make REU required for Profile A.**
 - **SMC + Shoup together**: once the Shoup table exists, the inner loop
   is `lda rjlo,x / adc addr,y / sta addr,y / lda rjhi,x / adc addr+1,y`.
   The `addr,y` addresses can be SMC-patched per outer-loop iteration
@@ -897,9 +909,12 @@ profiles. REU-DMA tricks are Profile-A-only.
   merge). P8: either retain sqtab as one-time build or drop it once P3
   lands; decide at P3 commit time.
 - **REU-only tricks** (target applications for this profile): REU-DMA
-  prefetch of Shoup tables or quarter-square table from REU RAM instead
-  of in-RAM compute (~5 k cy DMA burst vs ~50 k cy runtime build).
-  Optional Step 10.
+  cache/restore of the r-independent **quarter-square table** (`sqtab`)
+  only — ~1.1 k cy DMA reload vs ~89 k cy rebuild. This shipped as
+  `poly1305_reu_restore` in S10. (Earlier drafts of this document also
+  listed Shoup tables as an REU-preload candidate; that was wrong —
+  Shoup tables are a function of per-packet `r` and cannot be
+  precomputed. See Optional Step 10 retraction.)
 - **RAM budget**: ~14 KB (~4 KB code extra + 8 KB Shoup tables + 1 KB
   retained sqtab if kept).
 
@@ -1067,9 +1082,39 @@ the step reverted.
   per-step vs final deltas.
 
 ### Optional Step 10 — REU quarter-square / REU Shoup-table preload (A only)
-- Only if Profile A's `poly1305_init` cost (~50 k cy) is a complaint.
-- Swap the runtime Shoup build or sqtab build for an REU DMA prefetch.
-- Gate under `POLY1305_REU=1` inside Profile A.
+
+> **RETRACTION (post-S10).** The "REU Shoup-table preload" half of this
+> step is impossible by construction and was never implemented. Poly1305's
+> `r` is derived per-packet from the ChaCha20 OTK keystream
+> (`chacha20poly1305_lib.s:149-155`, then `poly1305_init` →
+> `poly1305_clamp` → `shoup_init` at `poly1305_lib.s:223`). Because the
+> 16 Shoup tables `T_j[k] = k * r[j]` are *defined* as a function of that
+> per-packet `r`, they cannot be precomputed offline and DMA-loaded from
+> REU — there is no `r` to compute them against until the packet's OTK
+> exists. The only valid "preload from REU" target is an r-independent
+> table.
+>
+> The genuinely r-independent table — `sqtab`, i.e. `floor(i^2/4)` for
+> i=0..511 — is a pure function of the platform and IS legitimately
+> REU-cacheable. That half of Step 10 shipped (see the "Note on S10"
+> paragraph in Section 0 around line 205) as `poly1305_reu_restore`:
+> after the one-time `sqtab_init` build, the table is DMA'd to REU bank 0;
+> a subsequent `poly1305_reu_restore` reloads it in ~1.1 k cy if the
+> `$8000` region is ever clobbered. That is real and shipped.
+>
+> The strikethrough text below is the original (broken) proposal,
+> retained verbatim so future readers can see both the claim and the
+> reason it cannot work:
+>
+> - ~~Only if Profile A's `poly1305_init` cost (~50 k cy) is a complaint.~~
+> - ~~Swap the runtime Shoup build or sqtab build for an REU DMA prefetch.~~
+> - ~~Gate under `POLY1305_REU=1` inside Profile A.~~
+
+**Corrected scope (as shipped in S10):**
+- `sqtab` REU backup/restore only (r-independent, ~1.1 k cy reload).
+- Gated under `POLY1305_REU=1` inside `POLY1305_PROFILE_LONG`.
+- Shoup tables remain a runtime build inside `poly1305_init` per packet;
+  no REU shortcut exists for them.
 
 ---
 
@@ -1293,6 +1338,39 @@ savings. Porting to radix-2^26 internal representation is out of scope.
 derives from limb-layout reference code should be re-examined against
 byte-layout constraints before implementation. The S7 experience
 (13% of estimate realized) is the calibration point.
+
+### Per-packet `r` defeats REU precaching of r-dependent tables
+
+**Lesson (post-S10 retraction).** Earlier drafts of this plan (see the
+retracted "Don't ignore REU" bullet in Section 3 and the retracted
+Optional Step 10 in Section 6) proposed loading the 4 KB / 8 KB Shoup
+per-`r` tables from REU as an alternative to the ~50 k–~420 k cy runtime
+build. That is impossible: in ChaCha20-Poly1305, `r` is the first 16
+bytes of the per-packet OTK keystream
+(`chacha20poly1305_lib.s:149-155`), then clamped and consumed by
+`shoup_init` at `poly1305_lib.s:223`. The Shoup tables `T_j[k] = k * r[j]`
+are *by definition* a function of that packet's `r`; there is no `r`
+available at library-init time, and no two packets share an `r` except
+by accident. Pre-built REU contents cannot stand in for the build.
+
+**Forward-looking rule.** When evaluating any future "preload from REU"
+optimization, first classify the table:
+
+- **r-independent** (pure function of the platform or of compile-time
+  constants): `sqtab`, the rot-4 LUT (`rotl4_lut`), any nibble-swap /
+  rotation byte tables. These are legitimately REU-cacheable, can be
+  built once at library init, DMA'd to REU, and restored on demand.
+  S10's `poly1305_reu_restore` is the canonical example.
+- **r-dependent** or otherwise per-packet (Shoup `r_tab_lo` /
+  `r_tab_hi`, any future per-`r` precomputation, anything keyed off
+  the OTK): **cannot** be REU-precached. The only optimizations
+  available are reducing the build cost itself (S11's ripple-add
+  `shoup_init` rewrite, ~438 k → ~118 k cy, is the model) or moving
+  the amortization horizon (do not rebuild on packets that genuinely
+  share `r`, if such a case is ever introduced — currently none).
+
+Apply this classification before writing any new REU-DMA optimization
+ticket.
 
 ### n=0 gate scope
 

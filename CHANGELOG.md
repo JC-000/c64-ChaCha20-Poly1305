@@ -4,6 +4,95 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Portability + tooling + correctness sprint. Adds a runtime REU
+layout API for downstream coexistence, an n-sweep benchmark mode
+for packet-size sensitivity work, and corrects a planning-doc claim
+about REU/Shoup caching that doesn't survive the per-packet `r`
+dependency. Minor `poly1305_final` loop fuse contributes a
+consistent ~200 cy / packet on both profiles (below per-measurement
+noise but signal across the 20-point sweep).
+
+### Added
+- **Runtime-configurable REU layout** (PR — sprint). Two new
+  exported public RAM-backed symbols, both 8-bit cells in DATA:
+  - `poly1305_reu_sqtab_bank` — REU bank for sqtab backup
+  - `poly1305_reu_sqtab_offset` — 2-byte LE REU offset (lo, hi)
+  Consumers may write to these cells *before* calling
+  `poly1305_lib_init` to relocate the 1 KB sqtab backup region (e.g.,
+  to coexist with c64-x25519 banks 0-1). Defaults remain `bank=0,
+  offset=$0000`, baked at link time from the existing assemble-time
+  defines (`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`), so existing
+  consumers that never touch the cells get identical behavior to
+  v0.5.0. See `docs/API.md` §"REU layout configuration" for the
+  protocol and overhead notes (+6 cy on the cold REU-DMA-setup path,
+  invisible against the ~5 k cy DMA cost).
+- **`--sweep` benchmark mode** in `tools/benchmark_chacha20_poly1305.py`
+  (additive flag, doesn't break n=0/n=1024 single-shot mode). Sweeps
+  `aead_encrypt` across n=[16, 32, 64, 128, 192, 256, 384, 512, 1024,
+  1500] per profile, emits a markdown comparison table with the new
+  `--sweep-md <path>` flag. Used to capture v0.5.0 baseline at
+  `docs/BENCH_NSWEEP_v0.5.0.md` and resolve the previously-unmeasured
+  short-packet regime.
+- **`docs/BENCH_NSWEEP_v0.5.0.md`** — packet-size sweep baseline for
+  v0.5.0 (commit `5bdf535`). Documents the Profile A / Profile B
+  crossover point at **n ≈ 64** (Profile B wins at n=16-32, ties at
+  n=64, loses badly beyond) — this replaces the README's previously
+  documented "n ≥ 256" crossover claim, which the data does not
+  support.
+
+### Changed
+- **`poly1305_final` (in `src/lib/poly1305_lib.s`) fuses the trailing
+  `h += s` and tag-output loops** into a single 16-iteration loop
+  (commit `fb314a9`). Eliminates one full loop's overhead plus a
+  redundant `lda poly_h,x`. Measured `aead_encrypt` Profile A n=0
+  −221 cy; n=1024 −167 cy. Profile B n=0 −227 cy; n=1024 −65 cy
+  (in-noise). Constant-time preserved (straight-line, no
+  data-dependent branches).
+- **`chacha20_encrypt` register handling** (commit `f9f9c00`):
+  drops the redundant `sta cc20_buf_pos` ahead of the XOR loop and
+  drives the data-pointer ADC off `tya` from the in-flight loop
+  counter. Cumulative ≈ −10 cy at n=1024 (below per-measurement
+  noise; clean-up only).
+- **PRG fingerprints update.** Reference builds at sprint HEAD:
+  - profile-a: `b1c2a68f3a39593231a5d3bd1c0f15db`
+  - profile-b: `4afe54d466ad92ca38b91c94a2ea2b36`
+
+### Fixed
+- **`docs/OPTIMIZATION_PLAN.md` retracts the "Optional Step 10 REU
+  Shoup-table preload" claim** (commit `b3eac9b`). The original
+  proposal conflated the r-independent quarter-square table (sqtab —
+  legitimately REU-cacheable, already shipped via
+  `poly1305_reu_restore`) with the r-dependent Shoup per-r tables
+  (which must rebuild every packet because `poly_r` is derived per-
+  packet from the ChaCha20 OTK keystream). RETRACTED blockquotes
+  added inline at the three affected passages; original text kept
+  visible behind strike-through for traceability. New "Lessons"
+  subsection in §8 codifies the r-independent vs r-dependent rule
+  for future REU work.
+
+### Sprint findings (not code changes, but worth recording)
+- **ChaCha20 perf ceiling effectively reached.** Two proposed
+  optimizations — C9 rotl32_8 offset-rename and the
+  rotl32_8 + rotr32_1 fusion at the rotl-7 site — targeted dead-code
+  macros. `rotl32_8_zp` and several sibling macros are defined in
+  `chacha20_lib.s` but never called from production; rot-8 / rot-16
+  were absorbed into compile-time operand renames in commit
+  `71fabf3` (C3, v0.3.0). Future analyses of ChaCha20 should
+  verify call-site reachability before estimating cycle wins.
+- **BSS is not zero-cleared in this project.** The c64.cfg layout
+  declares `BSS` as `type=bss` without `fill`, so BSS values are
+  load-image undefined. New state cells must live in `.segment
+  "DATA"` with explicit `.byte` initializers; this is now the
+  pattern for the new REU layout cells. Documented in `data_lib.s`
+  header comments since at least v0.4.0.
+- **A/B crossover at n ≈ 64**, not n=256 as previously documented.
+  At n=16 Profile B is ~32% faster than Profile A (159 k vs 235 k
+  cy); they're within 1% at n=64; Profile A pulls ahead by 49% at
+  n=1024. For short-packet workloads (handshake, alerts, DTLS
+  control), Profile B remains the better choice.
+
 ## [0.5.0] — 2026-05-15
 
 Performance release: lands **C4 (branchless rotl-4 LUT)** on the

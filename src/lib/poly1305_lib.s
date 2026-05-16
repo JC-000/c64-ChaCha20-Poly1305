@@ -34,6 +34,14 @@
 .export shoup_init
 .ifdef POLY1305_REU
 .export poly1305_reu_restore
+; v0.5.x runtime REU layout: three public RAM-backed bytes that a
+; consumer may patch *before* calling poly1305_lib_init. Defaults
+; (bank=0, offset=$0000) are written by poly1305_lib_init from the
+; POLY1305_REU_BANK / POLY1305_REU_OFFSET assemble-time defines, so
+; consumers who never touch the cells get pre-v0.5.x behavior. See
+; docs/API.md §3 for the override protocol.
+.export poly1305_reu_sqtab_bank
+.export poly1305_reu_sqtab_offset
 .endif
 .endif
 
@@ -62,7 +70,10 @@ sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 ; Must be called at least once before any aead_encrypt / aead_decrypt.
 ;
 ; REU backup (Profile A, POLY1305_REU=1): after building sqtab, DMA the
-; 1 KB table to REU bank 0 at offset $0000 as a fast-restore backup.
+; 1 KB table to REU at the bank/offset held by the public RAM-backed
+; cells poly1305_reu_sqtab_bank and poly1305_reu_sqtab_offset
+; (defaults bank 0 / offset $0000; consumers may pre-patch these
+; before calling poly1305_lib_init — see docs/API.md §3).
 ; poly1305_reu_restore can later reload sqtab from REU in ~1.1 k cy if
 ; the $8000-$83FF region is ever clobbered by external code.
 ;
@@ -80,13 +91,16 @@ poly1305_lib_init:
 
 .ifdef POLY1305_PROFILE_LONG
 .ifdef POLY1305_REU
-        ; DMA sqtab (1024 bytes at $8000) to REU bank 0, offset $0000.
-        ; C64 → REU transfer (command = $90: stash, no autoload, no FF00 trigger).
-        lda #<POLY1305_REU_OFFSET
+        ; DMA sqtab (1024 bytes at $8000) to REU at the bank/offset
+        ; held by the public RAM-backed cells (defaults bank 0 /
+        ; offset $0000; see poly1305_reu_sqtab_bank / _offset below).
+        ; C64 → REU transfer (command = $90: stash, no autoload, no
+        ; FF00 trigger).
+        lda poly1305_reu_sqtab_offset
         sta $DF04               ; REU base address lo
-        lda #>POLY1305_REU_OFFSET
+        lda poly1305_reu_sqtab_offset+1
         sta $DF05               ; REU base address hi
-        lda #POLY1305_REU_BANK
+        lda poly1305_reu_sqtab_bank
         sta $DF06               ; REU bank
         lda #<sqtab_lo
         sta $DF02               ; C64 base address lo
@@ -111,18 +125,21 @@ poly1305_lib_init:
 ; =============================================================================
 ; poly1305_reu_restore - DMA sqtab back from REU to main RAM
 ;
-; Restores the 1 KB quarter-square table from REU bank 0 offset $0000
-; to $8000-$83FF. Use this if external code clobbers the sqtab region.
-; Cost: ~1.1 k cy (50 cy setup + 1024 cy DMA).
+; Restores the 1 KB quarter-square table from the REU
+; bank/offset held by poly1305_reu_sqtab_bank /
+; poly1305_reu_sqtab_offset (defaults bank 0 / offset $0000) to
+; $8000-$83FF. Use this if external code clobbers the sqtab region.
+; Cost: ~1.1 k cy (50 cy setup + 1024 cy DMA, plus ~6 cy of RAM
+; loads vs the pre-v0.5.x immediate-operand path).
 ;
 ; Clobbers: A
 ; =============================================================================
 poly1305_reu_restore:
-        lda #<POLY1305_REU_OFFSET
+        lda poly1305_reu_sqtab_offset
         sta $DF04               ; REU base address lo
-        lda #>POLY1305_REU_OFFSET
+        lda poly1305_reu_sqtab_offset+1
         sta $DF05               ; REU base address hi
-        lda #POLY1305_REU_BANK
+        lda poly1305_reu_sqtab_bank
         sta $DF06               ; REU bank
         lda #<sqtab_lo
         sta $DF02               ; C64 base address lo
@@ -137,6 +154,32 @@ poly1305_reu_restore:
         lda #$91                ; command: REU→C64, no autoload, execute
         sta $DF01
         rts
+
+; v0.5.x public RAM-backed REU layout cells. Three bytes that hold
+; the destination bank and 16-bit offset (LE) used by the
+; poly1305_lib_init stash and the poly1305_reu_restore reload above.
+; A downstream consumer may patch these to non-conflicting values
+; *before* calling poly1305_lib_init (e.g. to coexist with
+; c64-x25519, which itself uses REU banks 0-1) without re-assembling
+; this library. After poly1305_lib_init has already stashed, the
+; consumer may still patch and then either re-call poly1305_lib_init
+; (no-op on the build path, the DMA stash is gated by sqtab_ready
+; and won't re-run) or perform their own re-stash by jumping to the
+; .ifdef POLY1305_PROFILE_LONG block above.
+;
+; Living in the DATA segment for the same reason data_lib.s does
+; (see its header comment): DATA emits zero bytes into the PRG so
+; the cells come up at their assemble-time defaults at PRG load
+; time with no startup code required. BSS would leave them at
+; power-on garbage, which would clobber whatever values the
+; consumer pre-poked.
+.segment "DATA"
+poly1305_reu_sqtab_bank:
+        .byte POLY1305_REU_BANK
+poly1305_reu_sqtab_offset:
+        .byte <POLY1305_REU_OFFSET
+        .byte >POLY1305_REU_OFFSET
+.segment "CODE"
 .endif
 .endif
 
@@ -1010,24 +1053,23 @@ poly1305_final:
         eor poly_h+16
         sta poly_h+16
 
-        ; --- Add s to h ---
+        ; --- Add s to h, write tag in same pass ---
+        ; Fused finalize: the original code did two separate 16-iter loops
+        ; (h+=s then copy h->tag). The output bytes are exactly the result
+        ; bytes of (h+s) low 16, so we can store to both poly_h,x and
+        ; poly1305_tag,x in one pass. INX and DEY don't touch carry, so the
+        ; ADC chain is preserved. Straight-line, constant-time (no new
+        ; data-dependent branch). Saves the second loop's overhead
+        ; (~177 cy/packet) plus the redundant lda poly_h,x reload.
         clc
         ldy #16                ; 16 bytes
         ldx #0
-@add_s:
+@add_s_out:
         lda poly_h,x
         adc poly_s,x
         sta poly_h,x
-        inx
-        dey                    ; DEY doesn't affect carry
-        bne @add_s
-
-        ; --- Output tag: low 16 bytes of h ---
-        ldx #0
-@output:
-        lda poly_h,x
         sta poly1305_tag,x
         inx
-        cpx #16
-        bcc @output
+        dey                    ; DEY doesn't affect carry
+        bne @add_s_out
         rts
