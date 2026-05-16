@@ -152,15 +152,24 @@
 ; When POLY1305_REU is defined, poly1305_lib_init stashes the 1 KB
 ; quarter-square table to REU so that poly1305_reu_restore can reload
 ; it in ~1.1k cycles if external code clobbers $8000..$83FF. The
-; destination bank/offset are overridable via these equates so that
-; downstream projects linking multiple REU consumers (e.g. both this
-; library and c64-x25519, which occupies banks 0-1) can allocate
-; non-conflicting REU regions. Defaults preserve pre-v0.3.2 behavior
-; (bank 0, offset $0000) — see CHANGELOG for the PRG byte-size note.
+; destination bank/offset are overridable so that downstream projects
+; linking multiple REU consumers (e.g. both this library and
+; c64-x25519, which occupies banks 0-1) can allocate non-conflicting
+; REU regions. Defaults preserve pre-v0.3.2 behavior (bank 0, offset
+; $0000) — see CHANGELOG for the PRG byte-size note.
 ;
-; Override at assemble time via `ca65 --asm-define POLY1305_REU_BANK=3`
-; or by .include'ing a project-wide layout header that defines these
-; before this file is .include'd.
+; As of v0.5.x the bank / offset are RAM-backed public symbols
+; (`poly1305_reu_sqtab_bank`, `poly1305_reu_sqtab_offset`) which a
+; consumer may patch *at runtime* before calling `poly1305_lib_init`.
+; The assemble-time defines below remain supported and now select the
+; *default values* the RAM cells are initialized to in
+; `poly1305_lib_init`. I.e. a build invoked with
+; `--asm-define POLY1305_REU_BANK=3 --asm-define POLY1305_REU_OFFSET=$1000`
+; comes up with the RAM cells pre-set to bank 3 / offset $1000 and no
+; runtime poke is required. A build that passes neither define lands
+; the RAM cells on bank 0 / offset $0000, identical to the pre-v0.5.x
+; immediate-operand path. See docs/API.md §3 for the runtime override
+; protocol.
 .ifdef POLY1305_REU
   .ifndef POLY1305_REU_BANK
     POLY1305_REU_BANK = 0

@@ -36,8 +36,15 @@ which is why `data_lib.s` deliberately places state reservations in
 
 **Profile A + REU optional**: if assembled with
 `-DPOLY1305_REU=1`, `poly1305_lib_init` also backs sqtab to REU
-bank 0 offset $0000, and `poly1305_reu_restore` can reload it in
-~1.1 k cy if the $8000..$83FF window is externally clobbered.
+(default bank 0 offset $0000), and `poly1305_reu_restore` can
+reload it in ~1.1 k cy if the $8000..$83FF window is externally
+clobbered. The REU destination bank and offset are now exposed as
+three public RAM-backed bytes (`poly1305_reu_sqtab_bank`,
+`poly1305_reu_sqtab_offset`) so a consumer linking this library
+alongside another REU consumer (e.g. `c64-x25519`, which itself
+claims banks 0-1) can relocate the stash to a non-conflicting
+region without re-assembling. See §3 `poly1305_reu_sqtab_bank /
+poly1305_reu_sqtab_offset` for the runtime override protocol.
 
 ### Consumer data buffers to populate before `aead_encrypt`
 
@@ -228,11 +235,13 @@ All live in the library's DATA segment (see `data_lib.s` and
 
 ### poly1305_lib_init
 
-- **Module**: `poly1305_lib.s:83`
+- **Module**: `poly1305_lib.s:82`
 - **Purpose**: One-time library initialization. Builds the 1 KB
   quarter-square table at `sqtab_lo/hi`. On Profile B also builds
   `sqtab2_lo/hi` and pre-sets `lmul0+1` / `lmul1+1`. On Profile A
-  with `POLY1305_REU=1` also DMA-backs sqtab to REU bank 0.
+  with `POLY1305_REU=1` also DMA-backs sqtab to REU at the
+  bank/offset held by `poly1305_reu_sqtab_bank` /
+  `poly1305_reu_sqtab_offset` (defaults bank 0 / offset $0000).
 - **Signature**: no register args.
 - **Preconditions**: **must be called at least once before any
   `aead_encrypt` / `aead_decrypt` / `poly1305_init`.** Idempotent
@@ -252,16 +261,71 @@ All live in the library's DATA segment (see `data_lib.s` and
 
 ### poly1305_reu_restore (Profile A + POLY1305_REU=1 only)
 
-- **Module**: `poly1305_lib.s:138`
-- **Purpose**: DMA sqtab back from REU bank 0 offset $0000 to
-  $8000..$83FF. Useful if external code clobbers the sqtab
-  window.
+- **Module**: `poly1305_lib.s:137`
+- **Purpose**: DMA sqtab back from REU to $8000..$83FF using the
+  bank/offset held by `poly1305_reu_sqtab_bank` /
+  `poly1305_reu_sqtab_offset` (defaults bank 0 / offset $0000).
+  Useful if external code clobbers the sqtab window.
 - **Signature**: no register args. Emits REU DMA command $91.
 - **Preconditions**: `poly1305_lib_init` must have previously run
-  (that's what seeded REU bank 0 with the table data).
+  (that's what seeded REU with the table data) **with the same
+  bank/offset values currently in the RAM cells**. If a consumer
+  patches `poly1305_reu_sqtab_bank` / `poly1305_reu_sqtab_offset`
+  after the initial stash, they must re-stash before calling
+  `poly1305_reu_restore` — otherwise restore will load whatever
+  bytes happen to live at the new REU location.
 - **Postconditions**: `sqtab_lo/hi` restored; REU state preserved.
 - **Clobbers**: A.
-- **Cost**: ~1.1 k cy (50 cy setup + 1024 cy DMA burst).
+- **Cost**: ~1.1 k cy (50 cy setup + 1024 cy DMA burst, plus ~6
+  cy of RAM loads over the pre-v0.5.x immediate-operand path).
+
+### poly1305_reu_sqtab_bank / poly1305_reu_sqtab_offset (Profile A + POLY1305_REU=1 only)
+
+- **Module**: `poly1305_lib.s` (DATA segment, exported)
+- **Purpose**: Public RAM-backed configuration of the REU stash
+  destination. Three bytes total — bank (1 byte) and offset
+  (2 bytes, little-endian, lo at `+0` then hi at `+1`) — read by
+  the DMA setup paths in `poly1305_lib_init` and
+  `poly1305_reu_restore`.
+- **Default values**: bank `$00`, offset `$0000`. Defaults are
+  baked into the PRG at link time from the assemble-time defines
+  `POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`, so a consumer who
+  never touches the cells gets pre-v0.5.x behavior verbatim.
+- **Override at assemble time** (preferred when the consumer
+  controls the build):
+  ```sh
+  ca65 -DPOLY1305_PROFILE_LONG=1 -DPOLY1305_REU=1 \
+       -DPOLY1305_REU_BANK=3 '-DPOLY1305_REU_OFFSET=$1000' ...
+  ```
+  The RAM cells will come up at $03 / $00 / $10 at PRG load.
+- **Override at runtime** (preferred when linking a pre-built
+  library, or when several REU consumers must coexist):
+  ```ca65
+  ; Before calling poly1305_lib_init:
+  lda #3
+  sta poly1305_reu_sqtab_bank
+  lda #<$1000
+  sta poly1305_reu_sqtab_offset
+  lda #>$1000
+  sta poly1305_reu_sqtab_offset+1
+  jsr poly1305_lib_init       ; stashes to bank 3 / $1000
+  ```
+  **The runtime poke must happen before the call to
+  `poly1305_lib_init` that performs the initial stash.** If
+  patched afterwards, the consumer is responsible for re-stashing
+  (the DMA stash inside `poly1305_lib_init` is gated by
+  `sqtab_ready` and will not re-execute on subsequent calls).
+- **CT contract**: PUBLIC. The bank/offset are configuration
+  bytes, not secrets. The DMA setup reads them via straight-line
+  `lda abs / sta abs` to the REU control ports — no
+  secret-dependent branches, no page-cross addressing modes, no
+  timing variability beyond the fixed ~6 cy of additional RAM
+  loads vs the pre-v0.5.x immediate-operand path.
+- **Motivating use case**: `c64-x25519` claims REU banks 0-1 for
+  its own state. A host project linking both libraries can set
+  `poly1305_reu_sqtab_bank = 2` (or higher) before
+  `poly1305_lib_init` to keep the sqtab backup out of the X25519
+  region.
 
 ### poly1305_init
 
