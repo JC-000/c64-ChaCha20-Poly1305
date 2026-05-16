@@ -1,84 +1,81 @@
-# Packet-size sweep — `aead_encrypt` (HEAD 7aab23f)
+# Packet-size sweep — `aead_encrypt` (HEAD 77b35ad)
 
-- **Commit**: `7aab23f` (v0.5.0 release tag baseline)
-- **Generated**: 2026-05-16 11:04:11 UTC
+- **Commit**: `77b35ad` (v0.5.0 release tag baseline)
+- **Generated**: 2026-05-16 13:44:39 UTC
 - **Methodology**: min-of-3 samples per (n, profile); chained CIA #1 Timer A+B 32-bit cycle counter in RAM at $C080.
 - **Backend**: u64
 - **Routine**: `aead_encrypt` over a 32-byte key, 12-byte nonce, 0-byte AAD, n-byte plaintext (RFC 8439 key/nonce vectors).
 - **Noise floor**: ~5-7 k cy on AEAD measurements per `docs/REPRO_CHECK.md` §4. Differences within that band should be treated as noise, not signal. The first measured point of any sweep can exhibit a much larger spread (~90 k cy observed at n=16) due to VICE warm-up; the min-of-N reduction keeps the reported cycle count cycle-accurate, but the spread column on row 1 of a fresh sweep is not representative.
 - **Build fingerprints**:
-    - Profile A: PRG md5 `b1c2a68f3a39593231a5d3bd1c0f15db` (captured 2026-05-16 11:04:11 UTC)
-    - Profile B: PRG md5 `4afe54d466ad92ca38b91c94a2ea2b36` (build; sweep blocked, see note below)
-
-> **U64 bench sweep blocked — device-state issue, NOT a Profile-B
-> regression.** An initial misdiagnosis (now retracted) framed this
-> as a Profile-B sprint regression. The actual situation: after the
-> earlier successful Profile A sweep, the U64 entered a state where
-> `tools/benchmark_chacha20_poly1305.py --verbose` reports
-> `Calibration: overhead=0 cy, spread=0 (samples=20)` followed by
-> `Wrapper verify: measured=11 window=[451,551] (MISMATCH)`. The
-> zero-spread calibration across 20 samples indicates the CIA
-> timers never arm (both A and B always read back $FFFF, so
-> `(0xFFFF - 0xFFFF) + (0xFFFF - 0xFFFF) * 0x10000 = 0`). The
-> identical `11`-cycle verify reading just confirms the same broken
-> timer readback on the verify spinner attempt.
->
-> Re-testing Profile A reproduces the same `measured=11` mismatch
-> that previously blocked only Profile B, ruling out any
-> profile-specific or PRG-layout cause. The most likely proximate
-> cause is lingering device state from another operator's recent
-> force-reboot of the U64E that the per-session harness lock
-> doesn't reset. Confirmation pending: a documented `recover()`
-> path (soft `reset()` → optional `reboot()` escalation) exists in
-> the harness but I'm not invoking it unilaterally on a U64 shared
-> with other concurrent agents.
->
-> What IS confirmed on U64 hardware:
-> - Profile A and Profile B each pass **214 / 214** correctness
->   tests via the same `c64_test_harness` + `DeviceLock` path
->   that the bench uses.
-> - Profile A's full n-sweep on U64 (captured during a healthy
->   device window earlier in the session) matches VICE within
->   **±0.13 %** (max-row deviation), well inside the documented
->   ±0.2 % VICE/U64 parity claim. Because both profiles share the
->   same measurement infrastructure when it works, this is strong
->   indirect evidence that Profile B perf on U64 also tracks VICE
->   to ≲ 0.2 %.
->
-> Resolution path: device state needs to be restored to where the
-> CIA timers arm cleanly (via the canonical `recover()` path in
-> the harness, coordinated with the other operators sharing the
-> U64), then Profile B sweep can be re-run. No code or doc change
-> is required in this PR itself — the integrated build is
-> functionally correct on U64 (428 / 428 tests) and a Profile A
-> perf-parity datapoint is captured.
+    - Profile A: PRG md5 `b1c2a68f3a39593231a5d3bd1c0f15db` (captured 2026-05-16 13:44:39 UTC)
+    - Profile B: PRG md5 `4afe54d466ad92ca38b91c94a2ea2b36` (captured 2026-05-16 13:43:19 UTC)
 
 | n (bytes) | Profile A (cy) | Profile B (cy) | A/B ratio |
 |----------:|---------------:|---------------:|----------:|
-|        16 |        234,557 |              — |         — |
-|        32 |        246,994 |              — |         — |
-|        64 |        271,970 |              — |         — |
-|       128 |        361,661 |              — |         — |
-|       192 |        451,955 |              — |         — |
-|       256 |        542,113 |              — |         — |
-|       384 |        723,273 |              — |         — |
-|       512 |        904,223 |              — |         — |
-|      1024 |      1,623,124 |              — |         — |
-|      1500 |      2,317,212 |              — |         — |
+|        16 |        234,807 |        159,027 |     1.477 |
+|        32 |        246,903 |        197,595 |     1.250 |
+|        64 |        272,005 |        274,886 |     0.990 |
+|       128 |        361,659 |        469,614 |     0.770 |
+|       192 |        452,142 |        664,421 |     0.681 |
+|       256 |        541,903 |        859,899 |     0.630 |
+|       384 |        722,990 |      1,250,320 |     0.578 |
+|       512 |        904,227 |      1,639,272 |     0.552 |
+|      1024 |      1,623,123 |      3,196,194 |     0.508 |
+|      1500 |      2,317,224 |      4,675,071 |     0.496 |
 
 Derived cycles/byte:
 
 | n (bytes) | A cy/byte | B cy/byte |
 |----------:|----------:|----------:|
-|        16 |   14659.8 |         — |
-|        32 |    7718.6 |         — |
-|        64 |    4249.5 |         — |
-|       128 |    2825.5 |         — |
-|       192 |    2353.9 |         — |
-|       256 |    2117.6 |         — |
-|       384 |    1883.5 |         — |
-|       512 |    1766.1 |         — |
-|      1024 |    1585.1 |         — |
-|      1500 |    1544.8 |         — |
+|        16 |   14675.4 |    9939.2 |
+|        32 |    7715.7 |    6174.8 |
+|        64 |    4250.1 |    4295.1 |
+|       128 |    2825.5 |    3668.9 |
+|       192 |    2354.9 |    3460.5 |
+|       256 |    2116.8 |    3359.0 |
+|       384 |    1882.8 |    3256.0 |
+|       512 |    1766.1 |    3201.7 |
+|      1024 |    1585.1 |    3121.3 |
+|      1500 |    1544.8 |    3116.7 |
+
+## Delta vs VICE (`docs/BENCH_NSWEEP_unreleased.md`)
+
+| n (bytes) | A VICE | A U64 | ΔA % | B VICE | B U64 | ΔB % |
+|----------:|---------:|---------:|-----:|---------:|---------:|-----:|
+|        16 |  234,860 |  234,807 |  −0.02 |  159,092 |  159,027 |  −0.04 |
+|        32 |  247,228 |  246,903 |  −0.13 |  197,907 |  197,595 |  −0.16 |
+|        64 |  272,059 |  272,005 |  −0.02 |  274,798 |  274,886 |  +0.03 |
+|       128 |  361,651 |  361,659 |  +0.00 |  469,757 |  469,614 |  −0.03 |
+|       192 |  452,060 |  452,142 |  +0.02 |  664,301 |  664,421 |  +0.02 |
+|       256 |  542,195 |  541,903 |  −0.05 |  859,611 |  859,899 |  +0.03 |
+|       384 |  723,024 |  722,990 |  −0.00 |1,250,317 |1,250,320 |  +0.00 |
+|       512 |  904,065 |  904,227 |  +0.02 |1,639,051 |1,639,272 |  +0.01 |
+|      1024 |1,622,851 |1,623,123 |  +0.02 |3,195,648 |3,196,194 |  +0.02 |
+|      1500 |2,316,792 |2,317,224 |  +0.02 |4,674,147 |4,675,071 |  +0.02 |
+
+**Max deviation: −0.16 % at n=32 (Profile B)** — well inside the
+documented ±0.2 % VICE/U64 parity claim. Both profiles confirmed
+on hardware.
+
+## Diagnostic note — U64 turbo state gotcha
+
+An earlier set of bench attempts during this sprint reproducibly
+returned `measured=11 window=[451,551]` on the wrapper-verify
+calibration spinner. The proximate cause turned out to be a leftover
+**48 MHz turbo state** on the U64 from a previous agent's session:
+the CIA timer counts at its fixed rate, so a 500-CPU-cycle spinner
+at 48 MHz turbo measures `500 / 48 ≈ 10-11 cycles`. `client.reset()`
+(soft 6510 reset) does NOT touch the FPGA-level CPU-speed config,
+so the turbo state survived every reset attempt.
+
+The fix landed in this PR: `tools/benchmark_chacha20_poly1305.py`'s
+U64 setup path now calls `set_turbo_mhz(client, 1)` immediately
+after `client.reset()`, making the bench idempotent against
+whatever FPGA state was left by another agent sharing the device.
+This is independent of the integrated build's correctness (the same
+build that misread as `measured=11` under turbo passed all 214
+functional tests on U64 because the test harness's
+`run_subroutine` path measures wall-clock-bounded behavior, not
+cycle counts).
 
 Generated by `tools/benchmark_chacha20_poly1305.py --sweep`.

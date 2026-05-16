@@ -65,6 +65,7 @@ from c64_test_harness import (
     write_bytes,
     jsr,
 )
+from c64_test_harness.backends.ultimate64_helpers import set_turbo_mhz
 
 from _u64_helpers import run_subroutine
 
@@ -557,6 +558,17 @@ def _run_u64(samples):
             client.WRITE_MEM_QUERY_THRESHOLD = 128
             client.reset()
             time.sleep(2.0)
+            # Force CPU back to 1 MHz: client.reset() is a soft 6510
+            # reset and does NOT touch the FPGA-level turbo/CPU-speed
+            # config. If a prior session (this agent or another) left
+            # the U64 in turbo mode (e.g. 48 MHz), the CIA timer counts
+            # at the slower CIA rate while the CPU runs faster, and our
+            # wrapper measures only ~1/N of the real cycle count
+            # (e.g. ~500 cy spinner reads as ~11 cy at 48 MHz). Setting
+            # 1 MHz here is idempotent and cheap, and makes the bench
+            # robust to leftover FPGA state from other agents sharing
+            # the device.
+            set_turbo_mhz(client, 1)
             _ = wait_for_text(transport, "READY", timeout=30.0)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
@@ -821,6 +833,17 @@ def _sweep_collect_u64(samples, sizes):
             client.WRITE_MEM_QUERY_THRESHOLD = 128
             client.reset()
             time.sleep(2.0)
+            # Force CPU back to 1 MHz: client.reset() is a soft 6510
+            # reset and does NOT touch the FPGA-level turbo/CPU-speed
+            # config. If a prior session (this agent or another) left
+            # the U64 in turbo mode (e.g. 48 MHz), the CIA timer counts
+            # at the slower CIA rate while the CPU runs faster, and our
+            # wrapper measures only ~1/N of the real cycle count
+            # (e.g. ~500 cy spinner reads as ~11 cy at 48 MHz). Setting
+            # 1 MHz here is idempotent and cheap, and makes the bench
+            # robust to leftover FPGA state from other agents sharing
+            # the device.
+            set_turbo_mhz(client, 1)
             _ = wait_for_text(transport, "READY", timeout=30.0)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
