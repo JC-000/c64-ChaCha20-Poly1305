@@ -761,7 +761,13 @@ chacha20_encrypt:
 @full:
         lda #64                ; full block
 @partial:
-        sta cc20_buf_pos       ; bytes to XOR this iteration
+        ; D-chacha-2 (post-v0.5.0): count is in A; pass through X for the
+        ; XOR loop counter. After the loop, Y == count (it counted up while
+        ; X counted down), so we can drive the pointer-advance off TYA and
+        ; only stash count to cc20_buf_pos once for the sbc step below.
+        ; Saves the pre-loop `sta cc20_buf_pos` (replaced by a post-loop
+        ; sty), and the data-pointer adc reads it from Y/A instead of
+        ; cc20_buf_pos so we get a (tya:2) vs (lda zp:3) micro-win.
         tax                    ; X = count
 
         ; XOR keystream with data
@@ -773,17 +779,20 @@ chacha20_encrypt:
         iny
         dex
         bne @xor_loop
+        ; X = 0, Y = count
 
-        ; Advance data pointer
+        ; Advance data pointer (count is still in Y)
+        tya
         clc
-        lda cc20_data_ptr
-        adc cc20_buf_pos
+        adc cc20_data_ptr
         sta cc20_data_ptr
         lda cc20_data_ptr+1
         adc #0
         sta cc20_data_ptr+1
 
-        ; 16-bit subtract processed bytes from remaining
+        ; 16-bit subtract processed bytes from remaining.
+        ; Stash count into cc20_buf_pos once for the sbc operand.
+        sty cc20_buf_pos
         lda cc20_remain
         sec
         sbc cc20_buf_pos
