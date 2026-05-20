@@ -3,8 +3,8 @@
 ;
 ; Aggregate equates so a consumer can statically verify REU bank and
 ; zero-page usage at assemble time (via `.assert`) before linking.
-; Pairs with issue #19 (POLY1305_REU_BANK / POLY1305_REU_OFFSET
-; assemble-time overrides) and issue #28 (LIB_VERSION_* constants).
+; Pairs with issue #28 (LIB_VERSION_* constants) and issue #34 F1
+; (Profile A dead-code trim → per-profile resident-byte differentiation).
 ;
 ; Names and semantics follow the c64-lib-contract SPEC §5 aggregate
 ; manifest convention (v0.1.0, 2026-05-20). The cross-consumer ABI
@@ -18,9 +18,12 @@
 
 .setcpu "6502"
 
-; Pull in POLY1305_REU_BANK default + Profile-A/B flag visibility so
-; LIB_CHACHA20_POLY1305_REU_BANKS_USED below composes with whatever the
-; consumer set via --asm-define -DPOLY1305_REU_BANK=N (issue #19).
+; Pull in Profile-A/B flag visibility so the per-profile
+; LIB_CHACHA20_POLY1305_RESIDENT_BYTES selection below picks the
+; right value. (Issue #34 F1 retired the POLY1305_REU_BANK default
+; from constants_lib.s — sqtab is no longer emitted on Profile A,
+; so the library claims no REU banks; see the
+; LIB_CHACHA20_POLY1305_REU_BANKS_USED comment below.)
 .include "constants_lib.s"
 
 ; ---------------------------------------------------------------------------
@@ -31,20 +34,18 @@
 ;
 ;   .assert (LIB_NISTCURVES_REU_BANKS_USED .and LIB_CHACHA20_POLY1305_REU_BANKS_USED) = 0
 ;
-; Profile A with POLY1305_REU defined: bit (1 << POLY1305_REU_BANK), so
-;   bank 0 → $01, bank 3 → $08, bank 7 → $80. Composes with the issue
-;   #19 consumer override --asm-define -DPOLY1305_REU_BANK=N.
-; Profile A without POLY1305_REU, or Profile B: $00 (no REU claimed).
+; As of issue #34 F1 this library claims no REU banks on any profile.
+; The pre-F1 Profile-A + POLY1305_REU path stashed the 1 KB quarter-
+; square sqtab to REU so consumers that clobbered $8000..$83FF could
+; reload it; F1 gated sqtab itself out of Profile A entirely (Step 11
+; replaced the mul_8x8 callers in shoup_init with an incremental
+; ripple-add), so the stash had no live content to back up.
+; LIB_CHACHA20_POLY1305_REU_BANKS_USED therefore always reads $00
+; today. The symbol is retained for forward compatibility — a future
+; profile that genuinely allocates an REU region can flip this bit
+; without consumers having to .ifdef their .assert composition.
 ; ---------------------------------------------------------------------------
-.ifdef POLY1305_PROFILE_LONG
-    .ifdef POLY1305_REU
-        LIB_CHACHA20_POLY1305_REU_BANKS_USED = 1 .shl POLY1305_REU_BANK
-    .else
-        LIB_CHACHA20_POLY1305_REU_BANKS_USED = $00            ; no REU compiled in
-    .endif
-.else
-    LIB_CHACHA20_POLY1305_REU_BANKS_USED = $00                ; profile B: no REU
-.endif
+LIB_CHACHA20_POLY1305_REU_BANKS_USED = $00
 
 ; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
@@ -64,36 +65,49 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_RESIDENT_BYTES
 ;   Resident code+data footprint after build, measured from
-;   build/profile-a/c64_chacha20_poly1305.prg (PRG file size minus the
-;   2-byte LOADADDR header). Actual measurement at commit time: 16422 B.
-;   Padded to 16640 (256-aligned, $4100) to provide a small headroom
-;   buffer that absorbs incidental growth between releases without
-;   forcing consumer `.assert` rewrites. Update on each release.
+;   build/profile-{a,b}/c64_chacha20_poly1305.prg (PRG file size minus the
+;   2-byte LOADADDR header).
 ;
-;   Variant note (per c64-lib-contract SPEC §5, ±5% slack permitted):
-;   the aead-only archive (`make lib-aead-only`) drops the test-only
-;   chacha20_quarter_round body and pulls no word32_lib.o into a
-;   minimal consumer that calls only the AEAD ABI. Measured savings
-;   on the consumer-side link: 1024 B (5.96%). Both numbers fit
-;   within the equate's 16640 B headroom, so the equate is a single
-;   value rather than a per-variant pair — that keeps consumer
-;   `.assert LIB_CHACHA20_POLY1305_RESIDENT_BYTES + ... < HOT` checks
-;   one-line and conservative regardless of which variant the
-;   consumer ingests. The per-variant exact numbers live alongside
-;   for documentation, and the contract memo specifically allows the
-;   "use the larger value" interpretation for v0.1.0.
+;   Profile-aware as of issue #34 F1, which gated sqtab_lo/hi,
+;   sqtab_init, mul_8x8, and the POLY1305_REU stash plumbing out of
+;   Profile A — Profile A's resident footprint dropped 256 B and the
+;   two profiles diverged enough that a single unified value would
+;   over-report Profile A and under-report Profile B for consumer
+;   `.assert resident <= N` checks.
 ;
-;     full        archive linked into min consumer : 17191 B
-;     aead-only   archive linked into min consumer : 16167 B
-;     manifest    equate (rounded up, full variant): 16640 B
+;   Actual measurements at this commit:
+;     Profile A: 16166 B  → padded to 16384 (256-aligned, $4000)
+;     Profile B: 17446 B  → padded to 17664 (256-aligned, $4500)
+;   Padding provides a small headroom buffer that absorbs incidental
+;   growth between releases without forcing consumer `.assert`
+;   rewrites. Update on each release.
+;
+;   Consumers wanting the larger of the two for a profile-agnostic
+;   upper bound should use the Profile B value (it is and will remain
+;   the larger of the two — Profile B emits both ct_mul_8x8 and the
+;   full sqtab apparatus that Profile A no longer needs).
+;
+;   Variant note (orthogonal to profile, per c64-lib-contract SPEC §5):
+;   the aead-only archive (`make lib-aead-only`, #35) drops the
+;   test-only chacha20_quarter_round body and pulls no word32_lib.o
+;   into a minimal consumer that calls only the AEAD ABI. Measured
+;   savings on the consumer-side link: 1024 B (5.96%) vs Profile B
+;   full. The variant exposes its own equate below.
+;
+;     full        archive linked into Profile B min consumer : 17191 B
+;     aead-only   archive linked into Profile B min consumer : 16167 B
 ; ---------------------------------------------------------------------------
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES        = 16640
+.ifdef POLY1305_PROFILE_LONG
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16384
+.else
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
+.endif
 
 ; aead-only variant exposes its own equate so a consumer that
 ; specifically pins the trimmed archive can `.import` this name and
 ; static-assert against a tighter budget. Pattern follows §5's
 ; "library author refreshes them when a release substantively
-; changes any one of them" — adding the symbol on a MINOR release.
+; changes any one of them" — added on a MINOR release.
 LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 
 ; ---------------------------------------------------------------------------
