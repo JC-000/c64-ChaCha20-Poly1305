@@ -10,9 +10,6 @@
 
         .p02
 
-; --- Pull in shared equates for .exportzp below (no code emitted) ---
-.include "constants_lib.s"
-
 ; --- Load address ---
 .segment "LOADADDR"
         .word $0801
@@ -33,16 +30,8 @@ lib_entry:
 ;
 ; Library code and data live in separate .o files (see src/lib/*.s). The
 ; per-module files `.export` their own functions and data symbols to the
-; linker. Here we only `.exportzp` the zero-page equates from
-; constants_lib.s so they appear in the VICE label file — equates are
-; assembled per-translation-unit, so declaring them `.exportzp` inside
-; constants_lib.s itself would collide across every module that includes
-; the file. Declaring them here (the one TU with main.s) emits exactly
-; one export record per symbol.
+; linker. Zero-page slot allocations and their `.exportzp` declarations
+; live in src/zp_config.s, which is assembled to its own .o and linked
+; into the library. Consumers wishing to pin the ZP layout pre-define
+; symbols before zp_config.s is assembled (or replace the file outright).
 ; =============================================================================
-.exportzp zp_tmp1, zp_tmp2
-.exportzp w32_src1, w32_src2, w32_dst
-.exportzp cc20_round, cc20_qr_idx, cc20_data_ptr, cc20_remain, cc20_buf_pos
-.exportzp cc20_work, cc20_keystream
-.exportzp poly_i, poly_j, poly_carry, poly_tmp
-.exportzp zp_ptr1, zp_ptr2
