@@ -66,8 +66,55 @@ cc20_qr_table:
 ; direct ZP (3 cy LDA/STA) — no (ptr),y (5 cy).
 ; =============================================================================
 
+; CHACHA20_USE_WORD32: pointer-mode profile for consumers that share a word32.s
+;
+; When CHACHA20_USE_WORD32 is defined at build time, the *_zp macros below
+; degrade from straight-line inline ZP-direct code into `jsr` calls against
+; a consumer-provided word32 ABI:
+;   - add32_to_dst       — w32_dst[] += w32_src1[]
+;   - xor32_in_place     — w32_dst[] ^= w32_src1[]
+;   - rotl32_4 / rotl32_8 / rotl32_16    — in-place rotate w32_dst[]
+;   - rotr32_1                            — in-place rotate w32_dst[]
+; The macros set w32_dst (and w32_src1 where applicable) to the literal ZP
+; address(es) before jsr'ing. rotl32_12_zp / rotl32_7_zp remain compositions
+; of the rotl32_8 + rotl32_4 / rotr32_1 macros, so they automatically pick
+; up the pointer-mode form when CHACHA20_USE_WORD32 is defined.
+;
+; Default OFF: with CHACHA20_USE_WORD32 undefined the macros expand to the
+; exact same inline bodies as before, so the standalone build is byte-
+; identical to the pre-profile baseline.
+;
+; WARNING: This library ships branchless (constant-time) rotl32_1 / rotr32_1
+; in src/lib/word32_lib.s. The c64-wireguard and c64-https reference
+; word32.s implementations use branching rotl32_1 / rotr32_1 (bcc/bcs on
+; the wrap bit). When CHACHA20_USE_WORD32 is defined, this library's
+; built-in CT property is delegated to the consumer's word32. Consumers
+; that need CT must verify their word32.s uses branchless rotate-by-1.
+
+.ifdef CHACHA20_USE_WORD32
+; Pointer-mode build pulls in the word32 subroutines via jsr. The .import
+; for add32_to_dst / xor32_in_place is already unconditional above (for
+; the test-only chacha20_quarter_round entry point). Add imports for the
+; rotate subroutines that the macros now jsr into.
+.import rotl32_1, rotl32_4, rotl32_16
+.import rotr32_1
+; rotl32_8 is already imported unconditionally above for the test-only
+; chacha20_quarter_round entry point — do not redeclare here.
+.endif
+
 ; w[dst] += w[src]  — 32-bit little-endian add-in-place
 .macro add32_zp dst, src
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        lda #<(src)
+        sta w32_src1
+        lda #>(src)
+        sta w32_src1+1
+        jsr add32_to_dst
+.else
         clc
         lda dst
         adc src
@@ -81,10 +128,22 @@ cc20_qr_table:
         lda dst+3
         adc src+3
         sta dst+3
+.endif
 .endmacro
 
 ; w[dst] ^= w[src]  — 32-bit xor-in-place
 .macro xor32_zp dst, src
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        lda #<(src)
+        sta w32_src1
+        lda #>(src)
+        sta w32_src1+1
+        jsr xor32_in_place
+.else
         lda dst
         eor src
         sta dst
@@ -97,11 +156,19 @@ cc20_qr_table:
         lda dst+3
         eor src+3
         sta dst+3
+.endif
 .endmacro
 
 ; w[dst] <<<= 16  — swap halves of LE word: [b0 b1 b2 b3] -> [b2 b3 b0 b1]
 ; Uses Y as a temp (preserves X). Two independent byte swaps.
 .macro rotl32_16_zp dst
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        jsr rotl32_16
+.else
         lda dst
         ldy dst+2
         sty dst
@@ -110,11 +177,19 @@ cc20_qr_table:
         ldy dst+3
         sty dst+1
         sta dst+3
+.endif
 .endmacro
 
 ; w[dst] <<<= 8  — LE byte rotate left by 8: [b0 b1 b2 b3] -> [b3 b0 b1 b2]
 ; new_b0 = old_b3, new_b1 = old_b0, new_b2 = old_b1, new_b3 = old_b2
 .macro rotl32_8_zp dst
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        jsr rotl32_8
+.else
         ldy dst+3             ; save b3
         lda dst+2
         sta dst+3             ; b3' = b2
@@ -123,6 +198,7 @@ cc20_qr_table:
         lda dst
         sta dst+1             ; b1' = b0
         sty dst               ; b0' = old b3
+.endif
 .endmacro
 
 ; w[dst] <<<= 4  — LE nibble rotate left by 4 (C4: branchless LUT form).
@@ -140,6 +216,13 @@ cc20_qr_table:
 ; lo_tab[b_{i-1}]) before X is reloaded with b_{i-1}. 80 cy total
 ; (vs ~124 cy for the prior asl/lsr/ora chain). Clobbers A and X.
 .macro rotl32_4_zp dst
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        jsr rotl32_4
+.else
         ; Save (b3 >> 4) — wraps into new_b0's low nibble.
         ldx dst+3
         lda chacha_nibswap_lo_tab,x
@@ -173,6 +256,7 @@ cc20_qr_table:
         lda chacha_nibswap_hi_tab,x   ; b0 << 4 (X still = old b0)
         ora zp_tmp1
         sta dst
+.endif
 .endmacro
 
 ; w[dst] <<<= 12  — rotl8 then rotl4
@@ -188,12 +272,20 @@ cc20_qr_table:
 ; CT: no data-dependent branches. Also a net win vs the old
 ; lda/rol/sta cascade (25 cy vs 37/44 cy old best/worst).
 .macro rotl32_1_zp dst
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        jsr rotl32_1
+.else
         lda dst+3
         asl             ; C = old bit 31 of dst
         rol dst         ; dst:   (old<<1) | C_in; C_out = old bit 7
         rol dst+1
         rol dst+2
         rol dst+3
+.endif
 .endmacro
 
 ; w[dst] >>>= 1  — 32-bit rotate right by 1.
@@ -203,12 +295,20 @@ cc20_qr_table:
 ; Note on naming: this macro is still called from rotl32_7_zp (rotl8
 ; then rotr1) to realise ChaCha20's <<< 7.
 .macro rotr32_1_zp dst
+.ifdef CHACHA20_USE_WORD32
+        lda #<(dst)
+        sta w32_dst
+        lda #>(dst)
+        sta w32_dst+1
+        jsr rotr32_1
+.else
         lda dst
         lsr             ; C = old bit 0 of dst
         ror dst+3
         ror dst+2
         ror dst+1
         ror dst
+.endif
 .endmacro
 
 .macro rotl32_7_zp dst
