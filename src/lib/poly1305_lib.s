@@ -567,11 +567,20 @@ ct_mul_8x8:
         tay                             ; Y = |a-b| (in [0,255])
 
         ; --- Table-lookup subtract: sqtab[a+b] − sqtab[|a-b|] ---
-        SMC smc_lo_addr, { lda $8000,x } ; SMC base: sqtab_lo or sqtab_lo+256
+        ; SMC target-site operands are derived from the sqtab_{lo,hi}
+        ; equates (= LIB_SHARED_SQTAB_BASE +0/+$0200) so the static
+        ; image stays consistent with the equate under consumer
+        ; overrides. Behavior is unchanged: ct_mul_8x8 always patches
+        ; the hi byte (via SMC_StoreHighByte smc_{lo,hi}_addr above)
+        ; before the indexed load executes, so the runtime page is
+        ; always equate-driven; this just keeps the as-assembled bytes
+        ; in sync with the equate at the static-image level (defense
+        ; in depth — issue #40 audit follow-up).
+        SMC smc_lo_addr, { lda sqtab_lo,x } ; SMC base: sqtab_lo or sqtab_lo+256
         sec
         sbc sqtab_lo,y                  ; sqtab_lo[|a-b|]
         sta poly_prod_lo
-        SMC smc_hi_addr, { lda $8200,x } ; SMC base: sqtab_hi or sqtab_hi+256
+        SMC smc_hi_addr, { lda sqtab_hi,x } ; SMC base: sqtab_hi or sqtab_hi+256
         sbc sqtab_hi,y                  ; sqtab_hi[|a-b|]
         sta poly_prod_hi
         rts

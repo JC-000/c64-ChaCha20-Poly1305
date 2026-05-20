@@ -768,4 +768,88 @@ cheaper path.
 
 ---
 
+## 8. Post-merge hardening: SMC target-site operand derived from equate (v0.5.1)
+
+**Context**. After PR #39 adopted `LIB_SHARED_SQTAB_BASE` as the
+canonical sqtab base equate (per `c64-lib-contract` SPEC §8.1), the
+issue #40 audit observed that the `ct_mul_8x8` SMC *target site*
+placeholders still embedded literal `$8000` / `$8200` in their
+initial assembled bytes:
+
+```asm
+smc_lo_addr:  lda $8000,x   ; assembled as BD 00 80
+smc_hi_addr:  lda $8200,x   ; assembled as BD 00 82
+```
+
+The SMC *dispatch* — the code that computes the hi-byte patch via
+`lda #>sqtab_lo` + `adc #(>sqtab_hi - >sqtab_lo)` — was already
+equate-driven. But the target-site operand (the bytes ld65 emits at
+the `lda abs,x` placeholder) was a separate concern: a literal
+immediate in the SMC macro's `statement` argument compiles to those
+exact bytes regardless of the equate.
+
+**Behavior under documented use was correct.** `ct_mul_8x8`
+deterministically patches the hi byte of `smc_lo_addr+2` and
+`smc_hi_addr+2` before any code path can reach the indexed load
+(the patch sequence is the first six instructions of the routine,
+and the indexed load comes ~18 instructions later — no jumps in
+between). Under default standalone build (`LIB_SHARED_SQTAB_BASE =
+$8000`), the literal bytes also happen to match the equate, so even
+a hypothetical cold-jump consumer that skipped the patch would read
+from the correct page.
+
+**Bytes were out of sync under a consumer override.** Multi-lib
+PRGs may set `-DLIB_SHARED_SQTAB_BASE=$<addr>` (e.g. `$7800`) to
+share one sqtab across c64-x25519 / c64-chacha20-poly1305 / a
+host-app primitives table. The equate then resolves to `$7800`, the
+dispatch correctly patches `$78` / `$7A` into the hi byte at
+runtime, and execution is correct. But the *static image* still
+showed `BD 00 80` / `BD 00 82` at the SMC target sites — a
+cold-jump consumer that skipped the patch sequence would read from
+the wrong page (`$8000` instead of `$7800`).
+
+**Hardening**. Replace the literal immediates with symbol
+references:
+
+```asm
+SMC smc_lo_addr, { lda sqtab_lo,x }   ; was: lda $8000,x
+SMC smc_hi_addr, { lda sqtab_hi,x }   ; was: lda $8200,x
+```
+
+The ca65 assembler emits `BD <lo(sqtab_lo)> <hi(sqtab_lo)>` for the
+first instruction and `BD <lo(sqtab_hi)> <hi(sqtab_hi)>` for the
+second. Both equates are page-aligned (`.assert` enforced in
+`poly1305_lib.s`), so the lo byte is `$00` regardless of override
+target — the SMC patch sequence still touches `+2` only, and the
+runtime cycle accounting is unchanged.
+
+**Verification matrix**:
+
+| Build | Bytes at `smc_lo_addr` | Bytes at `smc_hi_addr` | Tests |
+|---|---|---|---|
+| default profile-a (sqtab gated out under F1) | n/a | n/a | 214/214 |
+| default profile-b (LIB_SHARED_SQTAB_BASE = $8000) | `BD 00 80` | `BD 00 82` | 214/214 |
+| override profile-b (LIB_SHARED_SQTAB_BASE = $7800) | `BD 00 78` | `BD 00 7A` | 214/214 |
+
+The default-build PRGs are byte-identical to the pre-hardening
+output (md5 unchanged on both profiles) — the same ca65 input
+`lda <equate>,x` emits the same `BD 00 80` bytes as the previous
+literal `lda $8000,x`. The hardening payoff is visible only on
+override builds, where the static image now tracks the equate.
+
+**Scope discipline**. This pass touches only the two `SMC` macro
+invocations at the table-lookup site (line ~570 / line ~574 of
+`src/lib/poly1305_lib.s`). The SMC dispatch math, the equate
+definitions, and all non-sqtab SMC sites (`shoup_*`, `mult66_*`,
+`smc_sum_a_imm`, `smc_diff_a_imm`) are unchanged. SPEC §8.1 is
+unchanged — this is a lib-internal correctness pass, not an ABI
+or layout change.
+
+**Refs**: issue #40 audit, `c64-lib-contract` PR #5 / #6 / #9
+(originating SPEC §8.1 and the canonical `LIB_SHARED_*` equate
+pattern). Semver: PATCH bump (defense in depth, byte-identical
+default output, 214/214 on every verified profile).
+
+---
+
 **End of memo.**
