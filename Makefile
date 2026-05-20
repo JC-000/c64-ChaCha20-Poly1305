@@ -26,7 +26,7 @@ CFG = src/c64.cfg
 # zp_config is a standalone .s module that owns the .exportzp slot
 # allocation; consumers can override addresses by pre-defining symbols
 # before zp_config.s is assembled, or by swapping the file outright.
-MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version
+MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version lib_manifest
 
 SRCS_MAIN     = src/main.s
 SRCS_LIB      = $(wildcard src/lib/*.s)
@@ -40,7 +40,8 @@ A_OBJS = $(PROFILE_A_DIR)/main.o \
          $(PROFILE_A_DIR)/poly1305_lib.o \
          $(PROFILE_A_DIR)/chacha20poly1305_lib.o \
          $(PROFILE_A_DIR)/data_lib.o \
-         $(PROFILE_A_DIR)/lib_version.o
+         $(PROFILE_A_DIR)/lib_version.o \
+         $(PROFILE_A_DIR)/lib_manifest.o
 
 B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/zp_config.o \
@@ -49,7 +50,8 @@ B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/poly1305_lib.o \
          $(PROFILE_B_DIR)/chacha20poly1305_lib.o \
          $(PROFILE_B_DIR)/data_lib.o \
-         $(PROFILE_B_DIR)/lib_version.o
+         $(PROFILE_B_DIR)/lib_version.o \
+         $(PROFILE_B_DIR)/lib_manifest.o
 
 .PHONY: all clean run profile-a profile-b dist
 
@@ -87,6 +89,9 @@ $(PROFILE_A_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_A_D
 $(PROFILE_A_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
+$(PROFILE_A_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
 profile-a: $(A_OBJS) $(CFG) | build
 	$(LD65) -C $(CFG) -Ln $(PROFILE_A_DIR)/$(LABELS_NAME) \
 	    $(A_OBJS) -o $(PROFILE_A_DIR)/$(PRG_NAME)
@@ -117,6 +122,9 @@ $(PROFILE_B_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_B_D
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_B_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 profile-b: $(B_OBJS) $(CFG) | build

@@ -159,6 +159,18 @@ See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`, `aead_data_ptr`,
 `aead_data_len`, `aead_tag`).
 
+## Manifest equates (consumer fit checks)
+
+`src/lib/lib_manifest.s` exports four integer equates per the
+[c64-lib-contract SPEC §5](https://github.com/JC-000/c64-lib-contract)
+aggregate-manifest convention. Consumers `.import` them and use
+`.assert` to detect REU/ZP/footprint collisions at assemble time:
+
+- `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed (`1 << POLY1305_REU_BANK` on Profile A with `POLY1305_REU=1`; `$00` otherwise). Composes with the issue #19 `--asm-define POLY1305_REU_BANK=N` override.
+- `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound from the Profile A build (16640; actual 16422 + headroom).
+- `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
+
 ## Layout
 
 ```
