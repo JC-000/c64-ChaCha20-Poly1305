@@ -728,6 +728,151 @@ poly1305_multiply:
             .endrepeat
         .endrepeat
 .else
+  .ifdef POLY1305_MULTIPLY_ROLLED_OUTER
+        ; --- Profile B + outer-only-rolled (midpoint on the size/cycles
+        ;     curve for issue #34). Outer J=0..15 is a runtime loop, but
+        ;     each iteration still inlines all 17 inner-I partial products
+        ;     as a straight-line macro expansion. Pays one extra outer-loop
+        ;     setup (load r[j] via abs,x; increment j; cmp; bne) per j —
+        ;     a few hundred cycles — but avoids the 272 per-product
+        ;     inc/cmp/bne overhead the fully-rolled variant adds.
+        ;
+        ;     Size is dominated by the 17 inlined partials: ~17*32 = ~544
+        ;     bytes for the inner body, plus outer-loop scaffolding.
+        ldx #0
+        stx poly_j                      ; j = 0
+@outer_jloop:
+        ldx poly_j
+        lda poly_r, x
+        SMC_StoreValue smc_sum_a_imm
+        SMC_StoreValue smc_diff_a_imm
+
+        ; The poly_pp_ct_mul macro hardcodes the (i, j) pair into
+        ; absolute addresses for poly_product[i+j..]. Since j is now a
+        ; runtime value we can't bake j into the macro — fall back to an
+        ; abs,x form inside the inner row. The compromise: inline 17
+        ; instances of a "row" partial-product that uses X = j as the
+        ; column offset for product addressing.
+        ;
+        ; For each i in 0..16 the inner body is:
+        ;     ldy poly_h+i               ; constant offset, fine
+        ;     jsr ct_mul_8x8             ; uses SMC'd r[j]
+        ;     ldx poly_j                 ; column offset for product
+        ;     clc
+        ;     lda poly_product+i, x
+        ;     adc poly_prod_lo
+        ;     sta poly_product+i, x
+        ;     lda poly_product+i+1, x
+        ;     adc poly_prod_hi
+        ;     sta poly_product+i+1, x
+        ;     bcc :+
+        ;     ; ripple from i+j+2; start X at j and add immediate i+2.
+        ;     ; cheapest: txa / clc / adc #(i+2) / tax / jsr poly_ripple.
+        ;     ; But this leaks no secret (i and 2 are constants, j is a
+        ;     ; loop counter), so still CT-safe.
+        ;     txa
+        ;     clc
+        ;     adc #(i + 2)
+        ;     tax
+        ;     jsr poly_ripple
+        ;     :
+        .repeat 17, I
+            ldy poly_h + I
+            jsr ct_mul_8x8
+            ldx poly_j
+            clc
+            lda poly_product + I, x
+            adc poly_prod_lo
+            sta poly_product + I, x
+            lda poly_product + I + 1, x
+            adc poly_prod_hi
+            sta poly_product + I + 1, x
+            bcc :+
+            txa
+            clc
+            adc #(I + 2)
+            tax
+            jsr poly_ripple
+            :
+        .endrepeat
+
+        inc poly_j
+        lda poly_j
+        cmp #16
+        beq @outer_done
+        jmp @outer_jloop
+@outer_done:
+  .elseif .defined(POLY1305_MULTIPLY_ROLLED)
+        ; --- Profile B + rolled-loop alternative 2 (issue #34) ----------
+        ; Same J-outer / I-inner index pattern as the unrolled body, but
+        ; expressed as runtime loops instead of a 17x16 macro expansion.
+        ; CT contract preserved: only loop-control branches (on counter
+        ; equality) and the carry-out ripple branch (a function of
+        ; hardware flags, see poly_ripple header) appear in this loop.
+        ; r[j] is still SMC-baked into ct_mul_8x8's immediate slots once
+        ; per outer iteration. The inner loop maintains pp_idx (= i + j)
+        ; as a running ZP byte so poly_product[i+j] / poly_product[i+j+1]
+        ; reduce to `lda/sta poly_product,x` (single-page abs,x — no
+        ; cross penalty: poly_product through poly_product+32 fits in
+        ; one page).
+        ;
+        ; ZP reuse: poly_i holds the i counter, poly_j holds j and is
+        ; also the running pp_idx (initialised to j and incremented
+        ; per inner iteration). Both are otherwise unused in Profile B
+        ; (poly_i / poly_j are only consumed by shoup_init, which is
+        ; gated on POLY1305_PROFILE_LONG).
+        lda #0
+        sta poly_i                      ; i = 0 not used yet; init below
+        sta poly_j                      ; j = 0
+@rolled_jloop:
+        ; --- Cache r[j] into ct_mul_8x8 immediates (one set per j) ----
+        ldx poly_j
+        lda poly_r, x
+        SMC_StoreValue smc_sum_a_imm
+        SMC_StoreValue smc_diff_a_imm
+
+        ; --- Inner i loop: 17 iterations (i = 0..16) -------------------
+        ; pp_idx = i + j starts at j; we keep it in poly_carry as a
+        ; running byte since poly_carry is reset at every poly1305_block
+        ; entry and is otherwise unused inside poly1305_multiply. (We
+        ; cannot use poly_j itself for pp_idx because we also need the
+        ; original j value to compare against #16 at the outer-loop
+        ; bottom. We keep i in poly_i.)
+        lda poly_j
+        sta poly_carry                  ; pp_idx = j
+        lda #0
+        sta poly_i                      ; i = 0
+@rolled_iloop:
+        ldx poly_i
+        ldy poly_h, x                   ; Y = h[i] → ct_mul_8x8 b operand
+        jsr ct_mul_8x8                  ; clobbers A,X,Y; result in
+                                        ; poly_prod_lo / poly_prod_hi
+
+        ldx poly_carry                  ; X = pp_idx = i + j
+        clc
+        lda poly_product, x
+        adc poly_prod_lo
+        sta poly_product, x
+        inx                             ; X = i + j + 1
+        lda poly_product, x
+        adc poly_prod_hi
+        sta poly_product, x
+        bcc @no_ripple
+        inx                             ; X = i + j + 2 (ripple start)
+        jsr poly_ripple                 ; clobbers A, X
+@no_ripple:
+        inc poly_carry                  ; pp_idx → i + 1 + j
+
+        inc poly_i
+        lda poly_i
+        cmp #17
+        bne @rolled_iloop
+
+        inc poly_j
+        lda poly_j
+        cmp #16
+        bne @rolled_jloop
+  .else
         ; Profile B CT path (v0.3.0 CT fix). Loop order remains
         ; J-outer / I-inner (unchanged from Step 12) so each outer-j
         ; iteration can SMC-bake r[j] once into the ct_mul_8x8
@@ -742,6 +887,7 @@ poly1305_multiply:
                 poly_pp_ct_mul I, J
             .endrepeat
         .endrepeat
+  .endif
 .endif
 
         ; Fall through to poly1305_reduce (fused Donna wrap).
