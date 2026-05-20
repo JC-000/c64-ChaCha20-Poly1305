@@ -23,7 +23,7 @@ CFG = src/c64.cfg
 # link line (ld65 resolves symbols regardless but segment packing
 # reflects link order). Constants_lib is equates-only and is .include'd
 # by the modules that need ZP equate values, so it has no .o of its own.
-MODULES = main word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib
+MODULES = main word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version
 
 SRCS_MAIN     = src/main.s
 SRCS_LIB      = $(wildcard src/lib/*.s)
@@ -35,14 +35,16 @@ A_OBJS = $(PROFILE_A_DIR)/main.o \
          $(PROFILE_A_DIR)/chacha20_lib.o \
          $(PROFILE_A_DIR)/poly1305_lib.o \
          $(PROFILE_A_DIR)/chacha20poly1305_lib.o \
-         $(PROFILE_A_DIR)/data_lib.o
+         $(PROFILE_A_DIR)/data_lib.o \
+         $(PROFILE_A_DIR)/lib_version.o
 
 B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/word32_lib.o \
          $(PROFILE_B_DIR)/chacha20_lib.o \
          $(PROFILE_B_DIR)/poly1305_lib.o \
          $(PROFILE_B_DIR)/chacha20poly1305_lib.o \
-         $(PROFILE_B_DIR)/data_lib.o
+         $(PROFILE_B_DIR)/data_lib.o \
+         $(PROFILE_B_DIR)/lib_version.o
 
 .PHONY: all clean run profile-a profile-b dist
 
@@ -74,6 +76,9 @@ $(PROFILE_A_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_I
 $(PROFILE_A_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
+$(PROFILE_A_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
 profile-a: $(A_OBJS) $(CFG) | build
 	$(LD65) -C $(CFG) -Ln $(PROFILE_A_DIR)/$(LABELS_NAME) \
 	    $(A_OBJS) -o $(PROFILE_A_DIR)/$(PRG_NAME)
@@ -98,6 +103,9 @@ $(PROFILE_B_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_I
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_B_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 profile-b: $(B_OBJS) $(CFG) | build
