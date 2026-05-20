@@ -35,7 +35,28 @@
 ; Profile B reads sqtab via ct_mul_8x8 and emits the sqtab init.
 ; Profile A gates these out entirely — see issue #34 F1 and the
 ; "Profile A dead-code trim" comment block at sqtab_init / mul_8x8.
-.export sqtab_init, poly_prod_lo, poly_prod_hi
+.export poly_prod_lo, poly_prod_hi
+
+; c64-lib-contract SPEC §8.1 sqtab-init migration switch.
+; When a consumer provides a canonical sqtab init (`mul_tables_init`)
+; by defining SHARED_SQTAB_INIT, this lib MUST NOT also export
+; `sqtab_init` — the consumer's canonical owner takes over and a
+; second export would collide at link time. The .ifndef gate below
+; matches the one wrapping the sqtab_init body further down.
+;
+; Under SHARED_SQTAB_INIT the lib's internal callers (poly1305_lib_init
+; and aead_init_late) still reference `sqtab_init`; we satisfy them by
+; importing the canonical `mul_tables_init` and aliasing locally. This
+; preserves backwards compatibility per SPEC §8.1 ("Each adopting
+; library MAY keep its existing per-lib `sqtab_init` exported …
+; Under .ifdef SHARED_SQTAB_INIT, the library's own init body is gated
+; out and the canonical `mul_tables_init` takes over.").
+.ifndef SHARED_SQTAB_INIT
+.export sqtab_init
+.else
+.import mul_tables_init
+sqtab_init = mul_tables_init
+.endif
 
 ; mul_8x8 is the legacy 8x8 multiplier — replaced by ct_mul_8x8 (the
 ; constant-time, page-cross-safe variant) on every hot path in v0.3.0.
@@ -68,9 +89,28 @@
 ; stash) out of Profile A entirely, reclaiming the 1 KB at $8000-$83FF
 ; for Profile-A-only consumer scratch and dropping ~200 B of PRG plus
 ; ~80 k cy of sqtab_init boot work on poly1305_init.
+;
+; c64-lib-contract SPEC v0.2.0 §8.1 canonical sqtab placement: the
+; consumer chooses the base address via the equate
+; LIB_SHARED_SQTAB_BASE. Standalone builds use the per-lib default
+; ($8000) preserved verbatim from prior releases, so byte output
+; under default build is unchanged. A multi-lib PRG that links any
+; other §8.1 adopter (c64-nist-curves, c64-x25519, c64-ChaCha20-Poly1305,
+; etc.) supplies a single `--asm-define LIB_SHARED_SQTAB_BASE=$<addr>`
+; and the libs agree on one shared 1 KB table.
+;
+; The two .asserts catch misconfigurations at assemble time:
+;   - page-aligned base required for CT-strict `abs,x` cycle stability
+;   - $0200 page-delta required because ct_mul_8x8's SMC dispatch
+;     bakes (>sqtab_hi - >sqtab_lo) = 2 into an opcode patch.
 .ifndef POLY1305_PROFILE_LONG
-sqtab_lo        = $8000         ; 512 bytes: low bytes of floor(n^2/4)
-sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
+.ifndef LIB_SHARED_SQTAB_BASE
+LIB_SHARED_SQTAB_BASE = $8000     ; per-lib default for standalone builds
+.endif
+sqtab_lo        = LIB_SHARED_SQTAB_BASE
+sqtab_hi        = LIB_SHARED_SQTAB_BASE + $0200
+.assert (LIB_SHARED_SQTAB_BASE & $00ff) = 0, error, "sqtab base must be page-aligned"
+.assert sqtab_hi = sqtab_lo + $0200,        error, "sqtab_hi must follow sqtab_lo by $0200"
 
 ; v0.3.0 CT fix: the Step 12 sqtab2_lo/sqtab2_hi tables at $8400..$87FF
 ; and their sqtab2_init builder have been deleted along with the mult66
@@ -294,7 +334,9 @@ poly1305_clamp:
         rts
 
 ; =============================================================================
-; sqtab_init - Build quarter-square lookup table at $8000-$83FF
+; sqtab_init - Build quarter-square lookup table at sqtab_lo/sqtab_hi
+;               (default $8000-$83FF; consumer-overridable via
+;                LIB_SHARED_SQTAB_BASE per SPEC §8.1).
 ;
 ; Profile B only — Profile A's shoup_init populates r_tab_{lo,hi}
 ; incrementally and does not touch sqtab (issue #34 F1).
@@ -303,8 +345,17 @@ poly1305_clamp:
 ; Ported from c64-aes256-ecdsa fp_init_sqtab.
 ;
 ; Clobbers: A, X, Y
+;
+; SPEC §8.1 migration switch: when a consumer links several §8.1
+; adopters into one PRG, exactly one lib (or the consumer itself)
+; owns the canonical `mul_tables_init` and defines SHARED_SQTAB_INIT.
+; All other adopters gate out their own init body (and its scratch)
+; to avoid linker symbol collisions and duplicate ~80 k cy boot work.
+; Standalone builds (SHARED_SQTAB_INIT undefined) emit this lib's
+; init as before — byte-identical to prior releases.
 ; =============================================================================
 .ifndef POLY1305_PROFILE_LONG
+.ifndef SHARED_SQTAB_INIT
 sqtab_init:
         lda #0
         sta sq_acc              ; accumulator = 0
@@ -381,6 +432,7 @@ sq_acc: .res 3, 0              ; 24-bit accumulator for i^2
 sq_sh:  .res 3, 0              ; 24-bit shifted result (i^2 / 4)
 sq_ad:  .res 2, 0              ; 16-bit addition term (2i+1)
 sq_i:   .res 2, 0              ; 16-bit index counter (0..511)
+.endif ; .ifndef SHARED_SQTAB_INIT — see SPEC §8.1
 
 ; v0.3.0 CT fix: sqtab2_init deleted (was Step 12 Profile B mult66
 ; companion table builder). ct_mul_8x8 — the CT-clean replacement for

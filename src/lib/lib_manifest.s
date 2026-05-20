@@ -119,8 +119,34 @@ LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 ; ---------------------------------------------------------------------------
 LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 
+; ---------------------------------------------------------------------------
+; LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES
+;   Bitmask of shared primitives (c64-lib-contract SPEC v0.2.0 §5
+;   addendum + §8.0 bit allocation) that this library claims ownership
+;   of in its default standalone build. Consumers OR together every
+;   linked library's mask and assert the result has no duplicate bits,
+;   catching shared-primitive double-ownership at assemble time.
+;
+;   SPEC §8.0 bit allocation:
+;     $0001 LIB_SHARED_PRIMITIVES_SQTAB — 8×8 quarter-square multiply
+;                                          table (defined in §8.1)
+;
+;   c64-ChaCha20-Poly1305 ships the SPEC §8.1 sqtab today, so this lib
+;   claims only that bit. Future shared-primitive promotions (e.g.
+;   ct_mul_8x8 once two adopters confirm bit-identical bodies) will OR
+;   in additional bits per their §8.x sub-clause allocation.
+; ---------------------------------------------------------------------------
+LIB_SHARED_PRIMITIVES_SQTAB            = $0001   ; SPEC §8.0 / §8.1
+LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
+
 .export LIB_CHACHA20_POLY1305_REU_BANKS_USED
 .export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
 .export LIB_CHACHA20_POLY1305_RESIDENT_BYTES
 .export LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES
 .export LIB_CHACHA20_POLY1305_COLD_BYTES
+; SPEC §8.0 / §8.1 manifest equates exported with `:abs` so ca65 emits
+; them as absolute-address values rather than `zeropage`; integer-equate
+; values up to $00ff would otherwise be tagged zeropage and trigger a
+; `Range error: '5' out of range [0,0]` at the consumer-side .import.
+.export LIB_SHARED_PRIMITIVES_SQTAB:abs
+.export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
