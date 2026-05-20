@@ -15,6 +15,27 @@ consistent ~200 cy / packet on both profiles (below per-measurement
 noise but signal across the 20-point sweep).
 
 ### Added
+- **Granular per-symbol benchmark** (`tools/bench_granular.py`, `make
+  bench`, `make bench-check`). Adds 14 per-routine cycle-count rows
+  (chacha20_quarter_round, chacha20_block, chacha20_encrypt n=64/1024,
+  poly1305_multiply, poly1305_reduce, poly1305_block,
+  aead_compute_tag, aead_verify_tag, sqtab_init, ct_mul_8x8, plus
+  aead_encrypt n=0/64/1024) so perf regressions can be attributed to
+  a specific symbol. Reuses the existing CIA #1 Timer A+B 32-bit
+  wrapper at `$C080` from `tools/benchmark_chacha20_poly1305.py`;
+  `set_turbo_mhz(client, 1)` after reset on the U64 path. `make
+  bench-check` diffs against a committed baseline JSON
+  (`docs/BENCH_REPORT.baseline.json`) and exits non-zero on >1%
+  drift. See `docs/BENCH_GRANULAR.md` for the methodology and
+  reachability matrix.
+- **Turbo-hygiene fix** in `tools/audit_cross_check.py`,
+  `tools/ct_mul_brute_check.py`, `tools/test_chacha20_poly1305.py`:
+  one-line `set_turbo_mhz(client, 1)` after `client.reset()` on the
+  U64 path so a sibling agent's bench (at e.g. 48 MHz) cannot leak
+  CIA-rate mismeasurement into these (non-timing-sensitive but
+  device-sharing) tools, and vice versa.
+
+### Added
 - **Runtime-configurable REU layout** (PR — sprint). Two new
   exported public RAM-backed symbols, both 8-bit cells in DATA:
   - `poly1305_reu_sqtab_bank` — REU bank for sqtab backup
