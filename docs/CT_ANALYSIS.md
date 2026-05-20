@@ -818,6 +818,15 @@ addresses):
 - `aead_partial` SMC dispatch in `chacha20poly1305_lib.s` — the
   dispatch key is the partial-block length (public API input).
   GREEN.
+- `smc_lo_addr` / `smc_hi_addr` in `ct_mul_8x8`
+  (`src/lib/poly1305_lib.s`) — the SMC target sites for the
+  quarter-square sum-page dispatch. The target-site `lda abs,x`
+  placeholder operand is now derived from `sqtab_lo` / `sqtab_hi`
+  equates (v0.5.1 hardening, issue #40 audit follow-up) so the
+  static image stays consistent with `LIB_SHARED_SQTAB_BASE` under
+  consumer overrides. CT properties unchanged: the hi-byte patch
+  is a 4 cy `sta abs`, the subsequent indexed load is 4 cy on a
+  page-aligned base (no page-cross), both fixed-cycle. GREEN.
 
 ### 5.3 Jump tables / indirect branches
 

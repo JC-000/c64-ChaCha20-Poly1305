@@ -81,6 +81,24 @@ noise but signal across the 20-point sweep).
   - profile-b: `4afe54d466ad92ca38b91c94a2ea2b36`
 
 ### Fixed
+- **`ct_mul_8x8` SMC target-site operand is now derived from
+  `sqtab_lo` / `sqtab_hi` equates** instead of literal `$8000` /
+  `$8200` immediates (`src/lib/poly1305_lib.s`). The SMC *dispatch*
+  (the hi-byte patch math driving `SMC_StoreHighByte smc_{lo,hi}_addr`)
+  was already equate-driven via `lda #>sqtab_lo` /
+  `adc #(>sqtab_hi - >sqtab_lo)`; only the *target site* (the
+  `lda abs,x` placeholder bytes) still embedded the default base.
+  Behavior is unchanged under documented use — `ct_mul_8x8` always
+  patches the hi byte before the indexed load executes — but the
+  static image was out of sync with a consumer override
+  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`) until the patch ran.
+  Defense in depth: assembled bytes are now `BD 00 <hi(sqtab_lo)>` /
+  `BD 00 <hi(sqtab_hi)>` from the start. Default standalone build is
+  byte-identical to v0.5.0 on both profiles
+  (profile-a md5 `79deb98c…`, profile-b md5 `4afe54d4…`). 214/214
+  tests pass on default profile-a, default profile-b, and an
+  `LIB_SHARED_SQTAB_BASE=$7800` override build. Issue #40 audit
+  follow-up; semver PATCH (v0.5.1).
 - **`docs/OPTIMIZATION_PLAN.md` retracts the "Optional Step 10 REU
   Shoup-table preload" claim** (commit `b3eac9b`). The original
   proposal conflated the r-independent quarter-square table (sqtab —
