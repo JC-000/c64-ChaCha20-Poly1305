@@ -23,7 +23,10 @@ CFG = src/c64.cfg
 # link line (ld65 resolves symbols regardless but segment packing
 # reflects link order). Constants_lib is equates-only and is .include'd
 # by the modules that need ZP equate values, so it has no .o of its own.
-MODULES = main word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version
+# zp_config is a standalone .s module that owns the .exportzp slot
+# allocation; consumers can override addresses by pre-defining symbols
+# before zp_config.s is assembled, or by swapping the file outright.
+MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version
 
 SRCS_MAIN     = src/main.s
 SRCS_LIB      = $(wildcard src/lib/*.s)
@@ -31,6 +34,7 @@ SRCS_INCLUDES = src/lib/constants_lib.s
 
 # Object file list per profile (order matches MODULES).
 A_OBJS = $(PROFILE_A_DIR)/main.o \
+         $(PROFILE_A_DIR)/zp_config.o \
          $(PROFILE_A_DIR)/word32_lib.o \
          $(PROFILE_A_DIR)/chacha20_lib.o \
          $(PROFILE_A_DIR)/poly1305_lib.o \
@@ -39,6 +43,7 @@ A_OBJS = $(PROFILE_A_DIR)/main.o \
          $(PROFILE_A_DIR)/lib_version.o
 
 B_OBJS = $(PROFILE_B_DIR)/main.o \
+         $(PROFILE_B_DIR)/zp_config.o \
          $(PROFILE_B_DIR)/word32_lib.o \
          $(PROFILE_B_DIR)/chacha20_lib.o \
          $(PROFILE_B_DIR)/poly1305_lib.o \
@@ -59,6 +64,9 @@ endef
 # ---- Profile A: POLY1305_PROFILE_LONG = 1 (default, "long message" path) ----
 # Each .o depends on its source plus constants_lib.s (included for equates).
 $(PROFILE_A_DIR)/main.o: src/main.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/zp_config.o: src/zp_config.s | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
 $(PROFILE_A_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
@@ -88,6 +96,9 @@ profile-a: $(A_OBJS) $(CFG) | build
 
 # ---- Profile B: POLY1305_PROFILE_LONG undefined (stock C64 / portable) ----
 $(PROFILE_B_DIR)/main.o: src/main.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/zp_config.o: src/zp_config.s | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_B_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
