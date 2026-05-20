@@ -12,6 +12,8 @@ LABELS = build/$(LABELS_NAME)
 # resulting PRG+labels into build/ for the default tool paths.
 PROFILE_A_DIR = build/profile-a
 PROFILE_B_DIR = build/profile-b
+PROFILE_BR_DIR = build/profile-b-rolled
+PROFILE_BO_DIR = build/profile-b-rolled-outer
 
 # Library archive outputs (c64-lib-contract SPEC §6). `make lib` builds
 # the full Profile-B archive `build/lib/c64-chacha20-poly1305.a`. Each
@@ -81,7 +83,33 @@ B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/lib_version.o \
          $(PROFILE_B_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b dist lib lib-aead-only
+# Profile B + rolled poly1305_multiply (issue #34 alternative 2).
+# Identical to Profile B except poly1305_lib.o is built with
+# -DPOLY1305_MULTIPLY_ROLLED=1, which switches poly1305_multiply
+# from the 17x16 unrolled macro expansion to a runtime nested loop.
+# All other objects are byte-identical to Profile B so they're
+# rebuilt in this dir for hermeticity (no cross-dir .o sharing).
+BR_OBJS = $(PROFILE_BR_DIR)/main.o \
+          $(PROFILE_BR_DIR)/zp_config.o \
+          $(PROFILE_BR_DIR)/word32_lib.o \
+          $(PROFILE_BR_DIR)/chacha20_lib.o \
+          $(PROFILE_BR_DIR)/poly1305_lib.o \
+          $(PROFILE_BR_DIR)/chacha20poly1305_lib.o \
+          $(PROFILE_BR_DIR)/data_lib.o \
+          $(PROFILE_BR_DIR)/lib_version.o \
+          $(PROFILE_BR_DIR)/lib_manifest.o
+
+BO_OBJS = $(PROFILE_BO_DIR)/main.o \
+          $(PROFILE_BO_DIR)/zp_config.o \
+          $(PROFILE_BO_DIR)/word32_lib.o \
+          $(PROFILE_BO_DIR)/chacha20_lib.o \
+          $(PROFILE_BO_DIR)/poly1305_lib.o \
+          $(PROFILE_BO_DIR)/chacha20poly1305_lib.o \
+          $(PROFILE_BO_DIR)/data_lib.o \
+          $(PROFILE_BO_DIR)/lib_version.o \
+          $(PROFILE_BO_DIR)/lib_manifest.o
+
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only
 
 # Default build == Profile A (POLY1305_PROFILE_LONG defined).
 all: profile-a
@@ -170,6 +198,88 @@ $(PROFILE_A_DIR):
 
 $(PROFILE_B_DIR):
 	mkdir -p $(PROFILE_B_DIR)
+
+$(PROFILE_BR_DIR):
+	mkdir -p $(PROFILE_BR_DIR)
+
+# ---- Profile B-rolled: POLY1305_MULTIPLY_ROLLED=1 (Profile B base) ----
+# Issue #34 alternative 2 prototype: rolled poly1305_multiply in lieu of
+# the 17x16 unrolled macro expansion. All other build flags match
+# Profile B (POLY1305_PROFILE_LONG undefined).
+$(PROFILE_BR_DIR)/main.o: src/main.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/zp_config.o: src/zp_config.s | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+profile-b-rolled: $(BR_OBJS) $(CFG) | build
+	$(LD65) -C $(CFG) -Ln $(PROFILE_BR_DIR)/$(LABELS_NAME) \
+	    $(BR_OBJS) -o $(PROFILE_BR_DIR)/$(PRG_NAME)
+	$(call FIXLABELS,$(PROFILE_BR_DIR)/$(LABELS_NAME))
+	cp $(PROFILE_BR_DIR)/$(PRG_NAME) $(PRG)
+	cp $(PROFILE_BR_DIR)/$(LABELS_NAME) $(LABELS)
+
+$(PROFILE_BO_DIR):
+	mkdir -p $(PROFILE_BO_DIR)
+
+# ---- Profile B-rolled-outer: outer-J rolled, inner-I unrolled. -------
+# Issue #34 alternative 2 midpoint variant: rolls only the outer
+# 16-iteration j loop; the 17 inner partial products for each row
+# remain inlined macro expansions. Same CT contract as Profile B.
+$(PROFILE_BO_DIR)/main.o: src/main.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/zp_config.o: src/zp_config.s | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+profile-b-rolled-outer: $(BO_OBJS) $(CFG) | build
+	$(LD65) -C $(CFG) -Ln $(PROFILE_BO_DIR)/$(LABELS_NAME) \
+	    $(BO_OBJS) -o $(PROFILE_BO_DIR)/$(PRG_NAME)
+	$(call FIXLABELS,$(PROFILE_BO_DIR)/$(LABELS_NAME))
+	cp $(PROFILE_BO_DIR)/$(PRG_NAME) $(PRG)
+	cp $(PROFILE_BO_DIR)/$(LABELS_NAME) $(LABELS)
 
 run: profile-a
 	x64sc -autostart $(PRG)
