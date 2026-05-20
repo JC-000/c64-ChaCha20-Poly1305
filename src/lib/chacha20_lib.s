@@ -27,9 +27,24 @@
 ; branchless rotl32_4_zp macro. Defined in data_lib.s.
 .import chacha_nibswap_hi_tab, chacha_nibswap_lo_tab
 
-.export chacha20_init, chacha20_block, chacha20_quarter_round
+.export chacha20_init, chacha20_block
 .export chacha20_encrypt
 .export cc20_qr_table, cc20_constants
+
+; chacha20_quarter_round is a test-only entry point: the Python harness
+; jsr()s into it to validate the quarter-round primitive against the
+; RFC 7539 test vectors. chacha20_block does NOT call it — block inlines
+; all eight quarter-rounds per double-round (see cc20_qr macro below).
+;
+; Default (full) variant: exported, body assembled.
+; aead-only variant (-DLIB_VARIANT_AEAD_ONLY=1): not exported, body
+;   skipped via .ifndef around the function body further down. Stripping
+;   the body also strips the only `jsr rotl32_7` reference in the entire
+;   library, which lets word32_lib.s drop the `.export rotl32_7`
+;   correspondingly.
+.ifndef LIB_VARIANT_AEAD_ONLY
+.export chacha20_quarter_round
+.endif
 
 .segment "CODE"
 
@@ -541,7 +556,14 @@ cc20_qr_table:
 ; arbitrary (a,b,c,d) tuples and exercise a single QR. chacha20_block
 ; itself uses the inlined +cc20_qr macro above — no table lookups, no
 ; JSR — for speed.
+;
+; Gated under .ifndef LIB_VARIANT_AEAD_ONLY: in the aead-only variant
+; the harness is not present and this entry point would only inflate
+; the consumer-side link with unreachable code + an otherwise-
+; unresolvable `jsr rotl32_7`. See the corresponding `.export
+; chacha20_quarter_round` gate near the top of this file.
 ; =============================================================================
+.ifndef LIB_VARIANT_AEAD_ONLY
 
 ; Set w32_dst to cc20_work + word_index*4 (index from cc20_qr_table[X+.off])
 .macro cc20_set_dst tbl_off
@@ -607,6 +629,8 @@ chacha20_quarter_round:
         jsr xor32_in_place      ; b ^= c
         jsr rotl32_7            ; b <<<= 7
         rts
+
+.endif  ; LIB_VARIANT_AEAD_ONLY — end of chacha20_quarter_round block
 
 ; =============================================================================
 ; chacha20_init - Initialize ChaCha20 state

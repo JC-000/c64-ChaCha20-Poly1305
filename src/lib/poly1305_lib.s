@@ -29,7 +29,18 @@
 .export poly1305_lib_init, poly1305_init, poly1305_clamp
 .export poly1305_multiply, poly1305_reduce
 .export poly1305_block, poly1305_update, poly1305_final
-.export sqtab_init, mul_8x8, poly_prod_lo, poly_prod_hi, poly_ripple
+.export sqtab_init, poly_prod_lo, poly_prod_hi, poly_ripple
+
+; mul_8x8 is the legacy 8x8 multiplier — replaced by ct_mul_8x8 (the
+; constant-time, page-cross-safe variant) on every hot path in v0.3.0.
+; Nothing inside this archive jsrs into mul_8x8 anymore; the only callers
+; are external Python tests. In the aead-only variant the symbol is
+; therefore not exported. The body is left in place (touching the
+; crypto-code paths is out of scope for the variant); only the external
+; symbol table entry shrinks.
+.ifndef LIB_VARIANT_AEAD_ONLY
+.export mul_8x8
+.endif
 .ifdef POLY1305_PROFILE_LONG
 .export shoup_init
 .ifdef POLY1305_REU
