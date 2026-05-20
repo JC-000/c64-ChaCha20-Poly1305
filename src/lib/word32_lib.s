@@ -16,8 +16,26 @@
 .include "constants_lib.s"
 
 .export add32, add32_to_dst, xor32, xor32_in_place, copy32, zero32
-.export rotl32_1, rotl32_4, rotl32_7, rotl32_8, rotl32_12
-.export rotr32_1, rotr32_4, rotr32_7, rotr32_8, rotr32_12, rotr32_16
+.export rotl32_4, rotl32_8, rotl32_12
+.export rotr32_1, rotr32_4, rotr32_8, rotr32_12, rotr32_16
+
+; rotl32_1 / rotl32_7 / rotr32_7 are test-only word32 helpers. In the
+; default (full) library archive they are exported so the Python test
+; harness can jsr() into them directly. In the aead-only variant
+; (-DLIB_VARIANT_AEAD_ONLY=1) they are not exported — the test harness
+; is not consuming this archive, and downstream consumers using only
+; aead_encrypt / aead_decrypt have no use for them. The function bodies
+; remain in the .o (touching the crypto code paths is out of scope for
+; the variant); only the external-symbol-table footprint shrinks.
+;
+; Note: rotr32_1 stays exported in both variants. The chacha20_block
+; hot path's cc20_qr_body_rest macro expands to `jsr rotr32_1`, so the
+; archive must continue to publish that symbol for chacha20_lib.o's
+; .import to resolve at consumer-side link time.
+.ifndef LIB_VARIANT_AEAD_ONLY
+.export rotl32_1, rotl32_7
+.export rotr32_7
+.endif
 
 .segment "CODE"
 

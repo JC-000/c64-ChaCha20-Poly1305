@@ -69,8 +69,32 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   Padded to 16640 (256-aligned, $4100) to provide a small headroom
 ;   buffer that absorbs incidental growth between releases without
 ;   forcing consumer `.assert` rewrites. Update on each release.
+;
+;   Variant note (per c64-lib-contract SPEC §5, ±5% slack permitted):
+;   the aead-only archive (`make lib-aead-only`) drops the test-only
+;   chacha20_quarter_round body and pulls no word32_lib.o into a
+;   minimal consumer that calls only the AEAD ABI. Measured savings
+;   on the consumer-side link: 1024 B (5.96%). Both numbers fit
+;   within the equate's 16640 B headroom, so the equate is a single
+;   value rather than a per-variant pair — that keeps consumer
+;   `.assert LIB_CHACHA20_POLY1305_RESIDENT_BYTES + ... < HOT` checks
+;   one-line and conservative regardless of which variant the
+;   consumer ingests. The per-variant exact numbers live alongside
+;   for documentation, and the contract memo specifically allows the
+;   "use the larger value" interpretation for v0.1.0.
+;
+;     full        archive linked into min consumer : 17191 B
+;     aead-only   archive linked into min consumer : 16167 B
+;     manifest    equate (rounded up, full variant): 16640 B
 ; ---------------------------------------------------------------------------
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES        = 16640
+
+; aead-only variant exposes its own equate so a consumer that
+; specifically pins the trimmed archive can `.import` this name and
+; static-assert against a tighter budget. Pattern follows §5's
+; "library author refreshes them when a release substantively
+; changes any one of them" — adding the symbol on a MINOR release.
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 
 ; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_COLD_BYTES
@@ -84,4 +108,5 @@ LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 .export LIB_CHACHA20_POLY1305_REU_BANKS_USED
 .export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
 .export LIB_CHACHA20_POLY1305_RESIDENT_BYTES
+.export LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES
 .export LIB_CHACHA20_POLY1305_COLD_BYTES
