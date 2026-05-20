@@ -29,7 +29,13 @@
 .export poly1305_lib_init, poly1305_init, poly1305_clamp
 .export poly1305_multiply, poly1305_reduce
 .export poly1305_block, poly1305_update, poly1305_final
-.export sqtab_init, poly_prod_lo, poly_prod_hi, poly_ripple
+.export poly_ripple
+
+.ifndef POLY1305_PROFILE_LONG
+; Profile B reads sqtab via ct_mul_8x8 and emits the sqtab init.
+; Profile A gates these out entirely — see issue #34 F1 and the
+; "Profile A dead-code trim" comment block at sqtab_init / mul_8x8.
+.export sqtab_init, poly_prod_lo, poly_prod_hi
 
 ; mul_8x8 is the legacy 8x8 multiplier — replaced by ct_mul_8x8 (the
 ; constant-time, page-cross-safe variant) on every hot path in v0.3.0.
@@ -41,24 +47,28 @@
 .ifndef LIB_VARIANT_AEAD_ONLY
 .export mul_8x8
 .endif
+.endif
 .ifdef POLY1305_PROFILE_LONG
 .export shoup_init
-.ifdef POLY1305_REU
-.export poly1305_reu_restore
-; v0.5.x runtime REU layout: three public RAM-backed bytes that a
-; consumer may patch *before* calling poly1305_lib_init. Defaults
-; (bank=0, offset=$0000) are written by poly1305_lib_init from the
-; POLY1305_REU_BANK / POLY1305_REU_OFFSET assemble-time defines, so
-; consumers who never touch the cells get pre-v0.5.x behavior. See
-; docs/API.md §3 for the override protocol.
-.export poly1305_reu_sqtab_bank
-.export poly1305_reu_sqtab_offset
-.endif
+; Profile A no longer emits the 1 KB sqtab at $8000-$83FF, so the
+; POLY1305_REU sqtab stash/restore plumbing (poly1305_reu_restore,
+; poly1305_reu_sqtab_bank, poly1305_reu_sqtab_offset) is also gated
+; out. Profile A consumers that previously imported these symbols
+; should drop the imports — the sqtab the symbols managed no longer
+; exists on Profile A. See issue #34 F1.
 .endif
 
 .segment "CODE"
 
-; Quarter-square table addresses (page-aligned for speed)
+; Quarter-square table addresses (page-aligned for speed). Profile B
+; only — Profile A uses Shoup per-r tables at r_tab_{lo,hi} (8 KB at
+; $6000-$7FFF) and the post-Step-11 shoup_init populates them via an
+; incremental ripple-add that does NOT touch sqtab. Issue #34 F1 gated
+; sqtab and its companion code (sqtab_init / mul_8x8 / POLY1305_REU
+; stash) out of Profile A entirely, reclaiming the 1 KB at $8000-$83FF
+; for Profile-A-only consumer scratch and dropping ~200 B of PRG plus
+; ~80 k cy of sqtab_init boot work on poly1305_init.
+.ifndef POLY1305_PROFILE_LONG
 sqtab_lo        = $8000         ; 512 bytes: low bytes of floor(n^2/4)
 sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 
@@ -67,30 +77,31 @@ sqtab_hi        = $8200         ; 512 bytes: high bytes of floor(n^2/4)
 ; primitive (see ct_mul_8x8 below). sqtab_lo/sqtab_hi alone (1 KB at
 ; $8000..$83FF) are now sufficient, saving 512 B of runtime RAM on
 ; Profile B. Profile A was unaffected by Step 12 and is unchanged.
+.endif
 
 ; =============================================================================
 ; poly1305_lib_init - One-time library initialization (Step 10)
 ;
-; Builds the 1 KB quarter-square lookup table at sqtab_lo/hi ($8000-$83FF).
-; This table is a pure function of the platform (integer squares) — it never
-; changes regardless of key, nonce, or r. Calling this once at application
-; startup saves ~80-90 k cy on every subsequent poly1305_init / aead_encrypt
-; / aead_decrypt call for both profiles.
+; Profile B: builds the 1 KB quarter-square lookup table at sqtab_lo/hi
+; ($8000-$83FF). This table is a pure function of the platform (integer
+; squares) — it never changes regardless of key, nonce, or r. Calling
+; this once at application startup saves ~80-90 k cy on every subsequent
+; poly1305_init / aead_encrypt / aead_decrypt call. Safe to call multiple
+; times (idempotent via sqtab_ready flag).
 ;
-; Safe to call multiple times (idempotent via sqtab_ready flag).
-; Must be called at least once before any aead_encrypt / aead_decrypt.
+; Profile A: no sqtab to build (issue #34 F1) — the body collapses to a
+; bare rts. Retained as an exported entry point so consumers calling
+; `jsr poly1305_lib_init` once at startup keep working on both profiles
+; without source patching. shoup_init is still called from poly1305_init
+; on every key change.
 ;
-; REU backup (Profile A, POLY1305_REU=1): after building sqtab, DMA the
-; 1 KB table to REU at the bank/offset held by the public RAM-backed
-; cells poly1305_reu_sqtab_bank and poly1305_reu_sqtab_offset
-; (defaults bank 0 / offset $0000; consumers may pre-patch these
-; before calling poly1305_lib_init — see docs/API.md §3).
-; poly1305_reu_restore can later reload sqtab from REU in ~1.1 k cy if
-; the $8000-$83FF region is ever clobbered by external code.
+; Must be called at least once before any aead_encrypt / aead_decrypt
+; on Profile B. (No-op on Profile A but still safe.)
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
 poly1305_lib_init:
+.ifndef POLY1305_PROFILE_LONG
         lda sqtab_ready
         bne @already_done       ; skip if already built
         jsr sqtab_init
@@ -99,100 +110,9 @@ poly1305_lib_init:
         ; via SMC-patched abs,x loads, no indirect-indexed pointers.
         lda #1
         sta sqtab_ready
-
-.ifdef POLY1305_PROFILE_LONG
-.ifdef POLY1305_REU
-        ; DMA sqtab (1024 bytes at $8000) to REU at the bank/offset
-        ; held by the public RAM-backed cells (defaults bank 0 /
-        ; offset $0000; see poly1305_reu_sqtab_bank / _offset below).
-        ; C64 → REU transfer (command = $90: stash, no autoload, no
-        ; FF00 trigger).
-        lda poly1305_reu_sqtab_offset
-        sta $DF04               ; REU base address lo
-        lda poly1305_reu_sqtab_offset+1
-        sta $DF05               ; REU base address hi
-        lda poly1305_reu_sqtab_bank
-        sta $DF06               ; REU bank
-        lda #<sqtab_lo
-        sta $DF02               ; C64 base address lo
-        lda #>sqtab_lo
-        sta $DF03               ; C64 base address hi
-        lda #<1024
-        sta $DF07               ; transfer length lo
-        lda #>1024
-        sta $DF08               ; transfer length hi
-        lda #$00
-        sta $DF0A               ; address control: increment both
-        lda #$90                ; command: C64→REU, no autoload, execute
-        sta $DF01
-.endif
-.endif
-
 @already_done:
-        rts
-
-.ifdef POLY1305_PROFILE_LONG
-.ifdef POLY1305_REU
-; =============================================================================
-; poly1305_reu_restore - DMA sqtab back from REU to main RAM
-;
-; Restores the 1 KB quarter-square table from the REU
-; bank/offset held by poly1305_reu_sqtab_bank /
-; poly1305_reu_sqtab_offset (defaults bank 0 / offset $0000) to
-; $8000-$83FF. Use this if external code clobbers the sqtab region.
-; Cost: ~1.1 k cy (50 cy setup + 1024 cy DMA, plus ~6 cy of RAM
-; loads vs the pre-v0.5.x immediate-operand path).
-;
-; Clobbers: A
-; =============================================================================
-poly1305_reu_restore:
-        lda poly1305_reu_sqtab_offset
-        sta $DF04               ; REU base address lo
-        lda poly1305_reu_sqtab_offset+1
-        sta $DF05               ; REU base address hi
-        lda poly1305_reu_sqtab_bank
-        sta $DF06               ; REU bank
-        lda #<sqtab_lo
-        sta $DF02               ; C64 base address lo
-        lda #>sqtab_lo
-        sta $DF03               ; C64 base address hi
-        lda #<1024
-        sta $DF07               ; transfer length lo
-        lda #>1024
-        sta $DF08               ; transfer length hi
-        lda #$00
-        sta $DF0A               ; address control: increment both
-        lda #$91                ; command: REU→C64, no autoload, execute
-        sta $DF01
-        rts
-
-; v0.5.x public RAM-backed REU layout cells. Three bytes that hold
-; the destination bank and 16-bit offset (LE) used by the
-; poly1305_lib_init stash and the poly1305_reu_restore reload above.
-; A downstream consumer may patch these to non-conflicting values
-; *before* calling poly1305_lib_init (e.g. to coexist with
-; c64-x25519, which itself uses REU banks 0-1) without re-assembling
-; this library. After poly1305_lib_init has already stashed, the
-; consumer may still patch and then either re-call poly1305_lib_init
-; (no-op on the build path, the DMA stash is gated by sqtab_ready
-; and won't re-run) or perform their own re-stash by jumping to the
-; .ifdef POLY1305_PROFILE_LONG block above.
-;
-; Living in the DATA segment for the same reason data_lib.s does
-; (see its header comment): DATA emits zero bytes into the PRG so
-; the cells come up at their assemble-time defaults at PRG load
-; time with no startup code required. BSS would leave them at
-; power-on garbage, which would clobber whatever values the
-; consumer pre-poked.
-.segment "DATA"
-poly1305_reu_sqtab_bank:
-        .byte POLY1305_REU_BANK
-poly1305_reu_sqtab_offset:
-        .byte <POLY1305_REU_OFFSET
-        .byte >POLY1305_REU_OFFSET
-.segment "CODE"
 .endif
-.endif
+        rts
 
 ; =============================================================================
 ; poly1305_init - Initialize Poly1305 state
@@ -219,18 +139,25 @@ poly1305_init:
         dex
         bpl @zero_h
 
-        ; 3. Build quarter-square table (skip if poly1305_lib_init already ran)
+.ifndef POLY1305_PROFILE_LONG
+        ; 3. Build quarter-square table (skip if poly1305_lib_init already ran).
+        ;    Profile B only — Profile A's shoup_init populates r_tab_{lo,hi}
+        ;    via incremental ripple-add and does not consume sqtab. See
+        ;    issue #34 F1.
         lda sqtab_ready
         bne @sqtab_done
         jsr sqtab_init
         lda #1
         sta sqtab_ready
 @sqtab_done:
+.endif
 
 .ifdef POLY1305_PROFILE_LONG
         ; 4. Build Shoup per-r tables (Step 6 / P3, Profile A only).
-        ;    Uses mul_8x8 (sqtab-backed) 4096 times, one per
-        ;    (limb j, byte value x). Amortized across >= 2 blocks.
+        ;    Step 11 rewrote shoup_init to use a per-j incremental
+        ;    ripple-add (~118 k cy) instead of the 4096-call mul_8x8
+        ;    loop (~438 k cy) — sqtab is no longer required, and as
+        ;    of issue #34 F1 is not even emitted on Profile A.
         jsr shoup_init
 .endif
         rts
@@ -367,13 +294,17 @@ poly1305_clamp:
         rts
 
 ; =============================================================================
-; sqtab_init - Build quarter-square lookup table at $7800-$7BFF
+; sqtab_init - Build quarter-square lookup table at $8000-$83FF
+;
+; Profile B only — Profile A's shoup_init populates r_tab_{lo,hi}
+; incrementally and does not touch sqtab (issue #34 F1).
 ;
 ; Computes floor(i^2/4) for i = 0..511 using recurrence i^2 = (i-1)^2 + 2i - 1
 ; Ported from c64-aes256-ecdsa fp_init_sqtab.
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
+.ifndef POLY1305_PROFILE_LONG
 sqtab_init:
         lda #0
         sta sq_acc              ; accumulator = 0
@@ -515,6 +446,7 @@ mul_8x8:
 mul_a:          .byte 0
 mul_b:          .byte 0
 mul_s_pg:       .byte 0
+.endif          ; .ifndef POLY1305_PROFILE_LONG (sqtab_init..mul_s_pg)
 
 .ifndef POLY1305_PROFILE_LONG
 ; =============================================================================

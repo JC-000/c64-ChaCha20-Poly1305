@@ -75,9 +75,18 @@
 ;   r_tab_hi + j*256  -> 256 high bytes of (x * r[j]) for x = 0..255
 ;
 ; The region fits between the bench plaintext window ($5000..$53FF
-; for 1024-byte messages) and the quarter-square sqtab ($8000..$83FF),
-; both of which remain in use. sqtab is retained because shoup_init
-; itself calls mul_8x8 (which reads sqtab) to populate the tables.
+; for 1024-byte messages) and the (Profile-B-only) quarter-square
+; sqtab at $8000..$83FF. Profile A's shoup_init was rewritten in
+; Step 11 to populate r_tab_{lo,hi} via a per-j incremental
+; ripple-add (T_j[k] = T_j[k-1] + r[j]), eliminating the original
+; 4096-call mul_8x8 / sqtab dependency. As of issue #34 F1, Profile
+; A therefore no longer emits sqtab_lo/sqtab_hi, sqtab_init, mul_8x8,
+; or the POLY1305_REU sqtab stash/restore plumbing — the $8000..$83FF
+; region is reclaimed for consumer use on Profile A builds.
+;
+; Profile B still uses sqtab via ct_mul_8x8 (constant-time replacement
+; for the legacy mult66 primitive) and still builds it at boot via
+; sqtab_init.
 ;
 ; These are *reservations of address space only* — the tables are
 ; initialized at runtime by shoup_init (called from poly1305_init),
@@ -86,34 +95,20 @@
     r_tab_lo = $6000
     r_tab_hi = $7000
 
-; --- REU DMA layout (Profile A + POLY1305_REU only) ---
-; When POLY1305_REU is defined, poly1305_lib_init stashes the 1 KB
-; quarter-square table to REU so that poly1305_reu_restore can reload
-; it in ~1.1k cycles if external code clobbers $8000..$83FF. The
-; destination bank/offset are overridable so that downstream projects
-; linking multiple REU consumers (e.g. both this library and
-; c64-x25519, which occupies banks 0-1) can allocate non-conflicting
-; REU regions. Defaults preserve pre-v0.3.2 behavior (bank 0, offset
-; $0000) — see CHANGELOG for the PRG byte-size note.
+; --- POLY1305_REU on Profile A: no library-side allocation ---
 ;
-; As of v0.5.x the bank / offset are RAM-backed public symbols
-; (`poly1305_reu_sqtab_bank`, `poly1305_reu_sqtab_offset`) which a
-; consumer may patch *at runtime* before calling `poly1305_lib_init`.
-; The assemble-time defines below remain supported and now select the
-; *default values* the RAM cells are initialized to in
-; `poly1305_lib_init`. I.e. a build invoked with
-; `--asm-define POLY1305_REU_BANK=3 --asm-define POLY1305_REU_OFFSET=$1000`
-; comes up with the RAM cells pre-set to bank 3 / offset $1000 and no
-; runtime poke is required. A build that passes neither define lands
-; the RAM cells on bank 0 / offset $0000, identical to the pre-v0.5.x
-; immediate-operand path. See docs/API.md §3 for the runtime override
-; protocol.
-.ifdef POLY1305_REU
-  .ifndef POLY1305_REU_BANK
-    POLY1305_REU_BANK = 0
-  .endif
-  .ifndef POLY1305_REU_OFFSET
-    POLY1305_REU_OFFSET = $0000
-  .endif
-.endif
+; Up through v0.5.x, Profile A + POLY1305_REU built a 1 KB sqtab
+; stash/restore path that DMAed the quarter-square table to REU so
+; consumers that clobbered $8000..$83FF could reload it. With F1
+; (issue #34) gating sqtab/sqtab_init/mul_8x8 out of Profile A, the
+; stash had nothing to stash — sqtab is no longer used by any Profile
+; A code path. The POLY1305_REU_BANK / POLY1305_REU_OFFSET assemble-
+; time defines and the runtime RAM-backed cells
+; (poly1305_reu_sqtab_bank / _offset) are therefore no longer emitted
+; on Profile A. A downstream consumer that needs an REU bank
+; allocation should consult LIB_CHACHA20_POLY1305_REU_BANKS_USED in
+; lib_manifest.s — on Profile A this library claims $00 (no REU).
+;
+; Profile B never had the REU path (REU is a Profile-A-only feature
+; in this library), so this PR does not affect Profile B.
 .endif
