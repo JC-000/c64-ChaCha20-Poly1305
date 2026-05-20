@@ -134,6 +134,13 @@ def main() -> int:
             client = inst.transport._client
             client.WRITE_MEM_QUERY_THRESHOLD = 128
             client.reset()
+            # Belt-and-braces: client.reset() does not touch FPGA-level
+            # turbo state. Force 1 MHz so a sibling agent's bench at e.g.
+            # 48 MHz does not leak into this run (or vice versa).
+            from c64_test_harness.backends.ultimate64_helpers import (
+                set_turbo_mhz,
+            )
+            set_turbo_mhz(client, 1)
             time.sleep(2.0)
             grid = wait_for_text(transport, "READY", timeout=30.0)
             if grid is None:

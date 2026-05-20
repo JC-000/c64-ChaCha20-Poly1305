@@ -1082,6 +1082,13 @@ def main():
             # keyboard buffer. A soft reset returns the C64 to BASIC
             # READY without resetting the FPGA / DMA controller.
             client.reset()
+            # Belt-and-braces: client.reset() is a 6510 reset and does
+            # NOT touch FPGA-level turbo state. Force 1 MHz so a sibling
+            # agent's bench at e.g. 48 MHz cannot leak into this run.
+            from c64_test_harness.backends.ultimate64_helpers import (
+                set_turbo_mhz,
+            )
+            set_turbo_mhz(client, 1)
             time.sleep(2.0)
             grid = wait_for_text(inst.transport, "READY", timeout=30.0)
             if grid is None:

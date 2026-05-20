@@ -60,16 +60,36 @@ secret data).
 
 ## Performance
 
-v0.5.0 cycle counts (cycles, measured via CIA timer, identical on
-VICE and Ultimate 64 hardware backends to within ±0.2%,
-`tools/benchmark_chacha20_poly1305.py`, 3 samples, min per routine):
+The numbers below are the **v0.5.0 release baseline** (cycles via CIA
+timer, identical on VICE and Ultimate 64 hardware backends to within
+±0.2%, `tools/benchmark_chacha20_poly1305.py`, 3 samples, min per
+routine).
 
-| routine              | S0 baseline |     Profile A |   change |     Profile B |   change |
-|----------------------|------------:|--------------:|---------:|--------------:|---------:|
-| `chacha20_block`     |     149 987 |        39 331 |  -73.8%  |        39 332 |  -73.8%  |
-| `poly1305_block`     |      53 270 |        11 951 |  -77.6%  |        37 950 |  -28.8%  |
-| `aead_encrypt` n=0   |     251 330 |       182 345 |  -27.4%  |        80 749 |  -67.9%  |
-| `aead_encrypt` n=1024|   5 974 048 |     1 623 299 |  -72.8%  |     3 196 264 |  -46.5%  |
+| routine              | S0 baseline |     v0.5.0 Profile A |   change |     v0.5.0 Profile B |   change |
+|----------------------|------------:|---------------------:|---------:|---------------------:|---------:|
+| `chacha20_block`     |     149 987 |               39 331 |  -73.8%  |               39 332 |  -73.8%  |
+| `poly1305_block`     |      53 270 |               11 951 |  -77.6%  |               37 950 |  -28.8%  |
+| `aead_encrypt` n=0   |     251 330 |              182 345 |  -27.4%  |               80 749 |  -67.9%  |
+| `aead_encrypt` n=1024|   5 974 048 |            1 623 299 |  -72.8%  |            3 196 264 |  -46.5%  |
+
+HEAD cycle counts (`make bench`, samples=5, VICE):
+
+| routine              |  HEAD Profile A |  HEAD Profile B | Δ vs v0.5.0 (A / B) |
+|----------------------|----------------:|----------------:|--------------------:|
+| `chacha20_block`     |          39 319 |          39 319 |   -0.03% / -0.03%   |
+| `poly1305_block`     |          12 036 |          37 891 |   +0.71% / -0.16%   |
+| `aead_encrypt` n=0   |         182 105 |          80 519 |   -0.13% / -0.29%   |
+| `aead_encrypt` n=1024|       1 622 873 |       3 195 710 |   -0.03% / -0.02%   |
+
+All HEAD-vs-v0.5.0 deltas are within the ~0.7% measurement noise (see
+`docs/REPRO_CHECK.md` §4 for the noise floor methodology) — there is
+no measurable post-v0.5.0 regression on any cited row. The numbers
+above are regenerable via `make bench`, gate-checked via `make
+bench-check` against `docs/BENCH_REPORT.baseline.json`. See
+`docs/BENCH_GRANULAR.md` for the full per-symbol breakdown including
+`chacha20_quarter_round`, `chacha20_encrypt`, `poly1305_multiply`,
+`poly1305_reduce`, `aead_compute_tag`, `aead_verify_tag`,
+`sqtab_init`, and `ct_mul_8x8`.
 
 v0.5.0 lands **C4** (branchless rotl-4 via two page-aligned 256-byte
 LUTs) on the ChaCha20 quarter-round, replacing the asl/lsr/ora chain

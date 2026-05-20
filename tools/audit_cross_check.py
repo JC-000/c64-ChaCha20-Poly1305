@@ -614,6 +614,16 @@ def main():
                 client = inst.transport._client
                 client.WRITE_MEM_QUERY_THRESHOLD = 128
                 client.reset()
+                # Belt-and-braces: client.reset() is a 6510 reset and does
+                # NOT touch FPGA-level turbo. Leftover turbo from a sibling
+                # agent's bench leaves the device at e.g. 48 MHz, which
+                # this tool doesn't time-sensitive read directly but would
+                # poison any subsequent bench reuse of the same locked
+                # device. Force 1 MHz so the device is in a known state.
+                from c64_test_harness.backends.ultimate64_helpers import (
+                    set_turbo_mhz,
+                )
+                set_turbo_mhz(client, 1)
                 time.sleep(2.0)
                 grid = wait_for_text(inst.transport, "READY", timeout=30.0)
                 if grid is None:

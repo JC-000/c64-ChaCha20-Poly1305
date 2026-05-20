@@ -109,7 +109,21 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only bench bench-check
+
+# --- Bench configuration (granular per-symbol benchmark) ------------------
+# All bench variables are BENCH_-prefixed to avoid colliding with other
+# Makefile work (e.g. the sibling `make lib` worktree that adds archive
+# targets). Override at the make invocation, e.g.
+#   make bench BENCH_PROFILE=A BENCH_BACKEND=u64 BENCH_SAMPLES=10
+BENCH_PROFILE  ?= B
+BENCH_BACKEND  ?= vice
+BENCH_SAMPLES  ?= 5
+BENCH_PYTHON   ?= /Users/someone/.local/share/c64-test-harness/venv/bin/python3
+BENCH_TOOL     ?= tools/bench_granular.py
+BENCH_REPORT   ?= docs/BENCH_REPORT.md
+BENCH_BASELINE ?= docs/BENCH_REPORT.baseline.json
+BENCH_TOLERANCE ?= 1.0
 
 # Default build == Profile A (POLY1305_PROFILE_LONG defined).
 all: profile-a
@@ -413,3 +427,32 @@ dist:
 	  exit 1; \
 	fi
 	@tools/build_release.sh $(VERSION)
+
+# --- Granular bench targets ----------------------------------------------
+# bench:        builds the requested profile, runs the granular bench, and
+#               writes docs/BENCH_REPORT.md + docs/BENCH_REPORT.md.json.
+# bench-check:  builds the requested profile, runs the granular bench, and
+#               diffs against BENCH_BASELINE; exits non-zero on >1% drift
+#               in any row. The committed baseline lives at
+#               docs/BENCH_REPORT.baseline.json (refresh with `make bench`
+#               then copy the resulting JSON sidecar to the baseline path
+#               and commit; see docs/BENCH_GRANULAR.md).
+bench:
+	@if [ "$(BENCH_PROFILE)" = "A" ]; then $(MAKE) profile-a; \
+	 else $(MAKE) profile-b; fi
+	$(BENCH_PYTHON) $(BENCH_TOOL) \
+	    --backend $(BENCH_BACKEND) \
+	    --profile $(BENCH_PROFILE) \
+	    --samples $(BENCH_SAMPLES) \
+	    --md $(BENCH_REPORT)
+
+bench-check:
+	@if [ "$(BENCH_PROFILE)" = "A" ]; then $(MAKE) profile-a; \
+	 else $(MAKE) profile-b; fi
+	$(BENCH_PYTHON) $(BENCH_TOOL) \
+	    --backend $(BENCH_BACKEND) \
+	    --profile $(BENCH_PROFILE) \
+	    --samples $(BENCH_SAMPLES) \
+	    --md $(BENCH_REPORT) \
+	    --check $(BENCH_BASELINE) \
+	    --tolerance $(BENCH_TOLERANCE)

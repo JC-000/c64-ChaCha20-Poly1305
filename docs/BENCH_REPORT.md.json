@@ -1,0 +1,94 @@
+{
+  "backend": "vice",
+  "commit": "36ec121",
+  "generated": "2026-05-20 21:03:26 UTC",
+  "prg_md5": "4afe54d466ad92ca38b91c94a2ea2b36",
+  "profile": "B",
+  "rows": [
+    {
+      "cycles": 1676,
+      "name": "chacha20_quarter_round",
+      "notes": "test-only entry; QR(0,4,8,12) over RFC-7539-primed cc20_work",
+      "spread": 172
+    },
+    {
+      "cycles": 39318,
+      "name": "chacha20_block",
+      "notes": "one 64-byte keystream block, warm state",
+      "spread": 347
+    },
+    {
+      "cycles": 41026,
+      "name": "chacha20_encrypt n=64",
+      "notes": "single full block, key/nonce primed, in-place XOR",
+      "spread": 300
+    },
+    {
+      "cycles": 658274,
+      "name": "chacha20_encrypt n=1024",
+      "notes": "16 blocks, key/nonce primed, in-place XOR",
+      "spread": 341
+    },
+    {
+      "cycles": 37664,
+      "name": "poly1305_multiply",
+      "notes": "one 17x16 mul over clamped RFC r and primed h",
+      "spread": 608
+    },
+    {
+      "cycles": 1846,
+      "name": "poly1305_reduce",
+      "notes": "one mod-2^130-5 reduction over fixed poly_product pattern",
+      "spread": 172
+    },
+    {
+      "cycles": 38002,
+      "name": "poly1305_block",
+      "notes": "one 16 B block: add + multiply + reduce (A=1 shim)",
+      "spread": 236
+    },
+    {
+      "cycles": 2495091,
+      "name": "aead_compute_tag",
+      "notes": "tag compute over n=1024 ciphertext + 0-byte AAD + lengths",
+      "spread": 47
+    },
+    {
+      "cycles": 313,
+      "name": "aead_verify_tag",
+      "notes": "CT-eq, 16-byte happy path (all bytes equal)",
+      "spread": 43
+    },
+    {
+      "cycles": 89103,
+      "name": "sqtab_init",
+      "notes": "one-shot quarter-square table build (single sample)",
+      "spread": 0
+    },
+    {
+      "cycles": 101.328125,
+      "name": "ct_mul_8x8",
+      "notes": "Profile B 8x8->16 multiply primitive; loop-of-64 with varied (a,b) operands; reported as cycles/call after dividing wrapper measurement by loop count",
+      "spread": 6.046875
+    },
+    {
+      "cycles": 80513,
+      "name": "aead_encrypt n=0",
+      "notes": "AEAD per-packet fixed cost (OTK derive + 0-byte tag)",
+      "spread": 389
+    },
+    {
+      "cycles": 274794,
+      "name": "aead_encrypt n=64",
+      "notes": "AEAD over one 64-byte plaintext block",
+      "spread": 1338
+    },
+    {
+      "cycles": 3195600,
+      "name": "aead_encrypt n=1024",
+      "notes": "AEAD over 16 blocks of plaintext",
+      "spread": 1621
+    }
+  ],
+  "samples": 3
+}
