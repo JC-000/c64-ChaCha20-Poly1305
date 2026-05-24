@@ -36,6 +36,23 @@ noise but signal across the 20-point sweep).
   device-sharing) tools, and vice versa.
 
 ### Added
+- **c64-lib-contract SPEC §8.0 catch-loop adoption** (commit `2b340d2`).
+  Adds the canonical `LIB_PRECALC_TABLE` macro source to
+  `src/precalc_table.inc` (copied verbatim from
+  `c64-lib-contract@b039ab9` per SPEC §8.0 convention) and emits five
+  macro invocations from `src/lib/lib_manifest.s` enumerating every
+  precalculated table this library ships above the §8.0 floor (≥ 256 B
+  AND one of: REU-resident / hot-loop-read / page-aligned). Profile A
+  exports 15 `LIB_PRECALC_*` equates (5 tables × 3 each: `sqtab`,
+  `chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`,
+  `r_tab_hi`); Profile B exports 9 (the three unconditional tables).
+  Cross-adopter audit via
+  `od65 --dump-exports build/profile-*/lib_manifest.o | grep LIB_PRECALC_`
+  surfaces shape collisions that should promote to a §8.x shared-
+  primitive clause. See [`docs/precalc-tables.md`](docs/precalc-tables.md)
+  for per-table rationale and the below-floor exempt list. Makefile
+  gains `-I src` so the manifest TU can `.include "precalc_table.inc"`
+  without a relative path. No runtime behavior change; metadata only.
 - **Runtime-configurable REU layout** (PR — sprint). Two new
   exported public RAM-backed symbols, both 8-bit cells in DATA:
   - `poly1305_reu_sqtab_bank` — REU bank for sqtab backup

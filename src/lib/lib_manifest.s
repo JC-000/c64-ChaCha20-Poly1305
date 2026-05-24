@@ -150,3 +150,54 @@ LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
 ; `Range error: '5' out of range [0,0]` at the consumer-side .import.
 .export LIB_SHARED_PRIMITIVES_SQTAB:abs
 .export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
+
+; ---------------------------------------------------------------------------
+; §8.0 catch-loop precalc-table enumeration. Per c64-lib-contract SPEC
+; v0.3.1 §8.0; canonical macro source in src/precalc_table.inc (copied
+; verbatim from the contract repo at b039ab9; do not edit local copy).
+;
+; Lists every precomputed table in this library that clears the §8.0
+; floor (>= 256 B AND one of: REU-resident, hot-loop-read, page-aligned
+; for fetch alignment). Each invocation emits three exported equates:
+; LIB_PRECALC_<name>_{SIZE,REGION,SHARED}. Consumer-side audits grep
+; on these to detect bit-identical precalc shapes across sibling libs
+; that should be promoted to a §8.x shared-primitive clause.
+;
+; Below-the-floor items intentionally NOT enumerated here (see
+; docs/precalc-tables.md for the full exempt list and rationale):
+;   - ChaCha20 quarter-round constants ("expand 32-byte k", 16 B)
+;   - sqtab_ready / cc20_work / scratch buffers (small or non-table)
+; ---------------------------------------------------------------------------
+.include "precalc_table.inc"
+
+; sqtab — combined sqtab_lo + sqtab_hi at LIB_SHARED_SQTAB_BASE
+; (sqtab_lo + $0200 = sqtab_hi; 512 B + 512 B = 1024 B contiguous).
+; Shared via §8.1 (LIB_SHARED_PRIMITIVES_SQTAB bit, $0001 above).
+; Profile A no longer emits sqtab itself (#34 F1) but the SPEC §8.1
+; canonical-name back-link is still normative when *any* sibling lib
+; in a composed build ships sqtab, so the enumeration row is emitted
+; unconditionally to keep the §8.1 shared-primitive declaration
+; consistent with this library's LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES
+; mask (which also unconditionally claims the SQTAB bit).
+LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES
+
+; chacha_nibswap_hi_tab / chacha_nibswap_lo_tab — C4 branchless
+; rotl-4 LUTs (commit d0b1d40). 256 B each, page-aligned in the CODE
+; segment, hot-loop-read with secret-index `lda abs,x` (8 inlined
+; call sites per double-round in chacha20_block). Library-specific:
+; bit shape is generic (V<<4&$FF, V>>4) but no other adopter ships a
+; rotl-4 fast path today; promote to §8.x only after a second sibling
+; converges on bit-identical bytes.
+LIB_PRECALC_TABLE "chacha_nibswap_hi_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+
+; r_tab_lo / r_tab_hi — Profile A Shoup per-r tables at $6000..$7FFF
+; (4096 B each, page-aligned per limb). Library-private: the content
+; T_j[x] = x * r[j] is keyed off the per-message random Poly1305 `r`
+; value, so no sibling lib can converge on the same bytes — there is
+; no candidate §8.x shared-primitive promotion path. Profile B does
+; not allocate these tables (uses sqtab via ct_mul_8x8 instead).
+.ifdef POLY1305_PROFILE_LONG
+LIB_PRECALC_TABLE "r_tab_lo", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+LIB_PRECALC_TABLE "r_tab_hi", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+.endif
