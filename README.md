@@ -191,6 +191,8 @@ aggregate-manifest convention. Consumers `.import` them and use
 - `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound from the Profile A build (16640; actual 16422 + headroom).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
 
+In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits three exported equates — `LIB_PRECALC_<name>_{SIZE,REGION,SHARED}` — that cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep LIB_PRECALC_`. Profile A surfaces 15 such exports (`sqtab`, `chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`); Profile B surfaces 9 (the three profile-agnostic tables only). See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
+
 ## Layout
 
 ```

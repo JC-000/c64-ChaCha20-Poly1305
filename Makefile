@@ -34,7 +34,7 @@ LIB_AEAD_ONLY_OBJS_DIR  = $(LIB_DIR)/objs-aead-only
 
 CA65 = ca65
 LD65 = ld65
-CA65FLAGS = -t c64 -g -I src/include -I src/lib
+CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src
 CFG = src/c64.cfg
 
 # --- Module list -----------------------------------------------------------
