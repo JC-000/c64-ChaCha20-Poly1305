@@ -130,14 +130,17 @@ LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 ;   SPEC §8.0 bit allocation:
 ;     $0001 LIB_SHARED_PRIMITIVES_SQTAB — 8×8 quarter-square multiply
 ;                                          table (defined in §8.1)
+;     $0004 LIB_SHARED_PRIMITIVES_CT_MUL_8X8 — constant-time 8×8 multiply
+;                                          body (defined in §8.3)
 ;
-;   c64-ChaCha20-Poly1305 ships the SPEC §8.1 sqtab today, so this lib
-;   claims only that bit. Future shared-primitive promotions (e.g.
-;   ct_mul_8x8 once two adopters confirm bit-identical bodies) will OR
+;   c64-ChaCha20-Poly1305 ships both the SPEC §8.1 sqtab and the §8.3
+;   ct_mul_8x8 body today (it is the canonical owner of the latter), so
+;   this lib claims both bits. Future shared-primitive promotions will OR
 ;   in additional bits per their §8.x sub-clause allocation.
 ; ---------------------------------------------------------------------------
 LIB_SHARED_PRIMITIVES_SQTAB            = $0001   ; SPEC §8.0 / §8.1
-LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
+LIB_SHARED_PRIMITIVES_CT_MUL_8X8       = $0004   ; SPEC §8.0 / §8.3
+LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB | LIB_SHARED_PRIMITIVES_CT_MUL_8X8
 
 .export LIB_CHACHA20_POLY1305_REU_BANKS_USED
 .export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
@@ -149,6 +152,7 @@ LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
 ; values up to $00ff would otherwise be tagged zeropage and trigger a
 ; `Range error: '5' out of range [0,0]` at the consumer-side .import.
 .export LIB_SHARED_PRIMITIVES_SQTAB:abs
+.export LIB_SHARED_PRIMITIVES_CT_MUL_8X8:abs
 .export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
 
 ; ---------------------------------------------------------------------------
