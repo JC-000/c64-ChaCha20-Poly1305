@@ -130,14 +130,35 @@ LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 ;   SPEC §8.0 bit allocation:
 ;     $0001 LIB_SHARED_PRIMITIVES_SQTAB — 8×8 quarter-square multiply
 ;                                          table (defined in §8.1)
+;     $0004 LIB_SHARED_PRIMITIVES_CT_MUL_8X8 — constant-time 8×8 multiply
+;                                          body (defined in §8.3)
 ;
-;   c64-ChaCha20-Poly1305 ships the SPEC §8.1 sqtab today, so this lib
-;   claims only that bit. Future shared-primitive promotions (e.g.
-;   ct_mul_8x8 once two adopters confirm bit-identical bodies) will OR
-;   in additional bits per their §8.x sub-clause allocation.
+;   c64-ChaCha20-Poly1305 ships both the SPEC §8.1 sqtab and the §8.3
+;   ct_mul_8x8 body today (it is the canonical owner of the latter), so in
+;   its default standalone build this lib claims both bits ($0005). Each
+;   bit is conditional on this build NOT deferring that primitive: defining
+;   SHARED_SQTAB_INIT or SHARED_CT_MUL_8X8 drops the corresponding bit so a
+;   consumer composing two libs that share a primitive sees disjoint masks
+;   (issue #21). Future shared-primitive promotions OR in additional bits
+;   per their §8.x sub-clause allocation, each gated on the same pattern.
 ; ---------------------------------------------------------------------------
 LIB_SHARED_PRIMITIVES_SQTAB            = $0001   ; SPEC §8.0 / §8.1
-LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
+LIB_SHARED_PRIMITIVES_CT_MUL_8X8       = $0004   ; SPEC §8.0 / §8.3
+; Mask reflects primitives OWNED in THIS build config (SPEC §8.0, issue #21):
+; a primitive's bit is included iff this build does NOT defer it via its
+; SHARED_*_INIT / SHARED_* switch. A deferring build drops the bit so a
+; consumer composing two libs that share a primitive sees disjoint masks.
+.ifdef SHARED_SQTAB_INIT
+  _OWN_SQTAB    = 0
+.else
+  _OWN_SQTAB    = LIB_SHARED_PRIMITIVES_SQTAB
+.endif
+.ifdef SHARED_CT_MUL_8X8
+  _OWN_CT_MUL   = 0
+.else
+  _OWN_CT_MUL   = LIB_SHARED_PRIMITIVES_CT_MUL_8X8
+.endif
+LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = _OWN_SQTAB | _OWN_CT_MUL
 
 .export LIB_CHACHA20_POLY1305_REU_BANKS_USED
 .export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
@@ -149,6 +170,7 @@ LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = LIB_SHARED_PRIMITIVES_SQTAB
 ; values up to $00ff would otherwise be tagged zeropage and trigger a
 ; `Range error: '5' out of range [0,0]` at the consumer-side .import.
 .export LIB_SHARED_PRIMITIVES_SQTAB:abs
+.export LIB_SHARED_PRIMITIVES_CT_MUL_8X8:abs
 .export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
 
 ; ---------------------------------------------------------------------------
