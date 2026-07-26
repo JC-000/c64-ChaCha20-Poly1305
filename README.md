@@ -25,34 +25,21 @@ ld65 label output by the Makefile).
 ## Build profiles
 
 - **Profile A** precomputes 8 KB of Shoup per-r multiplication tables
-  at `poly1305_init` time (~490 k cy setup cost), reducing
-  `poly1305_block` from 38 760 to 12 119 cy. Best for messages longer
-  than **~64 bytes**, where the table-build amortizes (measured A/B
-  crossover, see `docs/BENCH_NSWEEP_v0.5.0.md`). Target workloads:
-  WireGuard data packets (~1280 B), TLS 1.3 bulk records. With
-  `POLY1305_REU=1`, backs up the quarter-square table to REU for
-  fast restore if clobbered.
-
-  The REU destination bank and offset are configurable two ways:
-
-  1. **Assemble-time** (baseline, unchanged): `ca65 --asm-define
-     POLY1305_REU_BANK=3 --asm-define POLY1305_REU_OFFSET=$1000`, or
-     `.include` a project-wide layout header before `constants_lib.s`.
-     With the defaults (`bank=0`, `offset=$0000`) the runtime behaviour
-     is identical to prior releases.
-  2. **Runtime** (new in [Unreleased]): the library exports two
-     public RAM-backed cells — `poly1305_reu_sqtab_bank` (1 byte)
-     and `poly1305_reu_sqtab_offset` (2 bytes LE) — that consumers
-     may write to before calling `poly1305_lib_init`. Useful for
-     hosts linking multiple REU consumers (e.g. this library
-     alongside `c64-x25519`, which occupies REU banks 0-1) that need
-     to coordinate layout without rebuilding. See `docs/API.md`
-     §"REU layout configuration" for the protocol. See issue #19.
+  at `poly1305_init` time (~118 k cy setup cost via the S11
+  incremental ripple-add), reducing `poly1305_block` from 38 760 to
+  12 119 cy. Best for messages longer than **~64 bytes**, where the
+  table-build amortizes (measured A/B crossover, see
+  `docs/BENCH_NSWEEP_v0.5.0.md`). Target workloads: WireGuard data
+  packets (~1280 B), TLS 1.3 bulk records. As of the issue #34 F1
+  slimming ([PR #38](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/38)),
+  Profile A no longer emits the quarter-square table or the former
+  `POLY1305_REU=1` stash/restore path — see "Turbo hosts and
+  REU-less machines" below.
 
 - **Profile B** uses the portable quarter-square multiply (1 KB table).
   Lower per-packet init cost (87 k vs 579 k cy at n=0), better for
   short packets such as WireGuard handshakes and TLS 1.3 alerts.
-  Runs on any stock C64 without REU.
+  Runs on any stock C64 without REU (as does Profile A — see below).
 
 Both profiles share identical ChaCha20 code, pass the full 214-test
 suite, and are constant-time by contract (no data-dependent branches on
@@ -113,6 +100,51 @@ runs in 81 k cy — **−67.9%** below the sprint-0 baseline. See
 per-byte breakdowns, and estimate-vs-measured analysis, and
 `docs/REPRO_CHECK.md` §4 for the post-CT-fix bench table.
 
+## Turbo hosts and REU-less machines
+
+**This library issues no REU DMA on any code path, in any profile.**
+As of the issue #34 F1 slimming
+([PR #38](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/38)),
+Profile A builds its Shoup tables by incremental ripple-add without
+consuming the quarter-square table, so the former `POLY1305_REU=1`
+sqtab stash/restore path (v0.5.x and earlier) was removed along with
+its API (`poly1305_reu_restore`, `poly1305_reu_sqtab_bank` /
+`poly1305_reu_sqtab_offset`). Profile B never had an REU path. The
+manifest equate `LIB_CHACHA20_POLY1305_REU_BANKS_USED` reads `$00`
+unconditionally, and the library touches no I/O registers at all
+(CIA timer access lives in the bench tooling, not the library).
+
+This matters on accelerated hosts (Ultimate 64 / C64 Ultimate turbo,
+SuperCPU-class): REU DMA transfers at the stock ~1 MHz bus rate
+regardless of CPU turbo, so REU traffic on a hot path becomes a
+clock-invariant wall-time floor — see
+[c64-nist-curves #69](https://github.com/JC-000/c64-nist-curves/issues/69) /
+[#71](https://github.com/JC-000/c64-nist-curves/issues/71), where
+per-multiply REU row fetches held `ecdsa_verify_256` to a 22.2 s
+floor at 64 MHz until an on-chip-multiply profile removed them. This
+library has no such floor: **AEAD throughput scales ~linearly with
+CPU clock.**
+
+Measured (Ultimate 64 Elite, Profile A, CIA chained-timer wall-clock,
+min of 3 samples, single session, `tools/bench_turbo_sweep.py` —
+methodology in `docs/BENCH_TURBO_SWEEP.md`):
+
+| routine | 1 MHz wall | 16 MHz wall | 48 MHz wall | speedup @ 48 MHz | ideal |
+|---------|-----------:|------------:|------------:|-----------------:|------:|
+| `aead_encrypt` n=1024 | 1 647.4 ms | 102.9 ms | 35.0 ms | **47.0×** | 48× |
+| `chacha20_block`      | 39.9 ms | 2.35 ms | 0.80 ms | ~48× (in jitter) | 48× |
+| `poly1305_block`      | 12.1 ms | 0.72 ms | 0.24 ms | ~48× (in jitter) | 48× |
+
+The n=1024 AEAD speedup is 98% of the ideal clock ratio — there is no
+measurable speed-invariant component. (64 MHz was firmware-rejected on
+the Elite-generation test device; it is a C64 Ultimate-generation
+speed. The scaling conclusion does not depend on it.)
+
+For REU-less machines: both profiles run on a stock C64 with no REU
+fitted. Profile B is the portable baseline (1 KB of fixed-address
+table RAM); Profile A also requires no REU — it needs only the
+$6000..$7FFF Shoup window in main RAM.
+
 ## Test/audit/bench backends
 
 As of **v0.4.0**, the four tooling scripts under `tools/` run on
@@ -166,8 +198,7 @@ The library is intended for hobbyist and research use.
 - `chacha20_init` -- seed ChaCha20 state from `cc20_key`, `cc20_nonce`, `cc20_counter`
 - `chacha20_block` -- generate one 64-byte keystream block into `cc20_keystream`
 - `chacha20_encrypt` -- XOR keystream with data at `cc20_data_ptr` (in place)
-- `poly1305_lib_init` -- one-time library init: build quarter-square table, set `sqtab_ready` flag. Call once before first `aead_encrypt`/`aead_decrypt`. Optional: if omitted, `poly1305_init` auto-builds on first call. With `POLY1305_REU=1` (Profile A), also DMA-backs sqtab to REU.
-- `poly1305_reu_restore` -- (Profile A + `POLY1305_REU=1` only) DMA sqtab from REU back to main RAM (~1.1 k cy). Use if external code clobbers `$8000-$83FF`.
+- `poly1305_lib_init` -- one-time library init: on Profile B, build the quarter-square table and set the `sqtab_ready` flag (optional: if omitted, `poly1305_init` auto-builds on first call). On Profile A the body is a bare `rts`, retained as an exported entry point so cross-profile consumers keep working unchanged.
 - `poly1305_init` -- clamp `poly_r`, zero `poly_h`, build multiplication tables (Shoup per-r in Profile A, quarter-square in Profile B). Skips sqtab build if already done.
 - `poly1305_block` -- process one 16-byte block pointed to by `zp_ptr1`
 - `poly1305_update` -- process a buffer at `zp_ptr1` of length `cc20_remain`
@@ -186,7 +217,7 @@ See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 aggregate-manifest convention. Consumers `.import` them and use
 `.assert` to detect REU/ZP/footprint collisions at assemble time:
 
-- `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed (`1 << POLY1305_REU_BANK` on Profile A with `POLY1305_REU=1`; `$00` otherwise). Composes with the issue #19 `--asm-define POLY1305_REU_BANK=N` override.
+- `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed. Always `$00`: the library issues no REU DMA in any profile (the former Profile A `POLY1305_REU` stash was removed by the issue #34 F1 slimming, PR #38).
 - `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
 - `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound from the Profile A build (16640; actual 16422 + headroom).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
@@ -239,6 +270,8 @@ the source:
   classification and the F1/F2/F3 Resolution section.
 - [`docs/REPRO_CHECK.md`](docs/REPRO_CHECK.md) — reproducibility
   fingerprints and the post-CT-fix bench table.
+- [`docs/BENCH_TURBO_SWEEP.md`](docs/BENCH_TURBO_SWEEP.md) —
+  turbo-scaling wall-clock sweep methodology and results (issue #44).
 - [`docs/design/ct_mul_8x8.md`](docs/design/ct_mul_8x8.md) —
   branchless 8×8 multiply design memo (Profile B F3 fix).
 - [`docs/OPTIMIZATION_PLAN.md`](docs/OPTIMIZATION_PLAN.md) — the
