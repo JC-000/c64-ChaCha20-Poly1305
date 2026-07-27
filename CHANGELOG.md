@@ -12,9 +12,42 @@ for packet-size sensitivity work, and corrects a planning-doc claim
 about REU/Shoup caching that doesn't survive the per-packet `r`
 dependency. Minor `poly1305_final` loop fuse contributes a
 consistent ~200 cy / packet on both profiles (below per-measurement
-noise but signal across the 20-point sweep).
+noise but signal across the 20-point sweep). Late in the cycle, the
+issue #34 F1 slimming removes the entire `POLY1305_REU` path (and
+with it the runtime REU layout API added above) — see **Removed**.
+
+### Removed
+- **The `POLY1305_REU` path and Profile A's sqtab** (issue #34 F1,
+  [PR #38](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/38),
+  commit `88927aa`). The Step-11 incremental-ripple `shoup_init`
+  populates `r_tab_lo/hi` without consuming the quarter-square
+  table, so Profile A no longer emits `sqtab_lo/hi`, `sqtab_init`,
+  or `mul_8x8`, and the REU stash had nothing left to stash. Gone
+  with it: `poly1305_reu_restore`, the `poly1305_reu_sqtab_bank` /
+  `poly1305_reu_sqtab_offset` runtime cells (added earlier in this
+  same unreleased cycle, issue #19), and the `POLY1305_REU` /
+  `POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` defines. **The
+  library now issues no REU DMA on any code path in any profile**;
+  `LIB_CHACHA20_POLY1305_REU_BANKS_USED` reads `$00`
+  unconditionally, and `$8000..$83FF` is consumer-reclaimable on
+  Profile A builds. Breaking for consumers of the removed symbols
+  (semver MAJOR-worthy on the pre-1.0 scale — flagged in
+  `docs/INTEGRATION.md` §Stability); consumers that never defined
+  `POLY1305_REU` are unaffected. Also removes any REU-DMA
+  wall-clock floor on turbo hosts (issue #44 context): all hot
+  paths now scale with CPU clock.
 
 ### Added
+- **Turbo-scaling wall-clock sweep** (`tools/bench_turbo_sweep.py`,
+  `docs/BENCH_TURBO_SWEEP.md`, issue #44). Benches the same PRG at
+  1/16/48 MHz on Ultimate hardware via the existing CIA
+  chained-timer wrapper (CIA ticks ≈ wall-clock µs regardless of
+  turbo), with per-speed overhead recalibration and guaranteed
+  1 MHz restore on exit. Measured Profile A `aead_encrypt` n=1024:
+  16.0× at 16 MHz, 47.0× at 48 MHz (98% of ideal) — no
+  speed-invariant floor, matching the zero-REU-DMA static audit.
+  README gains a "Turbo hosts and REU-less machines" section making
+  the no-REU/turbo story a first-class consumer property.
 - **Granular per-symbol benchmark** (`tools/bench_granular.py`, `make
   bench`, `make bench-check`). Adds 14 per-routine cycle-count rows
   (chacha20_quarter_round, chacha20_block, chacha20_encrypt n=64/1024,
@@ -63,9 +96,8 @@ noise but signal across the 20-point sweep).
   offset=$0000`, baked at link time from the existing assemble-time
   defines (`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`), so existing
   consumers that never touch the cells get identical behavior to
-  v0.5.0. See `docs/API.md` §"REU layout configuration" for the
-  protocol and overhead notes (+6 cy on the cold REU-DMA-setup path,
-  invisible against the ~5 k cy DMA cost).
+  v0.5.0. *Note: removed later in this same unreleased cycle along
+  with the whole `POLY1305_REU` path — see **Removed** above.*
 - **`--sweep` benchmark mode** in `tools/benchmark_chacha20_poly1305.py`
   (additive flag, doesn't break n=0/n=1024 single-shot mode). Sweeps
   `aead_encrypt` across n=[16, 32, 64, 128, 192, 256, 384, 512, 1024,

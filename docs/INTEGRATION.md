@@ -138,12 +138,18 @@ first relocating them in the library source (only safe at v0.4.0+):
 | `$6000..$6FFF` | 4 KB | `r_tab_lo` — Shoup per-r table low bytes |
 | `$7000..$7FFF` | 4 KB | `r_tab_hi` — Shoup per-r table high bytes |
 
-### Main memory (both profiles)
+### Main memory (Profile B only)
 
 | Range | Size | Owner |
 |-------|------|-------|
 | `$8000..$81FF` | 512 B | `sqtab_lo` — quarter-square low bytes |
 | `$8200..$83FF` | 512 B | `sqtab_hi` — quarter-square high bytes |
+
+> **Profile A no longer claims `$8000..$83FF`** (issue #34 F1,
+> PR #38): `shoup_init` builds `r_tab_lo/hi` by incremental
+> ripple-add and does not consume sqtab, so the table, its init, and
+> the former `POLY1305_REU` stash/restore path are gated out of
+> Profile A. The window is consumer-reclaimable on Profile A builds.
 
 > Profile B no longer allocates the `$8400..$87FF` `sqtab2` companion
 > tables — those were removed together with the `mult66` primitive
@@ -161,18 +167,20 @@ position-independent so long as it is assembled into a contiguous
 region — but the sqtab / Shoup table addresses listed above are
 hard-coded in `poly1305_lib.s` and will NOT move with the segment.
 
-See `docs/MEMORY_MAP.md` for the authoritative byte-level
-map, including I/O register usage (`$DF01..$DF0A` REU DMA registers,
-Profile A `POLY1305_REU=1` only).
+See `docs/MEMORY_MAP.md` for the authoritative byte-level map. The
+library touches **no I/O registers** — the former Profile A
+`POLY1305_REU=1` DMA path (`$DF01..$DF0A`) was removed by the
+issue #34 F1 slimming (PR #38), and no REU DMA is issued on any
+code path in any profile.
 
 ## Required initialization
 
 Exactly one call at consumer startup:
 
 ```asm
-jsr poly1305_lib_init   ; builds sqtab (both profiles),
-                        ; sqtab2 (Profile B), and stashes
-                        ; sqtab to REU (Profile A + POLY1305_REU=1)
+jsr poly1305_lib_init   ; builds sqtab (Profile B);
+                        ; no-op on Profile A (kept for
+                        ; cross-profile API compatibility)
 ```
 
 After `poly1305_lib_init` returns, call `aead_encrypt` /
@@ -192,10 +200,12 @@ per-packet sequence is:
 8. After decrypt: `A == 0` means tag valid and plaintext was written
    in place; `A != 0` means tag mismatch and the buffer is untouched.
 
-Skipping `poly1305_lib_init` is technically safe — `poly1305_init`
-auto-builds `sqtab` on first use via the `sqtab_ready` flag — but
-shifts ~87 k cy of table-build cost onto the first packet. Always
-call it once at boot.
+Skipping `poly1305_lib_init` is technically safe — on Profile B,
+`poly1305_init` auto-builds `sqtab` on first use via the
+`sqtab_ready` flag — but shifts ~87 k cy of table-build cost onto
+the first packet. Always call it once at boot. (On Profile A the
+call is a no-op either way; Shoup tables are rebuilt per key by
+`poly1305_init`.)
 
 ## API reference
 
@@ -245,35 +255,43 @@ The v0.4.0 release also adds Ultimate 64 hardware backend support
 to the validation tooling — that is a tooling-only change and does
 not affect the library API or the linked PRG.
 
+**[Unreleased] removes the `POLY1305_REU` API surface** (issue #34
+F1, PR #38): `poly1305_reu_restore`, `poly1305_reu_sqtab_bank` /
+`poly1305_reu_sqtab_offset`, and the `POLY1305_REU` /
+`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` defines are gone, and
+Profile A no longer emits `sqtab` / `sqtab_init` / `mul_8x8` (its
+`$8000..$83FF` claim is dropped). This is a breaking change for
+consumers of those symbols — see `docs/API.md` §3
+"poly1305_reu_* (removed)" for the upgrade note. Consumers that
+never defined `POLY1305_REU` are unaffected.
+
 ## Profile choice: A vs B
 
 The library ships two profile builds. Pick one at assemble time by
 defining `POLY1305_PROFILE_LONG`:
 
 ```
-# Profile A — long-message optimized, Shoup per-r tables,
-# REU-capable. Best for WireGuard data packets (~1280 B),
-# TLS 1.3 bulk records.
+# Profile A — long-message optimized, Shoup per-r tables.
+# Best for WireGuard data packets (~1280 B), TLS 1.3 bulk records.
 ca65 -DPOLY1305_PROFILE_LONG=1 ...
 
 # Profile B — short-message optimized, portable, lower init cost.
-# Best for WireGuard handshakes, TLS 1.3 alerts, and plain C64
-# (no REU required).
+# Best for WireGuard handshakes, TLS 1.3 alerts.
 ca65 ...   # (flag undefined)
+
+# Neither profile requires (or uses) an REU.
 ```
 
 Profile A precomputes 8 KB of Shoup per-r tables at each
 `poly1305_init` call (~118 k cy init cost via S11 incremental
 ripple), reducing `poly1305_block` from 37 844 to 11 948 cy.
-Amortizes at `n >= 256` bytes. With `-DPOLY1305_REU=1` (Profile A
-only), the 1 KB sqtab is DMA-stashed to REU bank 0 at
-`poly1305_lib_init` and can be restored in ~1.1 k cy via
-`poly1305_reu_restore` if external code clobbers `$8000-$83FF`.
+Amortizes at `n >= 256` bytes.
 
 Profile B uses the `ct_mul_8x8` CT-clean quarter-square primitive
 and has a per-packet floor of 84 560 cy at n=0, versus Profile A's
-186 182 cy n=0 floor. Profile B never touches the REU and only
-claims 1 KB of fixed-address RAM at runtime.
+186 182 cy n=0 floor. Profile B claims only 1 KB of fixed-address
+RAM at runtime. Neither profile touches the REU (see the
+"Turbo hosts and REU-less machines" section of the README).
 
 Target workloads:
 

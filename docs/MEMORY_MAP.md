@@ -77,8 +77,14 @@ hard-coded in `src/lib/constants_lib.s` and/or `src/lib/poly1305_lib.s`.
 |----------------|---------------------|------:|------------|-----------------------------|-------|
 | `$6000..$6FFF` | `r_tab_lo`          |  4 KB | A only     | runtime, built in `shoup_init` (P3, S6+S11) | 16 × 256 bytes: `r_tab_lo + j*256 + x` = low byte of `x * r[j]` |
 | `$7000..$7FFF` | `r_tab_hi`          |  4 KB | A only     | runtime, built in `shoup_init` | 16 × 256 bytes: `r_tab_hi + j*256 + x` = high byte of `x * r[j]` |
-| `$8000..$81FF` | `sqtab_lo`          | 512 B | A + B      | runtime, built in `sqtab_init` (S10 one-time gate, Profile A optionally backed up to REU) | low byte of `floor(n²/4)` for n=0..511; 2 pages |
-| `$8200..$83FF` | `sqtab_hi`          | 512 B | A + B      | runtime, built in `sqtab_init` | high byte of `floor(n²/4)` for n=0..511 |
+| `$8000..$81FF` | `sqtab_lo`          | 512 B | B only     | runtime, built in `sqtab_init` (S10 one-time gate) | low byte of `floor(n²/4)` for n=0..511; 2 pages; base relocatable via `LIB_SHARED_SQTAB_BASE` (SPEC §8.1) |
+| `$8200..$83FF` | `sqtab_hi`          | 512 B | B only     | runtime, built in `sqtab_init` | high byte of `floor(n²/4)` for n=0..511 |
+
+> **Profile A no longer emits sqtab** (issue #34 F1, PR #38):
+> `shoup_init` populates `r_tab_lo/hi` by incremental ripple-add, so
+> `sqtab_init`, `mul_8x8`, and the `POLY1305_REU` stash/restore path
+> are gated out of Profile A entirely. `$8000..$83FF` is
+> consumer-reclaimable on Profile A builds.
 
 **v0.3.0 CT-fix RAM delta (Profile B)**: the Step-12 `sqtab2_lo` /
 `sqtab2_hi` companion tables at `$8400..$87FF` (512 B) have been
@@ -89,15 +95,15 @@ now uses the `ct_mul_8x8` branchless quarter-square primitive
 loads. Profile B runtime RAM is back to **~1 KB** (sqtab only), a
 **−512 B** net delta vs the pre-CT-fix S13 state.
 
-### REU backup (Profile A + `POLY1305_REU=1`)
+### REU usage: none (former Profile A backup removed)
 
-If Profile A is assembled with `-DPOLY1305_REU=1`, `poly1305_lib_init`
-also issues a REU DMA that copies sqtab ($8000..$83FF, 1024 bytes) to
-REU bank 0 offset $0000. A helper entry point `poly1305_reu_restore`
-reloads that page from REU back to $8000..$83FF in ~1.1 k cy. REU
-control registers touched: `$DF01..$DF08`, `$DF0A`. REU is not
-required for Profile A (the flag is opt-in); if absent, Profile A
-builds and runs identically to the non-REU path.
+The library issues **no REU DMA on any code path in any profile**,
+and touches no I/O registers. Up through v0.5.x, Profile A +
+`POLY1305_REU=1` stashed sqtab to REU and exposed
+`poly1305_reu_restore` (touching `$DF01..$DF08`, `$DF0A`); the
+issue #34 F1 slimming (PR #38) removed sqtab from Profile A and the
+whole REU path with it. `LIB_CHACHA20_POLY1305_REU_BANKS_USED`
+reads `$00` unconditionally.
 
 ---
 
@@ -151,21 +157,17 @@ library's `.ifndef` equates**:
 - **ZP `$fb..$fe`** — `zp_ptr1` / `zp_ptr2` 16-bit pointers.
 - **$0801..$08FF** — BASIC SYS stub.
 - **$0900..~$4662** — library CODE+DATA+BSS (Profile A post-S13).
-- **$8000..$83FF** — `sqtab_lo/hi`, 1 KB quarter-square table.
 
 ### Profile A only (POLY1305_PROFILE_LONG=1)
 - **$6000..$7FFF** — Shoup per-r tables (4 KB lo + 4 KB hi).
+  ($8000..$83FF is *not* claimed on Profile A as of issue #34 F1 /
+  PR #38 — the window is consumer-reclaimable.)
 
 ### Profile B only (no POLY1305_PROFILE_LONG flag)
+- **$8000..$83FF** — `sqtab_lo/hi`, 1 KB quarter-square table
+  (default placement; relocatable via `LIB_SHARED_SQTAB_BASE`).
 - **ZP `$1e..$1f`** — `ct_diff_raw` / `ct_sign_mask` scratch bytes
   used by the `ct_mul_8x8` primitive.
-
-### Profile A + POLY1305_REU=1 additional
-- REU control registers `$DF01..$DF08`, `$DF0A` touched during
-  `poly1305_lib_init` and `poly1305_reu_restore`.
-- REU bank 0 offset $0000..$03FF holds the sqtab backup — consumers
-  using the REU must not clobber this range once `poly1305_lib_init`
-  has run.
 
 ### Anti-collision escape hatches (v0.3.x)
 

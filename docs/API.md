@@ -16,7 +16,7 @@ from `s13_results.md` unless otherwise noted.
 Required call order for any consumer:
 
 ```
-1. (once at startup)     poly1305_lib_init       ; build sqtab (+ sqtab2 on Profile B)
+1. (once at startup)     poly1305_lib_init       ; build sqtab (Profile B; no-op on A)
 2. (once per AEAD call)  populate aead_*          ; key, nonce, aad, data ptrs/lens
 3. (once per AEAD call)  aead_encrypt or aead_decrypt
 ```
@@ -34,17 +34,14 @@ costs only a `lda / bne` (~7 cy). Calling it zero times leaves
 which is why `data_lib.s` deliberately places state reservations in
 `DATA` not `BSS` — see `data_lib.s:12-18`).
 
-**Profile A + REU optional**: if assembled with
-`-DPOLY1305_REU=1`, `poly1305_lib_init` also backs sqtab to REU
-(default bank 0 offset $0000), and `poly1305_reu_restore` can
-reload it in ~1.1 k cy if the $8000..$83FF window is externally
-clobbered. The REU destination bank and offset are now exposed as
-three public RAM-backed bytes (`poly1305_reu_sqtab_bank`,
-`poly1305_reu_sqtab_offset`) so a consumer linking this library
-alongside another REU consumer (e.g. `c64-x25519`, which itself
-claims banks 0-1) can relocate the stash to a non-conflicting
-region without re-assembling. See §3 `poly1305_reu_sqtab_bank /
-poly1305_reu_sqtab_offset` for the runtime override protocol.
+**No REU usage**: as of the issue #34 F1 slimming (PR #38), the
+library issues no REU DMA on any path in any profile.
+`poly1305_lib_init` collapses to a bare `rts` on Profile A, and the
+former `POLY1305_REU=1` stash/restore API (`poly1305_reu_restore`,
+`poly1305_reu_sqtab_bank` / `poly1305_reu_sqtab_offset`) plus the
+`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` assemble-time defines
+were removed with it. Profile B never had an REU path. See §3
+"poly1305_reu_* (removed)" for the upgrade note.
 
 ### Consumer data buffers to populate before `aead_encrypt`
 
@@ -235,20 +232,22 @@ All live in the library's DATA segment (see `data_lib.s` and
 
 ### poly1305_lib_init
 
-- **Module**: `poly1305_lib.s:82`
-- **Purpose**: One-time library initialization. Builds the 1 KB
-  quarter-square table at `sqtab_lo/hi`. On Profile B also builds
-  `sqtab2_lo/hi` and pre-sets `lmul0+1` / `lmul1+1`. On Profile A
-  with `POLY1305_REU=1` also DMA-backs sqtab to REU at the
-  bank/offset held by `poly1305_reu_sqtab_bank` /
-  `poly1305_reu_sqtab_offset` (defaults bank 0 / offset $0000).
+- **Module**: `poly1305_lib.s:143`
+- **Purpose**: One-time library initialization. **Profile B**: builds
+  the 1 KB quarter-square table at `sqtab_lo/hi` and sets
+  `sqtab_ready`. (The v0.3.0 CT fix removed the former `sqtab2_lo/hi`
+  build and `lmul0+1` / `lmul1+1` pointer caching — `ct_mul_8x8`
+  uses only `sqtab_lo/hi` via SMC-patched `abs,x` loads.)
+  **Profile A**: no sqtab to build (issue #34 F1) — the body is a
+  bare `rts`, retained as an exported entry point so consumers
+  calling it once at startup keep working on both profiles.
 - **Signature**: no register args.
-- **Preconditions**: **must be called at least once before any
-  `aead_encrypt` / `aead_decrypt` / `poly1305_init`.** Idempotent
-  via `sqtab_ready` flag.
-- **Postconditions**: `sqtab_ready != 0`; `sqtab_lo/hi` populated;
-  on Profile B, `sqtab2_lo/hi` populated and `lmul0+1` / `lmul1+1`
-  set to `>sqtab_lo` / `>sqtab_hi`.
+- **Preconditions**: on Profile B, **must be called at least once
+  before any `aead_encrypt` / `aead_decrypt` / `poly1305_init`**
+  (or accept the auto-build cost on first `poly1305_init`).
+  Idempotent via `sqtab_ready` flag. No-op but safe on Profile A.
+- **Postconditions**: Profile B: `sqtab_ready != 0`, `sqtab_lo/hi`
+  populated. Profile A: none.
 - **Clobbers**: A, X, Y.
 - **CT contract**: PUBLIC inputs only (none — the table values
   are pure functions of the platform, i.e. `floor(n²/4)`). No CT
@@ -259,73 +258,24 @@ All live in the library's DATA segment (see `data_lib.s` and
   jsr poly1305_lib_init
   ```
 
-### poly1305_reu_restore (Profile A + POLY1305_REU=1 only)
+### poly1305_reu_restore / poly1305_reu_sqtab_bank / poly1305_reu_sqtab_offset (removed)
 
-- **Module**: `poly1305_lib.s:137`
-- **Purpose**: DMA sqtab back from REU to $8000..$83FF using the
-  bank/offset held by `poly1305_reu_sqtab_bank` /
-  `poly1305_reu_sqtab_offset` (defaults bank 0 / offset $0000).
-  Useful if external code clobbers the sqtab window.
-- **Signature**: no register args. Emits REU DMA command $91.
-- **Preconditions**: `poly1305_lib_init` must have previously run
-  (that's what seeded REU with the table data) **with the same
-  bank/offset values currently in the RAM cells**. If a consumer
-  patches `poly1305_reu_sqtab_bank` / `poly1305_reu_sqtab_offset`
-  after the initial stash, they must re-stash before calling
-  `poly1305_reu_restore` — otherwise restore will load whatever
-  bytes happen to live at the new REU location.
-- **Postconditions**: `sqtab_lo/hi` restored; REU state preserved.
-- **Clobbers**: A.
-- **Cost**: ~1.1 k cy (50 cy setup + 1024 cy DMA burst, plus ~6
-  cy of RAM loads over the pre-v0.5.x immediate-operand path).
+Removed by the issue #34 F1 Profile A slimming (PR #38). Profile A
+no longer emits or consumes the quarter-square table — `shoup_init`
+populates `r_tab_lo/hi` by incremental ripple-add — so the REU
+stash had nothing left to stash, and the whole `POLY1305_REU` path
+(shipped v0.4.0–v0.5.x, including the issue #19 runtime relocation
+cells) was deleted. Upgrade notes for consumers of the removed API:
 
-### poly1305_reu_sqtab_bank / poly1305_reu_sqtab_offset (Profile A + POLY1305_REU=1 only)
-
-- **Module**: `poly1305_lib.s` (DATA segment, exported)
-- **Purpose**: Public RAM-backed configuration of the REU stash
-  destination. Three bytes total — bank (1 byte) and offset
-  (2 bytes, little-endian, lo at `+0` then hi at `+1`) — read by
-  the DMA setup paths in `poly1305_lib_init` and
-  `poly1305_reu_restore`.
-- **Default values**: bank `$00`, offset `$0000`. Defaults are
-  baked into the PRG at link time from the assemble-time defines
-  `POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`, so a consumer who
-  never touches the cells gets pre-v0.5.x behavior verbatim.
-- **Override at assemble time** (preferred when the consumer
-  controls the build):
-  ```sh
-  ca65 -DPOLY1305_PROFILE_LONG=1 -DPOLY1305_REU=1 \
-       -DPOLY1305_REU_BANK=3 '-DPOLY1305_REU_OFFSET=$1000' ...
-  ```
-  The RAM cells will come up at $03 / $00 / $10 at PRG load.
-- **Override at runtime** (preferred when linking a pre-built
-  library, or when several REU consumers must coexist):
-  ```ca65
-  ; Before calling poly1305_lib_init:
-  lda #3
-  sta poly1305_reu_sqtab_bank
-  lda #<$1000
-  sta poly1305_reu_sqtab_offset
-  lda #>$1000
-  sta poly1305_reu_sqtab_offset+1
-  jsr poly1305_lib_init       ; stashes to bank 3 / $1000
-  ```
-  **The runtime poke must happen before the call to
-  `poly1305_lib_init` that performs the initial stash.** If
-  patched afterwards, the consumer is responsible for re-stashing
-  (the DMA stash inside `poly1305_lib_init` is gated by
-  `sqtab_ready` and will not re-execute on subsequent calls).
-- **CT contract**: PUBLIC. The bank/offset are configuration
-  bytes, not secrets. The DMA setup reads them via straight-line
-  `lda abs / sta abs` to the REU control ports — no
-  secret-dependent branches, no page-cross addressing modes, no
-  timing variability beyond the fixed ~6 cy of additional RAM
-  loads vs the pre-v0.5.x immediate-operand path.
-- **Motivating use case**: `c64-x25519` claims REU banks 0-1 for
-  its own state. A host project linking both libraries can set
-  `poly1305_reu_sqtab_bank = 2` (or higher) before
-  `poly1305_lib_init` to keep the sqtab backup out of the X25519
-  region.
+- On Profile A, `$8000..$83FF` is no longer library-owned — code
+  that clobbered it and called `poly1305_reu_restore` can simply
+  stop doing either (see `MEMORY_MAP.md`).
+- On Profile B (which never had the REU path), a clobbered sqtab is
+  rebuilt in ~87 k cy by clearing `sqtab_ready` and calling
+  `poly1305_lib_init`.
+- REU bank coordination with siblings (e.g. `c64-x25519` banks 0-1)
+  is moot for this library: `LIB_CHACHA20_POLY1305_REU_BANKS_USED`
+  is unconditionally `$00`.
 
 ### poly1305_init
 
