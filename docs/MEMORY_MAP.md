@@ -1,26 +1,31 @@
-# c64-ChaCha20-Poly1305 — Consumer Memory Map (v0.3.0)
+# c64-ChaCha20-Poly1305 — Consumer Memory Map (v0.6.0)
 
-Static audit of the merged-main library state as of 2026-04-13
-(post-CT-fix, v0.3.0 release candidate). Sources: `src/c64.cfg`,
+Static audit of the merged-main library state as of 2026-07-28
+(v0.6.0 release). Sources: `src/c64.cfg`, `src/zp_config.s`,
 `src/lib/constants_lib.s`, `src/lib/data_lib.s`,
-`build/labels.txt` (post-CT-fix build artifact).
+`build/profile-{a,b}/labels.txt` (v0.6.0 build artifacts).
 
 > **Scope note.** This document enumerates every address the library
-> currently *claims*. v0.3.x uses hard-coded addresses for all tables
-> and BSS state. v0.4.0 is planned to make the page-level addresses
-> configurable via `-D` defines at assembly time (see "v0.4.0 plans"
-> at the bottom). A consumer that co-locates this library with its
-> own code in v0.3.x must treat every address in the collision-risk
-> table as reserved.
+> currently *claims*. As of v0.6.0 most claims are relocatable at
+> assembly time: every ZP slot is an overridable default in
+> `src/zp_config.s` (PR #32), and the sqtab base is configurable via
+> `-DLIB_SHARED_SQTAB_BASE=<addr>` (default `$8000`; SPEC §8.1,
+> PR #39). Only the Profile A Shoup `r_tab_lo`/`r_tab_hi` pages
+> remain fixed-address (see "Relocation support" at the bottom). A
+> consumer that co-locates this library with its own code must treat
+> every non-overridden address in the collision-risk table as
+> reserved.
 
 ---
 
 ## 1. Zero-page claims
 
-Source-of-truth: `src/lib/constants_lib.s` equates, gated by
-`.ifndef` so a host project can pre-define any slot before
-`.include "constants_lib.s"`. The `c64.cfg` `ZP` memory region
-spans `$02..$9F` (158 bytes), which bounds the claim.
+Source-of-truth: `src/zp_config.s` (PR #32) — every slot is an
+`.ifndef`-guarded default address, `.exportzp`-ed from that module;
+`src/lib/constants_lib.s` now only `.importzp`s the slots. A host
+project can pre-define any slot before `zp_config.s` is assembled
+(or replace the file entirely) to relocate it. The `c64.cfg` `ZP`
+memory region spans `$02..$9F` (158 bytes), which bounds the claim.
 
 | range      | symbol            | size | owner module          | notes                                                         |
 |------------|-------------------|-----:|-----------------------|---------------------------------------------------------------|
@@ -44,14 +49,14 @@ spans `$02..$9F` (158 bytes), which bounds the claim.
 | `$fb..$fc` | `zp_ptr1`         | 2    | poly1305 / aead       | 16-bit pointer for `poly1305_update` and `aead_process_padded` |
 | `$fd..$fe` | `zp_ptr2`         | 2    | poly1305 / aead       | 16-bit pointer; currently unused by library code but reserved |
 
-### Unclaimed ZP windows (v0.3.x)
+### Unclaimed ZP windows (default layout)
 
 - `$0a..$13` (10 bytes) — free for consumer use.
 - `$20..$3f` (32 bytes) — free for consumer use (v0.3.0 CT fix freed `$20..$21` — the old `lmul1` slot went away when `mult66` was replaced with the `ct_mul_8x8` primitive; `ct_diff_raw`/`ct_sign_mask` at `$1e..$1f` occupy the old `lmul0` slot).
 - `$80..$fa` (123 bytes) — free for consumer use (but `$fb..$fe` are reserved, see above).
 - `$ff` (1 byte) — outside the c64.cfg ZP window ($02..$9F), reserved by the KERNAL.
 
-### Consistency check: c64.cfg ↔ constants_lib.s
+### Consistency check: c64.cfg ↔ zp_config.s
 
 `c64.cfg`'s `ZP` MEMORY region is `start = $0002, size = $009E`,
 so the library's legal ZP window is `$02..$9F`. **BUT** the two
@@ -70,8 +75,11 @@ looks inconsistent at first read.
 
 ## 2. Fixed-address tables (page-aligned RAM, outside ZP)
 
-Pages of main RAM claimed at assembly time. All page addresses are
-hard-coded in `src/lib/constants_lib.s` and/or `src/lib/poly1305_lib.s`.
+Pages of main RAM claimed at assembly time. The Shoup `r_tab_*`
+pages are hard-coded in `src/lib/constants_lib.s`; the sqtab base
+defaults to `$8000` via the `LIB_SHARED_SQTAB_BASE` equate and is
+relocatable with `-DLIB_SHARED_SQTAB_BASE=<addr>` (SPEC §8.1,
+PR #39).
 
 | range          | symbol              | size  | profile    | build-time vs runtime       | notes |
 |----------------|---------------------|------:|------------|-----------------------------|-------|
@@ -118,27 +126,26 @@ $0900..?????    MAIN    segment: CODE (align=$100) + DATA + BSS
 `c64.cfg` MEMORY:
 - `MAIN: start = $0900, size = $9700` (bound: $0900..$9FFF).
 
-**Post-CT-fix build artifact sizes** (measured from `ls -la
+**v0.6.0 build artifact sizes** (measured from `ls -la
 build/profile-*/*.prg` after `make clean && make profile-a
-profile-b` on the v0.3.0 release candidate):
+profile-b` on the v0.6.0 release branch, 2026-07-28):
 
 | profile | PRG file                                     | bytes | md5 |
 |---------|----------------------------------------------|------:|-----|
-| A       | `build/profile-a/c64_chacha20_poly1305.prg`  | 15 739 | `313300ff4d86cefc6d3b195563c1383d` |
-| B       | `build/profile-b/c64_chacha20_poly1305.prg`  | 16 777 | `a0e4b682fa454c6b8e2d8a04297333ab` |
+| A       | `build/profile-a/c64_chacha20_poly1305.prg`  | 16 168 | `79deb98c0028488f84278aa2ec645c9d` |
+| B       | `build/profile-b/c64_chacha20_poly1305.prg`  | 17 448 | `4afe54d466ad92ca38b91c94a2ea2b36` |
 
-Both profiles load at `$0801`. The post-CT-fix PRGs are smaller
-than the pre-CT-fix S13 state because the `mult66` primitive and
-the `sqtab2_init` routine are gone, even with the new `ct_mul_8x8`
-primitive and the F1 branchless mask-blend added.
+Both profiles load at `$0801`. (The v0.3.0 reference-build sizes
+and md5s are preserved in `AUDIT.md` "Release fingerprints".)
 
-**Unused MAIN gap (Profile A)**: approximately $4600..$5FFF
-(~6.6 KB) free between BSS tail and Shoup table base. This is the
+**Unused MAIN gap (Profile A)**: approximately $4730..$5FFF
+(~6.2 KB) free between BSS tail (`__BSS_RUN__` = $4727 in the
+v0.6.0 `build/profile-a/labels.txt`) and Shoup table base. This is the
 region the benchmark harness uses for `pt_addr = $5000` so plaintext
 lives in the gap. Consumers in non-bench deployments have ~6 KB free
 in this window.
 
-**Unused MAIN gap (Profile B)**: approximately $4700..$7FFF (~14 KB)
+**Unused MAIN gap (Profile B)**: approximately $4C30..$7FFF (~13 KB)
 free between BSS tail and sqtab base. Profile B does not use the
 $6000..$7FFF Shoup region and (post-CT-fix) does not use
 $8400..$87FF either, so that whole window is consumer-available.
@@ -156,7 +163,8 @@ library's `.ifndef` equates**:
 - **ZP `$40..$7f`** — `cc20_work` ChaCha20 working state (ZP hot path).
 - **ZP `$fb..$fe`** — `zp_ptr1` / `zp_ptr2` 16-bit pointers.
 - **$0801..$08FF** — BASIC SYS stub.
-- **$0900..~$4662** — library CODE+DATA+BSS (Profile A post-S13).
+- **$0900..~$4726** — library CODE+DATA+BSS (Profile A, v0.6.0
+  build; Profile B extends to ~$4C26).
 
 ### Profile A only (POLY1305_PROFILE_LONG=1)
 - **$6000..$7FFF** — Shoup per-r tables (4 KB lo + 4 KB hi).
@@ -169,25 +177,19 @@ library's `.ifndef` equates**:
 - **ZP `$1e..$1f`** — `ct_diff_raw` / `ct_sign_mask` scratch bytes
   used by the `ct_mul_8x8` primitive.
 
-### Anti-collision escape hatches (v0.3.x)
+### Relocation support (v0.6.0)
 
-- All ZP equates are `.ifndef`-guarded: a consumer can pre-define
-  any slot (e.g. `cc20_work = $80`) before `.include "constants_lib.s"`
-  to override it.
-- `r_tab_lo/hi`, `sqtab_lo/hi` are **NOT** wrapped in `.ifndef` in
-  v0.3.x — they are hard-coded equates in `src/lib/constants_lib.s`
-  (Shoup) and `src/lib/poly1305_lib.s` (sqtab). Overriding these
-  today requires editing the library source.
-
-### v0.4.0 plans
-
-The v0.3.x fixed-address model is a release-stage constraint, not a
-permanent library property. v0.4.0 is expected to add `.ifndef`
-guards around `r_tab_lo`, `r_tab_hi`, `sqtab_lo`, `sqtab_hi` so
-consumers can relocate all fixed-address tables via
-`-D<symbol>=<addr>` at assembly time, matching the existing ZP
-equate pattern. Until then, consumers must accept the v0.3.x page
-layout in full or fork the library source.
+- All ZP slots are `.ifndef`-guarded defaults in `src/zp_config.s`
+  (PR #32): a consumer can pre-define any slot (e.g.
+  `cc20_work = $80`) before `zp_config.s` is assembled, or replace
+  the file entirely, to relocate it.
+- `sqtab_lo/hi` are relocatable via
+  `-DLIB_SHARED_SQTAB_BASE=<addr>` (default `$8000`; SPEC §8.1,
+  PR #39); `sqtab_hi` sits at base+`$0200`.
+- `r_tab_lo` / `r_tab_hi` (Profile A Shoup pages at
+  `$6000`/`$7000`) remain **fixed-address** hard-coded equates in
+  `src/lib/constants_lib.s`. Overriding these still requires
+  editing the library source.
 
 ---
 

@@ -165,8 +165,10 @@ post-fix steady state for v0.3.x.
   findings are preserved unchanged with a post-fix Resolution
   section appended at the bottom.
 - [Memory map](MEMORY_MAP.md) — ZP claims, fixed-address
-  tables, consumer collision-risk summary, and v0.4.0
-  configurability plan.
+  tables, consumer collision-risk summary, and relocation
+  support (`src/zp_config.s` ZP overrides,
+  `LIB_SHARED_SQTAB_BASE` sqtab relocation — delivered
+  post-v0.3.0).
 - [Public API](API.md) — exported symbols, calling conventions,
   clobbered registers, per-routine cycle counts.
 - [Integration guide](INTEGRATION.md) — consumer import
@@ -202,13 +204,15 @@ shares the upstream ChaCha20 word-32 codepaths.
 - Side-channel resistance covers **timing only**. Power
   analysis and EM analysis are out of scope (and largely
   meaningless on a typical C64 deployment).
-- The memory map is **fixed in v0.3.x**. Consumers whose own
-  address claims conflict with the library's `$6000..$7FFF`
-  (Profile A Shoup) or `$8000..$83FF` (both profiles, sqtab)
-  allocations must either (a) patch the library source, or
-  (b) wait for v0.4.0, which is planned to make those addresses
-  configurable via ca65 `-D` defines (see
-  [MEMORY_MAP.md](MEMORY_MAP.md) "v0.4.0 plans").
+- The memory map was **fixed in v0.3.x**. Later releases
+  delivered the planned configurability: the sqtab base is
+  relocatable via `-DLIB_SHARED_SQTAB_BASE=<addr>` (default
+  `$8000`, PR #39) and every ZP slot is overridable via
+  `src/zp_config.s` (PR #32). Consumers whose address claims
+  conflict with `$6000..$7FFF` (Profile A Shoup `r_tab_lo/hi`)
+  must still patch the library source — those pages remain
+  fixed-address (see [MEMORY_MAP.md](MEMORY_MAP.md)
+  "Relocation support").
 - The test harness `tools/test_chacha20_poly1305.py` has a
   destructive auto-rebuild bug tracked as task #18. Workaround:
   export `C64_SKIP_BUILD=1` before invoking the harness on

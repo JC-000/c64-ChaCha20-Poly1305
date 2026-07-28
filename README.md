@@ -13,14 +13,29 @@ assembler + `ld65` linker). The `ca65hl` macro package and
 `src/include/`, so no extra installation is needed beyond cc65 itself.
 
 ```
-make profile-a      # Profile A: Shoup per-r tables, optimized for long messages
-make profile-b      # Profile B: stock C64, portable baseline, lower init cost
-make                # alias for profile-a
+make profile-a              # Profile A: Shoup per-r tables, optimized for long messages
+make profile-b              # Profile B: stock C64, portable baseline, lower init cost
+make                        # alias for profile-a
+make profile-b-rolled       # Profile B with fully-rolled poly1305_multiply (min code)
+make profile-b-rolled-outer # Profile B with outer-loop-rolled poly1305_multiply
+make lib                    # full ar65 archive -> build/lib/c64-chacha20-poly1305.a
+make lib-aead-only          # trimmed archive -> build/lib/c64-chacha20-poly1305-aead-only.a
+make bench                  # granular bench -> docs/BENCH_REPORT.md (+ JSON sidecar)
+make bench-check            # bench + drift gate vs docs/BENCH_REPORT.baseline.json
+make dist VERSION=vX.Y.Z    # reproducible source tarball (tools/build_release.sh)
 ```
 
-Both produce `build/c64_chacha20_poly1305.prg` and `build/labels.txt`
-(VICE-format label file for harness consumption, converted from the
-ld65 label output by the Makefile).
+The profile targets produce `build/c64_chacha20_poly1305.prg` and
+`build/labels.txt` (VICE-format label file for harness consumption,
+converted from the ld65 label output by the Makefile).
+
+The `lib` / `lib-aead-only` targets produce ar65 static archives under
+`build/lib/` per the c64-lib-contract SPEC §6 consumption paths:
+downstream projects link `c64-chacha20-poly1305.a` (or the aead-only
+variant) directly into their own ld65 build instead of integrating the
+PRG. `test_consumer/` is the worked example of an archive-consuming
+build; see [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the full
+consumer wiring guide.
 
 ## Build profiles
 
@@ -45,6 +60,52 @@ Both profiles share identical ChaCha20 code, pass the full 214-test
 suite, and are constant-time by contract (no data-dependent branches on
 secret data).
 
+## Size variants (issue #34)
+
+Issue #34 (closed with this release) added two orthogonal, default-off
+size knobs on top of the Profile B baseline. Measured footprints
+(Profile B PRG bytes / minimal AEAD-only consumer link bytes):
+
+| config | build | PRG | min consumer link | cycles, `aead_encrypt` n=1024 |
+|--------|-------|----:|------------------:|------------------------------:|
+| A — baseline | `make profile-b` + full archive | 17 448 | 17 446 | baseline |
+| B — aead-only | `make lib-aead-only` archive | 17 192 | 16 422 | unchanged |
+| C — rolled-outer | `-DPOLY1305_MULTIPLY_ROLLED_OUTER=1` | 9 256 | 9 254 | +4.08% |
+| D — combined | aead-only archive + rolled-outer | 9 000 | **8 230** | +4.08% |
+
+Config D is the headline result: **8,230 B** linked consumer footprint
+— less than half the 17,446 B baseline minimum link — for +4.08%
+cycles on `aead_encrypt` n=1024. Which knob to pick:
+
+- **aead-only** (`make lib-aead-only`) is free in cycles — it only
+  strips test-only exports (see "Public symbols" below) — so any
+  consumer that calls just the AEAD ABI should take it.
+- **rolled-outer** (`-DPOLY1305_MULTIPLY_ROLLED_OUTER=1`, or `make
+  profile-b-rolled-outer`) is the big win: rolling the outer j-loop of
+  `poly1305_multiply` trades +4.08% AEAD cycles for ~8 KB of code.
+- **combined** (config D) for the minimum footprint.
+- The fully-rolled variant (`-DPOLY1305_MULTIPLY_ROLLED=1`, `make
+  profile-b-rolled`) also rolls the inner partial-product loop; it
+  saves a further 576 B over rolled-outer but costs +17.4% at n=1024 —
+  only worth it when every last page counts.
+
+Default builds are unchanged: all of these are opt-in, and `make
+profile-a` / `make profile-b` / `make lib` produce the same output as
+before.
+
+### Build-time defines
+
+- `LIB_VARIANT_AEAD_ONLY=1` — strips test-only exports from the
+  archive (set by `make lib-aead-only`; crypto code paths untouched).
+- `POLY1305_MULTIPLY_ROLLED_OUTER=1` / `POLY1305_MULTIPLY_ROLLED=1` —
+  the default-off size↔cycles dials above (mutually exclusive).
+- `CHACHA20_USE_WORD32` — opt-in pointer-mode ChaCha20 profile for
+  consumers that already ship a shared `word32.s`; default off (the
+  default build inlines the ZP-direct macro forms and pulls no
+  `word32_lib.o` into a minimal consumer link).
+
+See [`docs/API.md`](docs/API.md) for the full build-time define table.
+
 ## Performance
 
 The numbers below are the **v0.5.0 release baseline** (cycles via CIA
@@ -59,7 +120,7 @@ routine).
 | `aead_encrypt` n=0   |     251 330 |              182 345 |  -27.4%  |               80 749 |  -67.9%  |
 | `aead_encrypt` n=1024|   5 974 048 |            1 623 299 |  -72.8%  |            3 196 264 |  -46.5%  |
 
-HEAD cycle counts (`make bench`, samples=5, VICE):
+HEAD cycle counts (`make bench`, samples=3, VICE):
 
 | routine              |  HEAD Profile A |  HEAD Profile B | Δ vs v0.5.0 (A / B) |
 |----------------------|----------------:|----------------:|--------------------:|
@@ -206,21 +267,45 @@ The library is intended for hobbyist and research use.
 - `aead_encrypt` -- full ChaCha20-Poly1305 AEAD encrypt
 - `aead_decrypt` -- full ChaCha20-Poly1305 AEAD decrypt (returns A=0 on auth success)
 
+Version constants (`src/lib_version.s`):
+
+- `LIB_VERSION_MAJOR` / `LIB_VERSION_MINOR` / `LIB_VERSION_PATCH` --
+  exported integer equates tracking the released semver (0.6.0).
+  Consumers `.import` them and assemble-time guard, e.g.
+  `.if LIB_VERSION_MINOR < 5` → `.error`.
+- `LIB_ABI_VERSION` -- exported-symbol ABI surface version (currently
+  1); bumps on any breaking change to public symbol names, calling
+  conventions, or the public ZP-cell contract.
+
+Under the aead-only archive variant (`-DLIB_VARIANT_AEAD_ONLY=1`, i.e.
+`make lib-aead-only`) the test-only exports vanish:
+`chacha20_quarter_round`, `mul_8x8`, and the word32 helpers
+`rotl32_1` / `rotl32_7` / `rotr32_7` are no longer published (bodies
+remain; only the symbol table shrinks). In the default build the
+ChaCha20 hot path inlines its rotates, so a minimal AEAD-only consumer
+link pulls in no `word32_lib.o` at all — the rest of the word32
+surface (`add32`, `xor32`, the remaining rotates) is exported but
+absent from such a link.
+
 See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`, `aead_data_ptr`,
 `aead_data_len`, `aead_tag`).
 
 ## Manifest equates (consumer fit checks)
 
-`src/lib/lib_manifest.s` exports four integer equates per the
+`src/lib/lib_manifest.s` exports eight integer equates per the
 [c64-lib-contract SPEC §5](https://github.com/JC-000/c64-lib-contract)
-aggregate-manifest convention. Consumers `.import` them and use
+aggregate-manifest convention (five §5 aggregate equates plus the
+three §8 shared-primitive masks). Consumers `.import` them and use
 `.assert` to detect REU/ZP/footprint collisions at assemble time:
 
 - `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed. Always `$00`: the library issues no REU DMA in any profile (the former Profile A `POLY1305_REU` stash was removed by the issue #34 F1 slimming, PR #38).
 - `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
-- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound from the Profile A build (16640; actual 16422 + headroom).
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile-aware since the issue #34 F1 slimming diverged the two footprints: Profile A = 16384 (actual 16166 + 256-aligned headroom), Profile B = 17664 (actual 17446 + headroom).
+- `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (16384).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
+- `LIB_SHARED_PRIMITIVES_SQTAB` (`$0001`) / `LIB_SHARED_PRIMITIVES_CT_MUL_8X8` (`$0004`) — SPEC §8.0 shared-primitive bit values, exported `:abs`.
+- `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` — bitmask of shared primitives this build owns (`$0005` in the default standalone build; defining `SHARED_SQTAB_INIT` or `SHARED_CT_MUL_8X8` drops the corresponding bit so composed libraries see disjoint masks, issue #21).
 
 In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits three exported equates — `LIB_PRECALC_<name>_{SIZE,REGION,SHARED}` — that cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep LIB_PRECALC_`. Profile A surfaces 15 such exports (`sqtab`, `chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`); Profile B surfaces 9 (the three profile-agnostic tables only). See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
 
@@ -230,6 +315,9 @@ In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/J
 src/
   c64.cfg                      ld65 linker config
   main.s                       entry stub + BASIC SYS header
+  lib_version.s                exported LIB_VERSION_* / LIB_ABI_VERSION equates
+  zp_config.s                  c64-lib-contract ZP-config header
+  precalc_table.inc            SPEC §8.0 LIB_PRECALC_TABLE macro (verbatim contract copy)
   include/
     ca65hl/                    vendored ca65hl macro package
     smc.inc                    vendored self-modifying-code helpers
@@ -240,11 +328,19 @@ src/
     chacha20_lib.s             ChaCha20 stream cipher (inlined QRs, rot-rename)
     poly1305_lib.s             Poly1305 MAC (Shoup table / quarter-square)
     chacha20poly1305_lib.s     AEAD wrapper
+    lib_manifest.s             SPEC §5 manifest equates + §8.0 precalc enumeration
 test/
   rfc7539_vectors.json         RFC 8439 test vectors
+test_consumer/
+  ...                          archive-consumption worked example: minimal
+                               AEAD-only consumer linked against build/lib/*.a
+                               (the issue #34 footprint measurement harness)
 tools/
   test_chacha20_poly1305.py    214-test suite (VICE + harness)
   benchmark_chacha20_poly1305.py  CIA-timer benchmark suite
+  bench_granular.py            per-symbol granular bench (make bench / bench-check)
+  bench_turbo_sweep.py         turbo-scaling wall-clock sweep (issue #44)
+  build_release.sh             reproducible release tarball (make dist)
   audit_cross_check.py         30 000 random AEAD vectors vs pyca
   ct_mul_brute_check.py        65 536 exhaustive ct_mul_8x8 pairs
 examples/
@@ -272,6 +368,23 @@ the source:
   fingerprints and the post-CT-fix bench table.
 - [`docs/BENCH_TURBO_SWEEP.md`](docs/BENCH_TURBO_SWEEP.md) —
   turbo-scaling wall-clock sweep methodology and results (issue #44).
+- [`docs/BENCH_GRANULAR.md`](docs/BENCH_GRANULAR.md) — granular
+  per-symbol bench methodology (`make bench` / `make bench-check`).
+- [`docs/BENCH_REPORT.md`](docs/BENCH_REPORT.md) — latest generated
+  per-symbol bench report (regenerated by `make bench`).
+- [`docs/BENCH_NSWEEP_v0.5.0.md`](docs/BENCH_NSWEEP_v0.5.0.md) —
+  packet-size (n) sweep baseline and the measured A/B crossover.
+- [`docs/BENCH_NSWEEP_v0.6.0.md`](docs/BENCH_NSWEEP_v0.6.0.md) —
+  v0.6.0 n-sweep (part of this release pass).
+- [`docs/BENCH_NSWEEP_u64_v0.6.0.md`](docs/BENCH_NSWEEP_u64_v0.6.0.md)
+  — v0.6.0 n-sweep on Ultimate 64 hardware (part of this release
+  pass).
+- [`docs/precalc-tables.md`](docs/precalc-tables.md) — SPEC §8.0
+  precalc-table enumeration rationale and exempt list.
+- [`docs/RELEASE_NOTES_v0.5.0.md`](docs/RELEASE_NOTES_v0.5.0.md) —
+  v0.5.0 release notes.
+- [`docs/RELEASE_NOTES_v0.6.0.md`](docs/RELEASE_NOTES_v0.6.0.md) —
+  v0.6.0 release notes (created in this release pass).
 - [`docs/design/ct_mul_8x8.md`](docs/design/ct_mul_8x8.md) —
   branchless 8×8 multiply design memo (Profile B F3 fix).
 - [`docs/OPTIMIZATION_PLAN.md`](docs/OPTIMIZATION_PLAN.md) — the
@@ -285,12 +398,15 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.5.0**, which lands the C4 branchless
+The current release is **v0.6.0** (tagged 2026-07-28;
+`src/lib_version.s` declares 0.6.0, `LIB_ABI_VERSION` stays 1): the
+c64-lib-contract adoption + size-variants release, closing issue #34
+with the ar65 archive variants and the rolled-multiply size knobs
+(config D: 8,230 B linked consumer footprint — see "Size variants"
+above). The prior release, **v0.5.0**, landed the C4 branchless
 rotl-4 LUT optimization on the ChaCha20 quarter-round (−8.8%
 `chacha20_block`, −3.8% / −1.9% AEAD encrypt at n=1024 for Profile
-A / B vs v0.4.0). Library PRGs change vs v0.4.0 — consumers
-integrating PRG binaries directly should re-integrate. Tagged
-releases are published on the
+A / B vs v0.4.0). Tagged releases are published on the
 [GitHub releases page](https://github.com/JC-000/c64-ChaCha20-Poly1305/releases).
 
 Reference build fingerprints for v0.5.0 (md5 of
