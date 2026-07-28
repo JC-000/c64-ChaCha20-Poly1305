@@ -15,8 +15,10 @@
 # script must reproduce the SHA256 recorded in the matching
 # docs/RELEASE_NOTES_<tag>.md.
 #
-# File list: the canonical consumer-vendoring set. `src/lib/*.s` are
-# the library modules consumers link; `src/main.s` is the library's
+# File list: the canonical consumer-vendoring set. `src/lib/*.s` plus
+# `src/zp_config.s` / `src/lib_version.s` / `src/precalc_table.inc`
+# are the modules consumers link (all mandatory on the v0.6.0+ link
+# line per docs/INTEGRATION.md); `src/main.s` is the library's
 # own test/bench driver (consumers omit it per docs/INTEGRATION.md but
 # it ships in the tarball so the upstream build is reproducible from
 # the artifact). `src/include/` ships the vendored ca65hl macros and
@@ -56,9 +58,11 @@ git archive \
   "$TAG" \
   src/c64.cfg src/main.s \
   src/include/ca65hl src/include/smc.inc \
+  src/zp_config.s src/lib_version.s src/precalc_table.inc \
   src/lib/constants_lib.s src/lib/data_lib.s \
   src/lib/word32_lib.s src/lib/chacha20_lib.s \
   src/lib/poly1305_lib.s src/lib/chacha20poly1305_lib.s \
+  src/lib/lib_manifest.s \
   Makefile README.md CHANGELOG.md LICENSE \
   docs/API.md docs/INTEGRATION.md docs/MEMORY_MAP.md \
   docs/AUDIT.md docs/CT_ANALYSIS.md \

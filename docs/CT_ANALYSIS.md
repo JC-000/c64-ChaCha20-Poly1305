@@ -822,7 +822,7 @@ addresses):
   (`src/lib/poly1305_lib.s`) — the SMC target sites for the
   quarter-square sum-page dispatch. The target-site `lda abs,x`
   placeholder operand is now derived from `sqtab_lo` / `sqtab_hi`
-  equates (v0.5.1 hardening, issue #40 audit follow-up) so the
+  equates (v0.6.0 hardening via PR #41, issue #40 audit follow-up) so the
   static image stays consistent with `LIB_SHARED_SQTAB_BASE` under
   consumer overrides. CT properties unchanged: the hi-byte patch
   is a 4 cy `sta abs`, the subsequent indexed load is 4 cy on a
@@ -1036,3 +1036,65 @@ and are the intended post-fix steady state.
 that tracks this verdict; `docs/REPRO_CHECK.md` records the
 bit-for-bit reproducibility gate on the merged-main CT-fix
 commit.
+
+---
+
+## Variant builds (v0.6.0 — static review only)
+
+v0.6.0 adds three default-off build variants. What follows is a
+**static review of the variant paths**, not a re-run of the full
+per-branch audit above — the GREEN verdict was established on the
+default builds.
+
+### `POLY1305_MULTIPLY_ROLLED` (Profile B)
+
+Re-rolls the 17×16 schoolbook in `poly1305_multiply`
+(`src/lib/poly1305_lib.s`) into runtime J-outer / I-inner loops.
+Loop control uses public counters only: `@rolled_iloop` exits on
+`poly_i` vs `#17`, `@rolled_jloop` on `poly_j` vs `#16`, and the
+running product index (kept in `poly_carry`) is `i + j` — a
+function of loop counters, never of secret data. The only other
+branch is `bcc @no_ripple` on the accumulator carry-out, the same
+plan-accepted carry-chain class as §4.1. All indexed accesses
+(`lda poly_r,x`, `ldy poly_h,x`, `lda`/`sta poly_product,x`) use
+those public indices, and `poly_product`..`poly_product+32` fits
+on a single page, so no page-cross channel. The multiply itself is
+the already-analyzed `ct_mul_8x8` (`abs,x` on the page-aligned
+sqtab), with `r[j]` SMC-baked into `smc_sum_a_imm` /
+`smc_diff_a_imm` once per outer iteration — the same fixed-cycle
+`sta abs` + immediate-use pattern classified GREEN in §5.2.
+
+### `POLY1305_MULTIPLY_ROLLED_OUTER` (Profile B)
+
+Midpoint form of the same rewrite: only the outer j loop is
+runtime (`@outer_jloop`, exit via `beq @outer_done` on `poly_j`
+vs `#16`); the 17 inner partial products remain a straight-line
+`.repeat` expansion with compile-time `poly_h + I` operands.
+Per-partial branches are the `bcc :+` carry-ripple (§4.1 class);
+the ripple-start index on the taken path is built from
+`txa / adc #(I+2)` where X = `poly_j` (public counter) and I is a
+compile-time constant. Column indexing
+(`lda`/`sta poly_product + I, x`) uses X = `poly_j`, public.
+
+### `CHACHA20_USE_WORD32`
+
+Addressing-mode change on public data only: the `*_zp`
+add/xor/rotate macros in `src/lib/chacha20_lib.s` degrade from
+inline ZP-direct bodies into `jsr`s against the word32 ABI,
+storing compile-time-literal ZP addresses into `w32_dst` /
+`w32_src1` first. The subroutines reached in this library's own
+`word32_lib.s` (`add32_to_dst`, `xor32_in_place`, `rotl32_1`,
+`rotl32_4`, `rotl32_8`, `rotl32_16`, `rotr32_1`) are straight-line
+and branch-free; every access is `(w32_dst),y` with constant Y in
+0..3 against public state addresses, so page-cross timing depends
+only on the public layout, never on secret values. `rotl32_1` /
+`rotr32_1` are the branchless F2-generalization rewrites (see the
+F2 Resolution above). **Caveat** (per the warning header in
+`chacha20_lib.s`): with `CHACHA20_USE_WORD32` the CT property is
+delegated to whichever word32 implementation the consumer links —
+the c64-wireguard / c64-https reference `word32.s` files use
+*branching* rotate-by-1 and would reintroduce the F2 channel.
+
+No new secret-dependent branches and no new secret-indexed
+addressing (beyond the already-analyzed sqtab `abs,x` pattern
+inside `ct_mul_8x8`) were found in any of the three variant paths.

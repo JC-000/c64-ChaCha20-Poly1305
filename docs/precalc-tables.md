@@ -23,6 +23,18 @@ libs that should be promoted to a §8.x shared-primitive clause.
 | `r_tab_lo` | 4096 B | main RAM (`$6000..$6FFF`) | `src/lib/poly1305_lib.s` (Profile A `shoup_init`, allocated via equate in `src/lib/constants_lib.s`) | **Library-specific** | Poly1305 Shoup precomputation, low byte: `T_j[x] = (x * r[j]) & $FF` for `j` in `[0..15]`, `x` in `[0..255]`. The table content is keyed off the per-message random Poly1305 `r` value, so no sibling lib can converge on the same bytes — no candidate §8.x promotion path. Profile A only; Profile B uses sqtab via `ct_mul_8x8` instead. |
 | `r_tab_hi` | 4096 B | main RAM (`$7000..$7FFF`) | `src/lib/poly1305_lib.s` (Profile A `shoup_init`) | **Library-specific** | Hi byte of the same Shoup precomputation: `T_j[x] = (x * r[j]) >> 8`. Same library-private classification rationale as `r_tab_lo`. Profile A only. |
 
+## §8.3 `ct_mul_8x8` (code body — not enumerated above)
+
+The other §8.x primitive this library ships, the constant-time 8×8
+multiply body `ct_mul_8x8` (SPEC §8.3; canonical owner: this repo),
+is a code body rather than a precomputed table, so it has no §8.0
+`LIB_PRECALC_TABLE` entry. It is claimed via bit `$0004`
+(`LIB_SHARED_PRIMITIVES_CT_MUL_8X8`) in
+`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES`, dropped when
+`SHARED_CT_MUL_8X8` is defined (same PR #43 gating pattern as the
+sqtab bit). Together with the §8.1 sqtab bit `$0001` above, this
+fully accounts for the default mask value `$0005`.
+
 ## Below the §8.0 floor (exempt)
 
 These items appear in the library but do not meet the §8.0 floor
@@ -73,8 +85,10 @@ od65 --dump-exports build/profile-a/lib_manifest.o | grep -A1 LIB_PRECALC_sqtab_
 The `sqtab` enumeration row is emitted on both profiles even though
 Profile A no longer allocates the table itself (issue #34 F1 gated
 `sqtab_lo`/`sqtab_hi`/`sqtab_init`/`mul_8x8` out of Profile A). This
-matches the unconditional `LIB_SHARED_PRIMITIVES_SQTAB` bit claim in
-`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` and the SPEC §8.1
+matches the default-build `LIB_SHARED_PRIMITIVES_SQTAB` bit claim in
+`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` (since PR #43 the bit is
+dropped when `SHARED_SQTAB_INIT` is defined — the issue #21
+build-config gating in `src/lib/lib_manifest.s`) and the SPEC §8.1
 canonical-name back-link: when a composed build links this library
 alongside a sibling that *does* ship sqtab, the §8.1 contract still
 governs the shared sqtab placement, and the §8.0 enumeration row is

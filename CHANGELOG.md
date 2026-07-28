@@ -4,17 +4,27 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-07-28
 
-Portability + tooling + correctness sprint. Adds a runtime REU
-layout API for downstream coexistence, an n-sweep benchmark mode
+Portability + tooling + correctness release. Adopts the
+c64-lib-contract consumer surface (exported version equates, the
+`zp_config.s` ZP-config header, manifest equates, ar65 archive
+variants, and the SPEC §8 shared-primitive clauses), adds a runtime
+REU layout API for downstream coexistence, an n-sweep benchmark mode
 for packet-size sensitivity work, and corrects a planning-doc claim
 about REU/Shoup caching that doesn't survive the per-packet `r`
 dependency. Minor `poly1305_final` loop fuse contributes a
 consistent ~200 cy / packet on both profiles (below per-measurement
 noise but signal across the 20-point sweep). Late in the cycle, the
 issue #34 F1 slimming removes the entire `POLY1305_REU` path (and
-with it the runtime REU layout API added above) — see **Removed**.
+with it the runtime REU layout API added above) — see **Removed**;
+the rolled-multiply variants and the `lib-aead-only` archive then
+close issue #34 outright (see **Added**). `src/lib_version.s` now
+declares 0.6.0 (`LIB_ABI_VERSION` stays 1).
+
+Semver: **MINOR** bump — additive export surface (`LIB_VERSION_*`,
+manifest equates, variant build targets) plus removal of the
+`poly1305_reu_*` surface (pre-1.0, removals allowed in MINOR).
 
 ### Removed
 - **The `POLY1305_REU` path and Profile A's sqtab** (issue #34 F1,
@@ -25,14 +35,13 @@ with it the runtime REU layout API added above) — see **Removed**.
   or `mul_8x8`, and the REU stash had nothing left to stash. Gone
   with it: `poly1305_reu_restore`, the `poly1305_reu_sqtab_bank` /
   `poly1305_reu_sqtab_offset` runtime cells (added earlier in this
-  same unreleased cycle, issue #19), and the `POLY1305_REU` /
+  same release cycle, issue #19), and the `POLY1305_REU` /
   `POLY1305_REU_BANK` / `POLY1305_REU_OFFSET` defines. **The
   library now issues no REU DMA on any code path in any profile**;
   `LIB_CHACHA20_POLY1305_REU_BANKS_USED` reads `$00`
   unconditionally, and `$8000..$83FF` is consumer-reclaimable on
   Profile A builds. Breaking for consumers of the removed symbols
-  (semver MAJOR-worthy on the pre-1.0 scale — flagged in
-  `docs/INTEGRATION.md` §Stability); consumers that never defined
+  (flagged in `docs/INTEGRATION.md` §Stability); consumers that never defined
   `POLY1305_REU` are unaffected. Also removes any REU-DMA
   wall-clock floor on turbo hosts (issue #44 context): all hot
   paths now scale with CPU clock.
@@ -67,9 +76,61 @@ with it the runtime REU layout API added above) — see **Removed**.
   U64 path so a sibling agent's bench (at e.g. 48 MHz) cannot leak
   CIA-rate mismeasurement into these (non-timing-sensitive but
   device-sharing) tools, and vice versa.
-
-### Added
-- **c64-lib-contract SPEC §8.0 catch-loop adoption** (commit `2b340d2`).
+- **Exported `LIB_VERSION_MAJOR` / `LIB_VERSION_MINOR` /
+  `LIB_VERSION_PATCH` (plus `LIB_ABI_VERSION`) constants** in
+  `src/lib_version.s`
+  ([PR #30](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/30),
+  issue #28). The value tracks the release — 0.6.0 as of this
+  release — with `LIB_ABI_VERSION` at 1.
+- **`CHACHA20_USE_WORD32` opt-in build-time define**
+  ([PR #31](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/31),
+  issue #27) — pointer-mode profile; default OFF preserves the
+  existing codegen.
+- **`src/zp_config.s` `.exportzp` ZP-config header**
+  ([PR #32](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/32),
+  issue #26). The ZP equates move out of `constants_lib.s` (which
+  now `.importzp`s them) — a consumer-visible relocation mechanism
+  and a new link-line object.
+- **Manifest equates** (surviving set)
+  ([PR #33](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/33),
+  issue #29): `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` and a
+  profile-aware `RESIDENT_BYTES` equate. *Note: the REU-layout part
+  of this PR was later removed by
+  [PR #38](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/38)
+  — see **Removed**.*
+- **`make lib` / `make lib-aead-only` ar65 archive targets**
+  ([PR #35](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/35),
+  issue #34), per c64-lib-contract SPEC §6. Outputs
+  `build/lib/c64-chacha20-poly1305.a` and
+  `build/lib/c64-chacha20-poly1305-aead-only.a`; the
+  `LIB_VARIANT_AEAD_ONLY=1` toggle strips test-only exports.
+- **`POLY1305_MULTIPLY_ROLLED` / `POLY1305_MULTIPLY_ROLLED_OUTER`
+  size↔cycles variants** (default off) plus `make profile-b-rolled`
+  / `make profile-b-rolled-outer` targets
+  ([PR #36](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/36),
+  issue #34). Measured "config D": `make lib-aead-only` +
+  `-DPOLY1305_MULTIPLY_ROLLED_OUTER=1` gives an 8,230 B linked
+  consumer footprint (~3.8 KB under c64-wireguard's ~12 KB budget)
+  at +4.08% cycles on `aead_encrypt` n=1024. This closed issue #34
+  (2026-07-28).
+- **c64-lib-contract SPEC §8.1 canonical sqtab adoption via
+  `LIB_SHARED_SQTAB_BASE`**
+  ([PR #39](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/39);
+  follow-up SMC-operand fix in
+  [PR #41](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/41)
+  — see **Fixed**). The quarter-square table base becomes the
+  contract's canonical consumer-overridable equate
+  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`).
+- **c64-lib-contract SPEC §8.3 `ct_mul_8x8` canonical-owner bit
+  `$0004`**
+  ([PR #43](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/43),
+  issue #21), with a build-config-gated conditional mask:
+  `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` defaults to `$0005`,
+  and the `SHARED_SQTAB_INIT` / `SHARED_CT_MUL_8X8` deferral
+  switches each drop their bit.
+- **c64-lib-contract SPEC §8.0 catch-loop adoption**
+  ([PR #42](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/42),
+  commit `9e08f24`).
   Adds the canonical `LIB_PRECALC_TABLE` macro source to
   `src/precalc_table.inc` (copied verbatim from
   `c64-lib-contract@b039ab9` per SPEC §8.0 convention) and emits five
@@ -96,7 +157,7 @@ with it the runtime REU layout API added above) — see **Removed**.
   offset=$0000`, baked at link time from the existing assemble-time
   defines (`POLY1305_REU_BANK` / `POLY1305_REU_OFFSET`), so existing
   consumers that never touch the cells get identical behavior to
-  v0.5.0. *Note: removed later in this same unreleased cycle along
+  v0.5.0. *Note: removed later in this same release cycle along
   with the whole `POLY1305_REU` path — see **Removed** above.*
 - **`--sweep` benchmark mode** in `tools/benchmark_chacha20_poly1305.py`
   (additive flag, doesn't break n=0/n=1024 single-shot mode). Sweeps
@@ -125,9 +186,12 @@ with it the runtime REU layout API added above) — see **Removed**.
   drives the data-pointer ADC off `tya` from the in-flight loop
   counter. Cumulative ≈ −10 cy at n=1024 (below per-measurement
   noise; clean-up only).
-- **PRG fingerprints update.** Reference builds at sprint HEAD:
-  - profile-a: `b1c2a68f3a39593231a5d3bd1c0f15db`
-  - profile-b: `4afe54d466ad92ca38b91c94a2ea2b36`
+- **PRG fingerprints update.** Reference builds at v0.6.0 HEAD:
+  - profile-a: `79deb98c0028488f84278aa2ec645c9d` (16,168 B)
+  - profile-b: `4afe54d466ad92ca38b91c94a2ea2b36` (17,448 B)
+  The `LIB_VERSION_*` equate bump emits no bytes, so these match
+  the post-[PR #41](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/41)
+  fingerprints.
 
 ### Fixed
 - **`ct_mul_8x8` SMC target-site operand is now derived from
@@ -142,12 +206,15 @@ with it the runtime REU layout API added above) — see **Removed**.
   static image was out of sync with a consumer override
   (`-DLIB_SHARED_SQTAB_BASE=$<addr>`) until the patch ran.
   Defense in depth: assembled bytes are now `BD 00 <hi(sqtab_lo)>` /
-  `BD 00 <hi(sqtab_hi)>` from the start. Default standalone build is
-  byte-identical to v0.5.0 on both profiles
-  (profile-a md5 `79deb98c…`, profile-b md5 `4afe54d4…`). 214/214
+  `BD 00 <hi(sqtab_hi)>` from the start. The fix itself changes no default-build bytes —
+  fingerprints are identical before and after it within this release
+  cycle (profile-a md5 `79deb98c…`, profile-b md5 `4afe54d4…`; both
+  differ from v0.5.0's, which predate the PR #38 dead-code
+  gating). 214/214
   tests pass on default profile-a, default profile-b, and an
   `LIB_SHARED_SQTAB_BASE=$7800` override build. Issue #40 audit
-  follow-up; semver PATCH (v0.5.1).
+  follow-up
+  ([PR #41](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/41)).
 - **`docs/OPTIMIZATION_PLAN.md` retracts the "Optional Step 10 REU
   Shoup-table preload" claim** (commit `b3eac9b`). The original
   proposal conflated the r-independent quarter-square table (sqtab —

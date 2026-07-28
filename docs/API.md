@@ -1,13 +1,14 @@
-# c64-ChaCha20-Poly1305 — Public API (v0.3.0 draft)
+# c64-ChaCha20-Poly1305 — Public API (v0.6.0)
 
 Audit of the `.export` surface across `src/main.s` and `src/lib/*.s`.
 Calling conventions are taken from the block-comment headers above
-each entry. Cycle counts cited are the S13-era Profile A numbers
-from `s13_results.md` unless otherwise noted.
+each entry. Cycle counts cited are the current measured numbers from
+`docs/BENCH_REPORT.md` / `docs/BENCH_GRANULAR.md` (VICE backend,
+Profile B build, min of 3 samples) unless otherwise noted.
 
-> **Naming note.** The task brief mentioned a symbol `poly1305_tag_finalize`.
-> **That symbol does not exist in the source tree.** The actual finalization
-> entry is `poly1305_final` (in `poly1305_lib.s`). See §Poly1305 below.
+> **Naming note.** The Poly1305 finalization entry is `poly1305_final`
+> (in `poly1305_lib.s`). No symbol named `poly1305_tag_finalize` exists
+> in the source tree. See §Poly1305 below.
 
 ---
 
@@ -100,10 +101,15 @@ All live in the library's DATA segment (see `data_lib.s` and
   `cc20_state+48..51` has been incremented as a 32-bit LE counter.
 - **Clobbers**: A, X, Y.
 - **CT contract**: input secret is the ChaCha state (derived from
-  `cc20_key`). Block is nominally straight-line but **contains
-  secret-dependent timing variance** from the rotl/r 1-bit rotate
-  carry-wrap branches — see `CT_ANALYSIS.md` finding F2.
-- **Performance (S13, Profile A)**: 44 480 cy/block.
+  `cc20_key`). **Constant-time.** The former secret-dependent timing
+  variance from the rotl/r 1-bit rotate carry-wrap branches
+  (`CT_ANALYSIS.md` finding F2) was resolved in the v0.3.0 CT fix
+  (PR #14): the rotates are now branchless ASL/ROL chains, and the
+  nibble-swap LUT loads are `abs,x` on page-aligned bases. See the
+  Resolution section of `CT_ANALYSIS.md`; aggregate audit verdict is
+  **GREEN** (`AUDIT.md`).
+- **Performance**: 39 318 cy/block (`docs/BENCH_REPORT.md`, VICE,
+  Profile B build, min of 3 samples).
 - **Example**:
   ```ca65
   jsr chacha20_block        ; cc20_work[0..63] = keystream
@@ -152,9 +158,11 @@ All live in the library's DATA segment (see `data_lib.s` and
 - **Postconditions**: one QR applied in place.
 - **Clobbers**: A, X, Y, `w32_dst`, `w32_src1`.
 - **CT contract**: **test-only** — not on any production path.
-  Goes through `rotl32_7` (word32_lib subroutine) which has the
-  same secret-dep carry-wrap branch as the production ZP macros.
-  Do not call from deployed code.
+  Goes through `rotl32_7` (word32_lib subroutine), branchless since
+  the v0.3.0 F2 fix. Do not call from deployed code.
+- **Availability**: Not exported when `LIB_VARIANT_AEAD_ONLY=1`
+  (the function body is assembled out of the aead-only variant,
+  which also removes the library's only `jsr rotl32_7`).
 
 ### Data symbols exported from chacha20_lib.s
 
@@ -183,10 +191,13 @@ All live in the library's DATA segment (see `data_lib.s` and
 - **CT contract**: straight-line. Data bytes are SECRET if caller
   passes ChaCha state; timing depends only on pointer values
   (public addresses), not on loaded bytes. Constant-time *when
-  called from the production hot path* — but note: the production
-  hot path (`chacha20_block`) does **not** use these — it inlines
-  macros in `chacha20_lib.s`. These subroutines are reachable
-  only via `chacha20_quarter_round` (test-only).
+  called from the production hot path* — but note: in the default
+  build the production hot path (`chacha20_block`) does **not** use
+  these — it inlines macros in `chacha20_lib.s`, and these
+  subroutines are reachable only via `chacha20_quarter_round`
+  (test-only). In `CHACHA20_USE_WORD32` pointer-mode builds (see
+  §7) the inline macros are replaced with `jsr`s into these
+  subroutines, putting them on the production path.
 
 ### rotl32_4 / rotl32_8 / rotl32_12 / rotr32_4 / rotr32_8 / rotr32_12 / rotr32_16
 
@@ -199,32 +210,31 @@ All live in the library's DATA segment (see `data_lib.s` and
 
 ### rotl32_1 / rotl32_7 / rotr32_1 / rotr32_7
 
-- **Module**: `word32_lib.s:286, 479, 447, 281`
+- **Module**: `word32_lib.s:317, 509, 480, 299`
 - **Purpose**: 1-bit and 7-bit rotations.
   `rotl32_7` = `rotl32_8` then `rotr32_1`.
   `rotr32_7` = `rotr32_8` then `rotl32_1`.
 - **Signature**: via `w32_dst`.
 - **Clobbers**: A, Y. Preserves X.
-- **CT contract**: **NOT constant-time.** `rotl32_1` and
-  `rotr32_1` contain a `bcc @done` that skips the carry-wrap OR
-  depending on bit 31 / bit 0 of the rotated word. See
-  `CT_ANALYSIS.md` finding **F2**. Only reachable from production
-  via the test-only `chacha20_quarter_round` entry — dead from the
-  real AEAD path. They are still exported because the Python test
-  harness resolves them by name for unit-test coverage.
-- **Dead-code status (answer to team-lead Q1)**:
-  - `rotl32_1` (line 286): fall-through from `rotr32_7:` (line 281).
-    Nothing in the library imports `rotr32_7` directly. **Dead
-    from production; reachable from tests only.**
-  - `rotr32_1` (line 447): tail-call target from `rotl32_7:` (line
-    479 `jmp rotr32_1`). `rotl32_7` is `.import`ed by
-    `chacha20_lib.s:21` and called at `chacha20_lib.s:537`, inside
-    `chacha20_quarter_round` — the test-only entry. **Dead from
-    `chacha20_block`; reachable from tests only.**
-  - Fix agent can freely delete the 1-bit-rotate subroutines if
-    the test coverage for `chacha20_quarter_round` can be dropped
-    or migrated to a pure-Python reference. Alternative: fix the
-    branch in place and keep the test.
+- **CT contract**: **constant-time** since v0.3.0. The former
+  `bcc` carry-wrap branch on bit 31 / bit 0 of the rotated word
+  (`CT_ANALYSIS.md` finding **F2**) was rewritten as a branchless
+  ASL/ROL chain in the v0.3.0 CT fix (PR #14); no conditional
+  branch remains. See the Resolution section of `CT_ANALYSIS.md`;
+  audit verdict **GREEN** (`AUDIT.md`).
+- **Reachability**: `rotr32_7` falls through into `rotl32_1`, and
+  `rotl32_7` tail-calls `rotr32_1` (`jmp`), so the four routines
+  form two linked pairs. In the default build they are reached
+  only via the test-only `chacha20_quarter_round` entry; in
+  `CHACHA20_USE_WORD32` pointer-mode builds (see §7) `rotr32_1`
+  is on the `chacha20_block` hot path. All four are exported from
+  the full archive because the Python test harness resolves them
+  by name for unit-test coverage.
+- **Availability**: `rotl32_1`, `rotl32_7`, and `rotr32_7` are not
+  exported when `LIB_VARIANT_AEAD_ONLY=1` (bodies remain in the
+  `.o`; only the symbol-table footprint shrinks). `rotr32_1`
+  remains exported in both variants so a pointer-mode
+  `chacha20_lib.o` import resolves at consumer link time.
 
 ---
 
@@ -312,10 +322,15 @@ cells) was deleted. Upgrade notes for consumers of the removed API:
   dirty.
 - **Clobbers**: A, X, Y.
 - **CT contract**: inputs SECRET (block bytes, `poly_h`, `poly_r`).
-  See `CT_ANALYSIS.md` §C for branch classification. **Profile B
-  goes through `mult66` which has a known secret-dependent branch
-  and a secret-dependent `(lmul0),y` page-cross cycle (F3).**
-- **Performance (S13)**: Profile A 11 950 cy; Profile B 27 073 cy.
+  See `CT_ANALYSIS.md` §C for branch classification. Profile B goes
+  through `ct_mul_8x8`, the branchless quarter-square multiply that
+  replaced `mult66` in the v0.3.0 CT fix — finding **F3 resolved**.
+  All its table loads are `abs,x` on page-aligned bases, so no
+  secret-dependent addressing-mode timing remains. Audit verdict
+  **GREEN** (`AUDIT.md`).
+- **Performance**: Profile B 38 002 cy (`docs/BENCH_REPORT.md`,
+  VICE, min of 3 samples; the current granular report covers the
+  Profile B build).
 - **Example**:
   ```ca65
   lda #<my_block
@@ -352,11 +367,14 @@ cells) was deleted. Upgrade notes for consumers of the removed API:
 - **Postconditions**: `poly1305_tag[0..15]` holds the final MAC.
   `poly_h` is clobbered (holds the post-reduction value pre-add-s).
 - **Clobbers**: A, X, Y.
-- **CT contract**: ⚠ **CONTAINS A KNOWN SECRET-DEPENDENT BRANCH
-  ON `h + 5` OVERFLOW** — `beq @no_reduce` at line 1021.
-  See `CT_ANALYSIS.md` finding **F1**. This is the module entry
-  that the task brief called "`poly1305_tag_finalize`"; the actual
-  name in the source tree is `poly1305_final`.
+- **CT contract**: **constant-time** since v0.3.0. The former
+  secret-dependent branch on bit 130 of `h + 5` (`CT_ANALYSIS.md`
+  finding **F1**) was replaced in the v0.3.0 CT fix (PR #14) with a
+  branchless mask-blend: both candidate outputs (`h` and `h − p`)
+  are computed in a fixed-length sequence and blended byte-by-byte
+  via a borrow-derived sign mask, so control flow is identical for
+  all secret inputs. See the Resolution section of
+  `CT_ANALYSIS.md`; audit verdict **GREEN** (`AUDIT.md`).
 - **Example**:
   ```ca65
   jsr poly1305_final         ; MAC now in poly1305_tag
@@ -372,30 +390,35 @@ exposed for the test harness and for composable re-use.
 - **`poly1305_multiply`** (`poly1305_lib.s:700`): 17×16 schoolbook
   multiply `h *= r`, falls through into `poly1305_reduce`. Called
   from `poly1305_block`. Profile-gated: Profile A uses Shoup
-  tables (`poly_pp_shoup`); Profile B uses mult66
-  (`poly_pp_mult66`).
+  tables (`poly_pp_shoup`); Profile B inlines `ct_mul_8x8` partial
+  products (`poly_pp_ct_mul`), or runtime-rolled forms under
+  `POLY1305_MULTIPLY_ROLLED` / `POLY1305_MULTIPLY_ROLLED_OUTER`
+  (see §7).
 - **`poly1305_reduce`** (`poly1305_lib.s:765`): Fused Donna-style
   wrap reduction of `poly_product` into `poly_h`.
-- **`sqtab_init`** (`poly1305_lib.s:346`): Build sqtab_lo/hi from
-  scratch via the `i² = (i-1)² + 2i − 1` recurrence.
-  `poly1305_lib_init` calls this gated on `sqtab_ready`.
-- **`mul_8x8`** (`poly1305_lib.s:473`): Legacy 8×8→16 multiply via
-  sqtab. Used by `sqtab2_init` implicitly (via earlier sqtab
-  access) and retained for test-vector compatibility. Inputs:
-  A, X. Outputs: `poly_prod_lo/hi`. Profile A hot path does not
-  call this — it's kept alive because Profile B mult66 uses
-  sqtab as its primary table and because `shoup_init`'s S11
-  incremental form was derived from (and must stay consistent with)
-  the mul_8x8 result for test vectors.
+- **`sqtab_init`** (`poly1305_lib.s:359`, Profile B only): Build
+  sqtab_lo/hi from scratch via the `i² = (i-1)² + 2i − 1`
+  recurrence. `poly1305_lib_init` calls this gated on
+  `sqtab_ready`. Not exported when `SHARED_SQTAB_INIT` is defined
+  — the consumer's canonical `mul_tables_init` takes over per
+  c64-lib-contract SPEC §8.1 (see §7).
+- **`mul_8x8`** (`poly1305_lib.s:454`, Profile B only): Legacy
+  8×8→16 multiply via sqtab. Replaced by `ct_mul_8x8` (the
+  constant-time, page-cross-safe variant) on every hot path in the
+  v0.3.0 CT fix; nothing inside the library calls it anymore — the
+  only callers are the external Python tests, and it is retained
+  for test-vector compatibility. Inputs: A, X. Outputs:
+  `poly_prod_lo/hi`. Not exported when `LIB_VARIANT_AEAD_ONLY=1`
+  (body remains in the `.o`; only the symbol-table entry shrinks).
 - **`shoup_init`** (Profile A only, `poly1305_lib.s:246`):
   incremental-ripple builder for the 8 KB Shoup `r_tab_lo/hi`.
   SMC-heavy: per outer-j iteration, patches six RAM addresses and
   one `adc #imm` immediate.
-- **`poly_prod_lo`, `poly_prod_hi`** (`poly1305_lib.s:470-471`):
-  output bytes of `mul_8x8` / `mult66`.
-- **`poly_ripple`** (`poly1305_lib.s:600`): propagate a carry
+- **`poly_prod_lo`, `poly_prod_hi`** (`poly1305_lib.s:452-453`):
+  output bytes of `mul_8x8` / `ct_mul_8x8`.
+- **`poly_ripple`** (`poly1305_lib.s:605`): propagate a carry
   upward through `poly_product` starting at index X. Called from
-  the unrolled schoolbook's `poly_pp_shoup` / `poly_pp_mult66`
+  the unrolled schoolbook's `poly_pp_shoup` / `poly_pp_ct_mul`
   when an add leaves carry set.
 
 ---
@@ -418,10 +441,14 @@ exposed for the test harness and for composable re-use.
 - **Clobbers**: A, X, Y, most of `cc20_*` and `poly_*` state.
 - **CT contract**: `aead_key` and plaintext are SECRET;
   `aead_nonce`, `aead_aad_*`, and lengths are PUBLIC.
-  **Aggregate CT verdict: RED** pending the F1/F2/F3 fixes in
-  `CT_ANALYSIS.md`.
-- **Performance (S13, Profile A)**: 1 709 171 cy at n=1024;
-  187 063 cy at n=0.
+  **Aggregate CT verdict: GREEN** — findings F1/F2/F3 were all
+  resolved in the v0.3.0 CT fix (PR #14); no known secret-dependent
+  branches or secret-dependent addressing-mode timing remain on the
+  production AEAD hot path on either profile. See the `AUDIT.md`
+  verdict and the Resolution section of `CT_ANALYSIS.md`.
+- **Performance** (`docs/BENCH_REPORT.md`, VICE, Profile B build,
+  min of 3 samples): 3 195 600 cy at n=1024; 274 794 cy at n=64;
+  80 513 cy at n=0.
 - **Example**:
   ```ca65
   jsr poly1305_lib_init      ; once at startup
@@ -452,7 +479,8 @@ exposed for the test harness and for composable re-use.
   deterministic function of "tag match vs mismatch" and is
   **public by definition** (the API contract is to reveal that
   bit). This is the canonical CT tag-compare pattern. ✓
-  The rest of the AEAD chain inherits RED from the F1/F2 findings.
+  The rest of the AEAD chain is GREEN as of the v0.3.0 F1/F2/F3
+  resolutions (see `AUDIT.md`).
 - **Example**:
   ```ca65
   jsr aead_decrypt
@@ -493,7 +521,69 @@ on an uninitialized machine.
 - **Clobbers**: nothing.
 - **CT contract**: none — no data touched.
 
-The `.exportzp` declarations in `main.s:43-48` publish every ZP
-equate in `constants_lib.s` as a label-file symbol so VICE can
-resolve them. These are not callable entries, they are addresses
-in the ZP layout.
+The `.exportzp` declarations for the library's zero-page layout
+live in `src/zp_config.s` (moved out of `constants_lib.s`, which
+now `.importzp`s them — PR #32). Every ZP slot there is an
+`.ifndef`-guarded equate carrying its historical default address,
+`.exportzp`-ed so it appears in the linker symbol map (and VICE
+label files) and resolves cleanly across translation units.
+Consumers pin the layout to their own memory map by pre-defining
+any slot symbol before `zp_config.s` is assembled (a `-D name=$xx`
+ca65 command-line define), or by replacing the file entirely; the
+library source refers to these locations only by symbolic name, so
+moving an address there is sufficient to relocate a slot. These
+are not callable entries, they are addresses in the ZP layout.
+
+---
+
+## 7. Build-time defines
+
+All defines are passed at ca65 time (`-Dname` / `-Dname=value`).
+Every one of them defaults to *off* (undefined) except the value
+equate `LIB_SHARED_SQTAB_BASE`; the default build is therefore
+Profile B with the full export surface and unchanged codegen.
+
+| Define | Default | Effect | Added in |
+|--------|---------|--------|----------|
+| `POLY1305_PROFILE_LONG` | off (= Profile B) | Selects **Profile A** (long-message): `poly1305_init` builds the 8 KB Shoup per-r tables `r_tab_lo/hi` at `$6000..$7FFF` via `shoup_init`; the quarter-square sqtab, `sqtab_init`, and `mul_8x8` are not emitted at all (issue #34 F1). Undefined = **Profile B**: sqtab + `ct_mul_8x8`. `make profile-a` passes it. | v0.2 |
+| `LIB_VARIANT_AEAD_ONLY` | off | Builds the trimmed `make lib-aead-only` archive (`build/lib/c64-chacha20-poly1305-aead-only.a`): strips the test-only exports — `chacha20_quarter_round` (export and body), `rotl32_1` / `rotl32_7` / `rotr32_7`, and `mul_8x8` — while leaving the crypto code paths untouched. `rotr32_1` stays exported in both variants. | v0.6.0 (PR #35) |
+| `POLY1305_MULTIPLY_ROLLED` | off | Profile B only: `poly1305_multiply` becomes a runtime nested J/I loop instead of the 17×16 unrolled macro expansion — smallest code, largest cycle cost. `make profile-b-rolled`. | v0.6.0 (PR #36) |
+| `POLY1305_MULTIPLY_ROLLED_OUTER` | off | Profile B only: outer j loop rolled, the 17 inner partial products still inlined — the size↔cycles midpoint. Takes precedence over `POLY1305_MULTIPLY_ROLLED` when both are defined. Measured "config D": combined with the aead-only archive it yields an 8,230 B linked consumer footprint at +4.08% cycles on `aead_encrypt` n=1024. `make profile-b-rolled-outer`. | v0.6.0 (PR #36) |
+| `CHACHA20_USE_WORD32` | off | Opt-in pointer-mode: the ChaCha20 `*_zp` rotate/add/xor macros expand to `jsr`s into the shared `word32_lib.s` subroutines (via the `w32_dst` pointer convention) instead of inline ZP code — for consumers that already link a word32 module. Default off preserves the existing (faster, inline) codegen. | v0.6.0 (PR #31) |
+| `LIB_SHARED_SQTAB_BASE` | `$8000` | Value equate, Profile B only: relocates the 1 KB quarter-square table (`sqtab_lo` = base, `sqtab_hi` = base + `$0200`). Must be page-aligned (assemble-time `.assert`). This is the c64-lib-contract SPEC §8.1 canonical placement equate: a multi-lib PRG passes one shared `-DLIB_SHARED_SQTAB_BASE=$<addr>` so all §8.1 adopters agree on a single table. | v0.6.0 (PR #39) |
+| `SHARED_SQTAB_INIT` | off | c64-lib-contract SPEC §8.1 deferral: the library stops exporting `sqtab_init` and instead imports the consumer's canonical `mul_tables_init` (aliased locally so internal callers keep working), and drops the `$0001` sqtab bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES`. | v0.6.0 (PRs #39/#43) |
+| `SHARED_CT_MUL_8X8` | off | c64-lib-contract SPEC §8.3 deferral: drops the `$0004` `ct_mul_8x8` ownership bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` so two composed libs sharing the primitive present disjoint masks (issue #21). Manifest-only — it does not remove the `ct_mul_8x8` body (this library is the §8.3 canonical owner). | v0.6.0 (PR #43) |
+
+With neither `SHARED_*` switch defined, the manifest mask
+`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` reads its default
+`$0005` (sqtab `$0001` | ct_mul_8x8 `$0004`) — see
+`src/lib/lib_manifest.s`.
+
+---
+
+## 8. Version and ABI constants
+
+`src/lib_version.s` exports four assemble-time constants:
+
+| Symbol | Value (this release) |
+|--------|---------------------|
+| `LIB_VERSION_MAJOR` | 0 |
+| `LIB_VERSION_MINOR` | 6 |
+| `LIB_VERSION_PATCH` | 0 |
+| `LIB_ABI_VERSION`   | 1 |
+
+The semver triple tracks the released `CHANGELOG.md` version.
+Consumers can assemble-time guard against unsupported versions by
+importing the constants and testing them in a `.if`:
+
+```ca65
+.import LIB_VERSION_MAJOR, LIB_VERSION_MINOR
+.if LIB_VERSION_MINOR < 5
+    .error "needs c64-ChaCha20-Poly1305 v0.5+"
+.endif
+```
+
+`LIB_ABI_VERSION` covers the exported-symbol ABI surface: it is
+bumped on any breaking change to public symbol names, calling
+conventions, or the public ZP-cell contract (§6 / `zp_config.s`).
+It is 1 — the first published library-ABI surface — as of v0.6.0.

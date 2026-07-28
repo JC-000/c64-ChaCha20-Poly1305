@@ -1,6 +1,7 @@
 # Packet-size sweep — `aead_encrypt` (HEAD 77b35ad)
 
-- **Commit**: `77b35ad` (v0.5.0 release tag baseline)
+- **Commit**: `77b35ad` (post-v0.5.0; ships in v0.6.0)
+- **Release note (added at v0.6.0 tag time)**: this sweep was measured at the commit above, which post-dates the v0.5.0 tag and ships in v0.6.0. It predates the #30–#43 merges (archive targets, ROLLED variants, §8 manifest work); the delta section below covers the `poly1305_final` loop fuse. Build fingerprints above correspond to the sweep commit, not v0.6.0 release HEAD: profile-a's PRG changed after this sweep (v0.6.0: `79deb98c0028488f84278aa2ec645c9d`), profile-b's is byte-identical at v0.6.0.
 - **Generated**: 2026-05-16 13:44:39 UTC
 - **Methodology**: min-of-3 samples per (n, profile); chained CIA #1 Timer A+B 32-bit cycle counter in RAM at $C080.
 - **Backend**: u64
@@ -38,7 +39,7 @@ Derived cycles/byte:
 |      1024 |    1585.1 |    3121.3 |
 |      1500 |    1544.8 |    3116.7 |
 
-## Delta vs VICE (`docs/BENCH_NSWEEP_unreleased.md`)
+## Delta vs VICE (`docs/BENCH_NSWEEP_v0.6.0.md`)
 
 | n (bytes) | A VICE | A U64 | ΔA % | B VICE | B U64 | ΔB % |
 |----------:|---------:|---------:|-----:|---------:|---------:|-----:|
