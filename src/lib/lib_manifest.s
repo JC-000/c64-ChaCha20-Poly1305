@@ -134,7 +134,9 @@ LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 ;                                          body (defined in §8.3)
 ;
 ;   c64-ChaCha20-Poly1305 ships both the SPEC §8.1 sqtab and the §8.3
-;   ct_mul_8x8 body today (it is the canonical owner of the latter), so in
+;   ct_mul_8x8 body today (it is the canonical owner of the latter, and
+;   as of issue #47 actually EXPORTS `ct_mul_8x8` so a sibling can defer
+;   to it — before that the ownership claim here was unsatisfiable), so in
 ;   its default standalone build this lib claims both bits ($0005). Each
 ;   bit is conditional on this build NOT deferring that primitive: defining
 ;   SHARED_SQTAB_INIT or SHARED_CT_MUL_8X8 drops the corresponding bit so a
