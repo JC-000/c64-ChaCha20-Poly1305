@@ -59,8 +59,17 @@ PRECALC_SHARED_YES     = $01
 ;
 ; SIZE is exported without an address-size hint so values > 16 bits
 ; (e.g. the 131072-byte REU mul table) export cleanly as 'far'
-; without a "far but exported absolute" warning. REGION and SHARED
-; are byte-valued and exported without a hint for consistency.
+; without a "far but exported absolute" warning — its address size is
+; value-dependent by design (absolute at 1024, far at 131072).
+;
+; REGION and SHARED are pinned ': abs' instead. They can never exceed a
+; byte, so ca65 would infer 'zeropage' for them in every adopter, while
+; a consumer's .import defaults to absolute — which makes the §8.4
+; cross-check snippet emit an "Address size mismatch" warning on every
+; composed build. The link succeeds and the asserts evaluate correctly,
+; but the natural consumer reaction is to write '.import ... : zeropage',
+; pinning a manifest constant to an address size that is an artifact of
+; its current value rather than a property of the symbol.
 
 .macro LIB_PRECALC_TABLE name, size_bytes, region, shared, lib
     .ifndef LIB_NO_BARE_EXPORTS
@@ -69,8 +78,8 @@ PRECALC_SHARED_YES     = $01
         .ident (.sprintf("LIB_PRECALC_%s_SHARED", name)) = shared
 
         .export .ident (.sprintf("LIB_PRECALC_%s_SIZE",   name))
-        .export .ident (.sprintf("LIB_PRECALC_%s_REGION", name))
-        .export .ident (.sprintf("LIB_PRECALC_%s_SHARED", name))
+        .export .ident (.sprintf("LIB_PRECALC_%s_REGION", name)): abs
+        .export .ident (.sprintf("LIB_PRECALC_%s_SHARED", name)): abs
     .endif
 
     .if .not .blank (lib)
@@ -79,8 +88,8 @@ PRECALC_SHARED_YES     = $01
         .ident (.sprintf("LIB_%s_PRECALC_%s_SHARED", lib, name)) = shared
 
         .export .ident (.sprintf("LIB_%s_PRECALC_%s_SIZE",   lib, name))
-        .export .ident (.sprintf("LIB_%s_PRECALC_%s_REGION", lib, name))
-        .export .ident (.sprintf("LIB_%s_PRECALC_%s_SHARED", lib, name))
+        .export .ident (.sprintf("LIB_%s_PRECALC_%s_REGION", lib, name)): abs
+        .export .ident (.sprintf("LIB_%s_PRECALC_%s_SHARED", lib, name)): abs
     .else
         .ifdef LIB_NO_BARE_EXPORTS
             .error "LIB_PRECALC_TABLE: LIB_NO_BARE_EXPORTS suppresses the bare exports, so the lib-prefix argument is required — this invocation would emit nothing"

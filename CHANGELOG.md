@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`precalc_table.inc` re-copied from the v0.7.4 canonical** (issue #65).
+  The §8.4 macro now pins the `_REGION` and `_SHARED` exports `: abs`, so
+  they stop inferring `zeropage` from their byte-sized values and warning
+  against a consumer's absolute `.import`:
+
+  ```
+  ld65: Warning: Address size mismatch for 'LIB_CHACHA20_POLY1305_PRECALC_sqtab_REGION'
+  ```
+
+  Same defect class as #62, but in the contract's **verbatim-copied
+  canonical** rather than our own source, so it had to be fixed upstream
+  first — which is why #62 deliberately left it alone while
+  [c64-lib-contract#58](https://github.com/JC-000/c64-lib-contract/issues/58)
+  was still open. This is a clean verbatim re-copy of contract `9da3aca`
+  (SPEC v0.7.4); no local edits, no invocation changes.
+
+  `_SIZE` is deliberately left unhinted upstream — its address size is
+  value-dependent by design (absolute at 1024, far at 131072 for the §8.2
+  REU table), so pinning it would break the large-table adopters.
+
+  Measured: **2 warnings → 0** on our side, with the emitted equate sets
+  otherwise unchanged (Profile B 9 prefixed / 9 bare, Profile A 12 / 12;
+  bare suppressed under `LIB_NO_BARE_EXPORTS`). Both PRGs byte-identical.
+
+  Note the composed link with c64-x25519 **v0.9.0 still emits 2
+  warnings**, now entirely from its side — it has not yet re-copied the
+  v0.7.4 canonical. Was 4 before this change.
+
 ## [0.7.0] — 2026-08-13
 
 Contract-conformance release. Brings the library from c64-lib-contract
