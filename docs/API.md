@@ -554,12 +554,49 @@ Profile B with the full export surface and unchanged codegen.
 | `CHACHA20_USE_WORD32` | off | Opt-in pointer-mode: the ChaCha20 `*_zp` rotate/add/xor macros expand to `jsr`s into the shared `word32_lib.s` subroutines (via the `w32_dst` pointer convention) instead of inline ZP code — for consumers that already link a word32 module. Default off preserves the existing (faster, inline) codegen. | v0.6.0 (PR #31) |
 | `LIB_SHARED_SQTAB_BASE` | `$8000` | Value equate, Profile B only: relocates the 1 KB quarter-square table (`sqtab_lo` = base, `sqtab_hi` = base + `$0200`). Must be page-aligned (assemble-time `.assert`). This is the c64-lib-contract SPEC §8.1 canonical placement equate: a multi-lib PRG passes one shared `-DLIB_SHARED_SQTAB_BASE=$<addr>` so all §8.1 adopters agree on a single table. | v0.6.0 (PR #39) |
 | `SHARED_SQTAB_INIT` | off | c64-lib-contract SPEC §8.1 deferral: the library stops exporting `sqtab_init` and instead imports the consumer's canonical `mul_tables_init` (aliased locally so internal callers keep working), and drops the `$0001` sqtab bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES`. | v0.6.0 (PRs #39/#43) |
-| `SHARED_CT_MUL_8X8` | off | c64-lib-contract SPEC §8.3 deferral: drops the `$0004` `ct_mul_8x8` ownership bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` so two composed libs sharing the primitive present disjoint masks (issue #21). Manifest-only — it does not remove the `ct_mul_8x8` body (this library is the §8.3 canonical owner). | v0.6.0 (PR #43) |
+| `SHARED_CT_MUL_8X8` | off | c64-lib-contract SPEC §8.3 deferral (Profile B only). Gates out this library's `ct_mul_8x8` body, the legacy `mul_8x8` body, and the `poly_prod_lo`/`poly_prod_hi` scratch, and imports all of them — plus the `smc_sum_a_imm`/`smc_diff_a_imm` operand-bake sites — from the designated owner in the link. Also drops the `$0004` ownership bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` so two composed libs sharing the primitive present disjoint masks (issue #21). **Before issue #47 this switch was manifest-only**: it flipped the bit but left the body and all three exports in place, so a two-archive link against c64-x25519 v0.8.0 failed with `Duplicate external identifier: 'poly_prod_hi'`. | v0.6.0 (PR #43), fixed in #47 |
 
-With neither `SHARED_*` switch defined, the manifest mask
-`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` reads its default
-`$0005` (sqtab `$0001` | ct_mul_8x8 `$0004`) — see
-`src/lib/lib_manifest.s`.
+### Shared-primitive masks (SPEC §5 / §8.0)
+
+The library exports **two** masks. `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES`
+says what this build *owns*; `LIB_CHACHA20_POLY1305_SHARED_CONSUMES` (added
+in issue #52, required by contract v0.5.0) says what it *uses*. The pair
+distinguishes a **deferring consumer** — which still reads the primitive at
+runtime and so needs exactly one owner in the link — from a **non-consumer**,
+which needs no provider at all. The ownership bit alone cannot tell those
+apart, and they impose opposite obligations on the consumer.
+
+Two independent gates drive them: the **profile** gate drops a bit from
+*both* masks; a `SHARED_*` deferral switch drops it from the *ownership*
+mask only.
+
+| build | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
+|---|---|---|
+| Profile A | `$0000` | `$0000` |
+| Profile B standalone | `$0005` | `$0005` |
+| Profile B `-D SHARED_CT_MUL_8X8=1` | `$0001` | `$0005` |
+| Profile B `-D SHARED_SQTAB_INIT=1` | `$0004` | `$0005` |
+| Profile B, both switches | `$0000` | `$0005` |
+
+Profile A reads `$0000`/`$0000` because issue #34 F1 gated sqtab,
+`sqtab_init` and `mul_8x8` out of that profile entirely and `ct_mul_8x8` is
+Profile B only — it is a profile-gated non-consumer of both primitives.
+Before issue #51 both bits were claimed unconditionally, so Profile A
+advertised ownership of two primitives it does not emit; a consumer
+composing Profile A with c64-x25519 saw a false double-ownership collision,
+and the coverage assert wrongly concluded sqtab had an owner in the link.
+
+Consumer-side composition uses both masks together:
+
+```asm
+; no primitive owned twice
+.assert (LIB_A_SHARED_PRIMITIVES & LIB_B_SHARED_PRIMITIVES) = 0, error, "shared-primitive double-ownership"
+; no consumed primitive left without an owner
+.assert ((LIB_A_SHARED_CONSUMES | LIB_B_SHARED_CONSUMES) & ~(LIB_A_SHARED_PRIMITIVES | LIB_B_SHARED_PRIMITIVES)) = 0, error, "consumed shared primitive with no owner in the link"
+```
+
+See `src/lib/lib_manifest.s` for the gate construction and the
+adopter-side subset assert that pins ownership ⊆ consumes.
 
 ---
 
