@@ -120,8 +120,22 @@ reads `$00` unconditionally.
 ```
 $0000..$0001    LOADADDR segment (2-byte PRG header = $0801)
 $0801..$08FF    STUB    segment (BASIC SYS 2304 launcher, fill=yes)
-$0900..?????    MAIN    segment: CODE (align=$100) + DATA + BSS
+$0900..?????    MAIN    segment: CODE (harness `lib_entry` stub)
+                              + LIB_CHACHA20_POLY1305_CODE (align=$100)
+                              + DATA (consumer placeholder, empty in-tree)
+                              + LIB_CHACHA20_POLY1305_DATA
+                              + BSS
 ```
+
+As of the issue #48 migration the library emits only the SPEC §4 prefixed
+segments; bare `CODE`/`DATA` are left to the harness and to consumers.
+In the standalone build `CODE` holds just `main.s`'s 1-byte `lib_entry`
+stub at `$0900` (the BASIC stub's SYS 2304 target), so the page-aligned
+`LIB_CHACHA20_POLY1305_CODE` starts at `$0A00` and the PRG carries 255
+bytes of inter-segment pad that the pre-rename single-`CODE` layout did
+not. That pad is an artifact of the in-tree test harness only — it does
+not appear in the shipped `.a` archives, and a consumer whose own `CODE`
+fills the gap pays nothing.
 
 `c64.cfg` MEMORY:
 - `MAIN: start = $0900, size = $9700` (bound: $0900..$9FFF).

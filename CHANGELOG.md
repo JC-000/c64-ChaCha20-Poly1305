@@ -4,6 +4,54 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **c64-lib-contract SPEC §4 segment migration** (issue #48). The library
+  no longer emits into the bare ld65 `CODE` / `DATA` segments. All library
+  code moves to `LIB_CHACHA20_POLY1305_CODE` and all library state to
+  `LIB_CHACHA20_POLY1305_DATA` (`src/lib/{word32,chacha20,poly1305,
+  chacha20poly1305,data}_lib.s`, 6 directives). `src/main.s` and
+  `src/zp_config.s` keep plain segments — §4 governs library sources, and
+  the harness `lib_entry` stub must stay at `$0900` for the BASIC stub's
+  SYS 2304. This lets a consumer place library bytes by name with zero
+  source patches; previously `c64-wireguard` had to cede the bare
+  `CODE`/`DATA` names to this library and rename its own boot code out of
+  `CODE`.
+
+  **Consumer action required**: your ld65 cfg MUST declare the two new
+  segments, and both attributes below are load-bearing —
+
+  ```
+  LIB_CHACHA20_POLY1305_CODE: load = MAIN, type = ro, align = $100;
+  LIB_CHACHA20_POLY1305_DATA: load = MAIN, type = rw;
+  ```
+
+  `align = $100` is a **constant-time invariant** (the `chacha_nibswap_*`
+  and `poly_reduce_shl6_tab` LUTs are `.align 256` and secret-indexed);
+  ld65 only *warns* and links them misaligned if it is missing.
+  `LIB_CHACHA20_POLY1305_DATA` must stay `type = rw` in a file-emitting
+  area — `bss` writes no file bytes, so `sqtab_ready` reads power-on
+  garbage and every Poly1305 multiplication is poisoned, with no link
+  error. See `docs/INTEGRATION.md` "Library code + data".
+
+  Proven a pure rename: linking the library objects alone under
+  equivalent pre/post configs yields **byte-identical output** across all
+  four build configurations (Profile A 15 911 B, Profile B 17 191 B,
+  aead-only 16 935 B, rolled-outer 8 999 B), and per-object segment
+  totals are conserved exactly (old `CODE` 15 250 B = 1 B harness stub +
+  15 249 B library; `DATA` 295 B unchanged). Tests 214/214 on both
+  profiles; both archive variants pass the `test_consumer` link + smoke.
+
+  The in-tree standalone PRG grows +256 B on both profiles (Profile A
+  16 168 → 16 424 B) — `main.s`'s 1-byte `lib_entry` stub holds `$0900`,
+  so the page-aligned library segment starts at `$0A00`. That pad is an
+  artifact of the test harness layout only; it is not in the shipped
+  archives, and a consumer whose own `CODE` fills the gap pays nothing.
+
+  `examples/smoke_test/` links a vendored v0.3.0 snapshot that predates
+  the rename, so its cfg still uses bare `CODE`/`DATA` and is unchanged.
+
 ## [0.6.0] — 2026-07-28
 
 Portability + tooling + correctness release. Adopts the

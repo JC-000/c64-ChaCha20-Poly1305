@@ -31,9 +31,10 @@ the AEAD entries does not need to invoke the lower-level primitives.
 **`poly1305_lib_init` is idempotent**: a `sqtab_ready` flag byte
 short-circuits it after the first call. Calling it more than once
 costs only a `lda / bne` (~7 cy). Calling it zero times leaves
-`sqtab_ready = 0` (loaded from the DATA segment at PRG load time,
-which is why `data_lib.s` deliberately places state reservations in
-`DATA` not `BSS` — see `data_lib.s:12-18`).
+`sqtab_ready = 0` (loaded from the `LIB_CHACHA20_POLY1305_DATA`
+segment at PRG load time, which is why `data_lib.s` deliberately places
+state reservations in a `type = rw` data segment and not `BSS` — see
+`data_lib.s:12-25`, and the cfg requirement in `INTEGRATION.md`).
 
 **No REU usage**: as of the issue #34 F1 slimming (PR #38), the
 library issues no REU DMA on any path in any profile.
@@ -46,8 +47,8 @@ were removed with it. Profile B never had an REU path. See §3
 
 ### Consumer data buffers to populate before `aead_encrypt`
 
-All live in the library's DATA segment (see `data_lib.s` and
-`MEMORY_MAP.md`):
+All live in the library's `LIB_CHACHA20_POLY1305_DATA` segment (see
+`data_lib.s` and `MEMORY_MAP.md`):
 
 | symbol           | size | purpose                                   |
 |------------------|-----:|-------------------------------------------|
@@ -430,7 +431,7 @@ exposed for the test harness and for composable re-use.
 - **Module**: `chacha20poly1305_lib.s:53`
 - **Purpose**: Full RFC 7539 §2.8 AEAD encrypt.
 - **Signature**: no register args. All inputs and outputs via
-  DATA-segment `aead_*` fields (see §0 above).
+  `LIB_CHACHA20_POLY1305_DATA` `aead_*` fields (see §0 above).
 - **Preconditions**:
   1. `poly1305_lib_init` called at least once.
   2. `aead_key`, `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`,
@@ -501,8 +502,9 @@ Exports data reservations only — no executable code:
 `aead_scratch`, `sqtab_ready`.
 
 See `data_lib.s` for sizes and `MEMORY_MAP.md` for the collision
-surface. All reservations live in the DATA segment (not BSS) so
-they PRG-load as zero — `sqtab_ready` must read zero at startup or
+surface. All reservations live in the `LIB_CHACHA20_POLY1305_DATA`
+segment, which the consumer cfg MUST declare `type = rw` in a
+file-emitting area (never `bss`), so they PRG-load as zero — `sqtab_ready` must read zero at startup or
 `poly1305_init`'s `bne @sqtab_done` gate would skip sqtab_init
 on an uninitialized machine.
 

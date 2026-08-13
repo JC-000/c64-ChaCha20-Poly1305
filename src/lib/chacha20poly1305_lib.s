@@ -40,7 +40,7 @@
 
 .export aead_encrypt, aead_decrypt
 
-.segment "CODE"
+.segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
 ; aead_encrypt - ChaCha20-Poly1305 authenticated encryption
