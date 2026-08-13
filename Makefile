@@ -50,7 +50,7 @@ MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_l
 # Modules that go into the consumer-facing .a archive. `main.o` ships
 # the standalone-PRG entry stub (`lib_entry: rts`) which a consumer
 # does not need — they ship their own `main`. `zp_config.o` is also
-# excluded: consumers commit to their own ZP layout via --asm-define
+# excluded: consumers commit to their own ZP layout via -D
 # overrides at consumer-assemble time, so bundling the library's
 # default-bound zp_config.o would either (a) silently re-bind their
 # slots, or (b) cause duplicate-symbol errors if they assemble their
@@ -434,6 +434,15 @@ $(LIB_AEAD_ONLY_OBJS_DIR):
 #                          five it actually references
 #
 # Pure od65 symbol-table inspection — no VICE, no link, runs in ~1 s.
+#
+# Reads .o files, never .a archives: od65 cannot read archives — pointed at
+# one it prints "<name>: (no xo65 object file)" AND EXITS 0, so a grep-based
+# audit silently reports zero matches, indistinguishable from a clean pass
+# (c64-lib-contract SPEC v0.7.2 / contract #52). Every "must NOT export"
+# check below would pass vacuously on such an empty dump, so the sentinel
+# check guards them: if a dump does not contain a symbol we know is always
+# present, the dump itself is broken and the target fails loudly rather
+# than reporting success.
 # ===========================================================================
 LIB_SHARED_VERIFY_DIR = $(LIB_DIR)/verify-shared
 
@@ -457,6 +466,17 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer.o \
 	    > $(LIB_SHARED_VERIFY_DIR)/defer.imports
 	@fail=0; \
+	for pair in "owner.exports:poly1305_multiply" \
+	            "defer.exports:poly1305_multiply" \
+	            "defer.imports:poly_product"; do \
+	    f=$${pair%%:*}; sentinel=$${pair##*:}; \
+	    grep -q "\"$$sentinel\"" $(LIB_SHARED_VERIFY_DIR)/$$f || { \
+	        echo "FAIL: $$f lacks sentinel '$$sentinel' — od65 dump is empty or"; \
+	        echo "      unreadable, so every negative check below would pass"; \
+	        echo "      vacuously (SPEC v0.7.2)"; \
+	        fail=1; \
+	    }; \
+	done; \
 	for s in $(LIB_SHARED_OWNED_SYMS); do \
 	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/owner.exports || { \
 	        echo "FAIL: owner build does not export $$s"; fail=1; }; \
