@@ -6,6 +6,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **§5 aggregate equates exported `:abs`** (issue #62). The five §5
+  exports carried no address-size hint, so ca65 inferred it from the
+  *value* — `REU_BANKS_USED` (`$00`), `ZP_USAGE_BYTES` (88) and
+  `COLD_BYTES` (0) came out `zeropage` while a consumer's `.import`
+  defaults to absolute, warning three times in every composed link:
+
+  ```
+  ld65: Warning: Address size mismatch for 'LIB_CHACHA20_POLY1305_REU_BANKS_USED':
+        Exported from lib_manifest.o as 'zeropage', import as 'absolute'
+  ```
+
+  Pre-existing, but only became reachable once #57's prefixed exports
+  made these symbols importable at all. Noise rather than breakage — the
+  values resolve and the asserts evaluate — but the diagnostic tracked
+  the value rather than the interface (it would vanish if this library
+  ever claimed an REU bank above `$FF`, and return if it dropped back),
+  and the obvious consumer workaround, `.import ...: zeropage`, pins a
+  manifest constant to an address size that is an artifact of its
+  current value. Measured: 3 warnings before, **0** after.
+
 ### Added
 - **Library-prefixed §1 version exports + `LIB_NO_BARE_EXPORTS` gate**
   (issues #53, #57 item 1; contract v0.7.0). `src/lib_version.s` now

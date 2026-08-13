@@ -245,11 +245,27 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 ; shape fails at assemble time instead of misleading a consumer.
 .assert (LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES & ~LIB_CHACHA20_POLY1305_SHARED_CONSUMES) = 0, error, "a build cannot own a primitive it does not consume"
 
-.export LIB_CHACHA20_POLY1305_REU_BANKS_USED
-.export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
-.export LIB_CHACHA20_POLY1305_RESIDENT_BYTES
-.export LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES
-.export LIB_CHACHA20_POLY1305_COLD_BYTES
+; All §5 aggregates are exported `:abs` (issue #62). Without the hint
+; ca65 infers the address size from the VALUE, so the byte-valued ones
+; (REU_BANKS_USED = $00, ZP_USAGE_BYTES = 88, COLD_BYTES = 0) come out
+; `zeropage` while a consumer's `.import` defaults to absolute:
+;
+;   ld65: Warning: Address size mismatch for
+;         'LIB_CHACHA20_POLY1305_REU_BANKS_USED': Exported from
+;         lib_manifest.o as 'zeropage', import in two.o as 'absolute'
+;
+; The link succeeds and the asserts evaluate, but the diagnostic tracks
+; the value rather than the interface — REU_BANKS_USED would stop
+; warning if this library ever claimed a bank above $FF and resume if it
+; dropped back — and the obvious consumer workaround
+; (`.import ...: zeropage`) pins a manifest constant to an address size
+; that is an artifact of its current value. These are 16-bit manifest
+; quantities regardless of what they happen to hold today.
+.export LIB_CHACHA20_POLY1305_REU_BANKS_USED:abs
+.export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES:abs
+.export LIB_CHACHA20_POLY1305_RESIDENT_BYTES:abs
+.export LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES:abs
+.export LIB_CHACHA20_POLY1305_COLD_BYTES:abs
 ; SPEC §8.0 / §8.1 manifest equates exported with `:abs` so ca65 emits
 ; them as absolute-address values rather than `zeropage`; integer-equate
 ; values up to $00ff would otherwise be tagged zeropage and trigger a
