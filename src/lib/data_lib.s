@@ -9,13 +9,19 @@
 ; unmodified.
 ; =============================================================================
 
-; NOTE: These reservations live in the DATA segment (not BSS) so they emit
-; zero bytes into the PRG file and load into RAM at a known-zero state.
-; The original ACME build used !fill (initialized data), so when the PRG
-; loads, all state fields are pre-zeroed. If we used BSS (.res in an
+; NOTE: These reservations live in the library's DATA segment (not BSS) so
+; they emit zero bytes into the PRG file and load into RAM at a known-zero
+; state. The original ACME build used !fill (initialized data), so when the
+; PRG loads, all state fields are pre-zeroed. If we used BSS (.res in an
 ; uninitialized segment), poly1305_init's sqtab_ready check could read
 ; garbage from power-on RAM and skip sqtab_init, leaving the quarter-
 ; square table uninitialized and poisoning every Poly1305 multiplication.
+;
+; Consumer cfg requirement (issue #48): LIB_CHACHA20_POLY1305_DATA MUST be
+; declared `type = rw` in a file-emitting memory area — never `type = bss`.
+; A bss-type declaration writes no file bytes, which reintroduces exactly
+; the power-on-garbage failure described above, silently and with no link
+; error.
 
 .export cc20_state, cc20_key, cc20_nonce, cc20_counter, cc20_remain_hi
 .export poly_h, poly_r, poly_s, poly_product, poly1305_tag
@@ -24,7 +30,7 @@
 .export sqtab_ready
 .export chacha_nibswap_hi_tab, chacha_nibswap_lo_tab
 
-.segment "DATA"
+.segment "LIB_CHACHA20_POLY1305_DATA"   ; SPEC §4 prefix (issue #48)
 
 ; --- ChaCha20 state (RFC 7539) ---
 ; Initial state: 16 x 32-bit words = 64 bytes
@@ -102,7 +108,12 @@ aead_scratch:
 sqtab_ready:
         .res 1
 
-.segment "CODE"
+; The two nibswap LUTs below are page-aligned by `.align 256`, and that
+; alignment is a CT invariant (see each table's header). ld65 honours it
+; only if the cfg declares LIB_CHACHA20_POLY1305_CODE with `align = $100`
+; — otherwise it emits a warning and links the tables misaligned, which
+; silently reintroduces the secret-dependent page-cross penalty.
+.segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
 ; chacha_nibswap_hi_tab - 256-entry LUT: tab[V] = (V << 4) & $FF

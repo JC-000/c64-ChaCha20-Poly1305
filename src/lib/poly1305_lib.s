@@ -79,7 +79,7 @@ sqtab_init = mul_tables_init
 ; exists on Profile A. See issue #34 F1.
 .endif
 
-.segment "CODE"
+.segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; Quarter-square table addresses (page-aligned for speed). Profile B
 ; only — Profile A uses Shoup per-r tables at r_tab_{lo,hi} (8 KB at

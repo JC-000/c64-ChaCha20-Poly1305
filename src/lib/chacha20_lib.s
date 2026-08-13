@@ -46,7 +46,7 @@
 .export chacha20_quarter_round
 .endif
 
-.segment "CODE"
+.segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; --- ChaCha20 constants ("expand 32-byte k" as LE uint32 words) ---
 cc20_constants:

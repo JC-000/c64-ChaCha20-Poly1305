@@ -221,8 +221,8 @@ aead_verify_tag:
   single boolean result — but this is the API-mandated success/fail
   signal (canonical-OK).
 - Base addresses `poly1305_tag` and `aead_tag` are fixed in the
-  DATA segment (`data_lib.s`), so `abs,x` loads don't cross pages
-  within the 16-byte walk.
+  `LIB_CHACHA20_POLY1305_DATA` segment (`data_lib.s`), so `abs,x`
+  loads don't cross pages within the 16-byte walk.
 - No indexed load on secret data uses an index derived from
   secret bytes.
 

@@ -37,7 +37,7 @@
 .export rotr32_7
 .endif
 
-.segment "CODE"
+.segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
 ; add32 - 32-bit addition: (w32_dst) = (w32_src1) + (w32_src2)

@@ -244,6 +244,14 @@ build. Forward note (not pursued in this PR): tightening the padding
 via an ld65 link-line reorder or by moving `poly_reduce_shl6_tab` into
 its own segment is a possible follow-up if the ~256 B matters later.
 
+> **Postscript (issue #48).** The `align=$100` declaration referenced
+> above moved from the bare `CODE` segment to
+> `LIB_CHACHA20_POLY1305_CODE` in the SPEC §4 segment migration; the
+> alignment property and this paragraph's reasoning are unchanged, only
+> the segment name. The standalone PRG picked up a further +256 B of
+> inter-segment pad there for an unrelated reason (the 1-byte harness
+> stub holding `$0900`) — see `docs/MEMORY_MAP.md` §3.
+
 **Note on S11**: incremental Shoup table build, Profile A only. Before
 S11, `shoup_init` built each of the 16 Shoup tables `T_j[k] = k * r[j]`
 by calling `mul_8x8` (sqtab-backed) 4096 times — once per `(j, k)` pair.

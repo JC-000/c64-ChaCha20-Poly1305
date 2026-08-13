@@ -110,8 +110,13 @@ one commit per upstream bump.
    library modules import their ZP slots from it.
 
 5. Link against your own linker config (**not** the library's
-   `src/c64.cfg`). A consumer `smoke_test.cfg` that mirrors the
-   library's memory map byte-for-byte is safe. Relocation is now
+   `src/c64.cfg`). Your `SEGMENTS {}` block MUST declare
+   `LIB_CHACHA20_POLY1305_CODE` (with `align = $100`) and
+   `LIB_CHACHA20_POLY1305_DATA` (`type = rw`) — ld65 hard-errors on any
+   input segment with no memory-area assignment. See "Library code +
+   data" below for the exact lines and why both attributes matter.
+   A consumer cfg that otherwise mirrors the library's memory map
+   byte-for-byte is safe. Relocation is now
    partly configurable at assemble time: the 1 KB quarter-square
    table moves with `-DLIB_SHARED_SQTAB_BASE=$<addr>` (default
    `$8000`; PR #39), and the ZP slots move by editing — or shipping
@@ -212,12 +217,53 @@ first relocating them in the library source (only safe at v0.4.0+):
 
 ### Library code + data (both profiles)
 
-The library's `CODE`, `DATA`, and `BSS` segments live in the `MAIN`
-memory region `$0900..$9FFF` per the default `src/c64.cfg`. A
-consumer linker config can move this — the `CODE` segment is
-position-independent so long as it is assembled into a contiguous
-region — but the sqtab / Shoup table addresses listed above are
-hard-coded in `poly1305_lib.s` and will NOT move with the segment.
+As of the issue #48 migration the library emits **c64-lib-contract SPEC §4
+prefixed segments** — it no longer places anything in the bare `CODE` /
+`DATA` segments, so your own code keeps those names and you never have to
+`sed` the library sources:
+
+| Segment | Contents | Required cfg attributes |
+|---|---|---|
+| `LIB_CHACHA20_POLY1305_CODE` | All library code, plus the page-aligned `chacha_nibswap_*_tab` and `poly_reduce_shl6_tab` LUTs | `type = ro`, **`align = $100`** |
+| `LIB_CHACHA20_POLY1305_DATA` | `cc20_*` / `poly_*` / `aead_*` state and `sqtab_ready` | **`type = rw`** in a file-emitting area — never `bss` |
+
+Drop these two lines into your cfg's `SEGMENTS {}` block:
+
+```
+    LIB_CHACHA20_POLY1305_CODE: load = MAIN, type = ro, align = $100;
+    LIB_CHACHA20_POLY1305_DATA: load = MAIN, type = rw;
+```
+
+Both attributes are load-bearing, and both fail quietly if you drop them:
+
+- **`align = $100` is a constant-time invariant, not a perf hint.**
+  `data_lib.s`'s two nibswap LUTs and `poly1305_lib.s`'s
+  `poly_reduce_shl6_tab` are `.align 256` and are indexed by
+  secret-derived X/Y. Without page alignment an `abs,x` page cross costs
+  +1 cycle on a secret-dependent condition — a CT violation. ld65 only
+  emits a *warning* ("Segment ... isn't aligned properly") and links the
+  tables misaligned anyway, so nothing will fail loudly.
+- **`LIB_CHACHA20_POLY1305_DATA` must PRG-load as zero.** Declaring it
+  `type = bss` writes no file bytes, so `poly1305_init`'s `sqtab_ready`
+  gate reads power-on garbage, skips `sqtab_init`, and poisons every
+  Poly1305 multiplication. There is no link error for this — see
+  `src/lib/data_lib.s:12-25`.
+
+Also declare bss-type segments **last** in the file-backed memory area:
+ld65 writes no file bytes for bss, so a file-emitting segment declared
+after a non-empty `BSS` loads `__BSS_SIZE__` bytes below its linked
+address, corrupting silently with no link error.
+
+Both segments live in the `MAIN` memory region `$0900..$9FFF` under the
+default `src/c64.cfg`. A consumer linker config can move them — the code
+is position-independent so long as it is linked into a contiguous region
+— but the sqtab / Shoup table addresses listed above are hard-coded in
+`poly1305_lib.s` and will NOT move with the segment.
+
+`src/c64.cfg` and `test_consumer/min_consumer.cfg` are both worked
+examples. Note that `examples/smoke_test/` links a **vendored v0.3.0**
+snapshot of the library, which predates the rename, so its cfg still uses
+bare `CODE`/`DATA` — do not copy that one for a current-version link.
 
 See `docs/MEMORY_MAP.md` for the authoritative byte-level map. The
 library touches **no I/O registers** — the former Profile A
