@@ -7,6 +7,48 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Profile A no longer over-claims §8.0 shared-primitive ownership**
+  (issue #51). `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` was built with no
+  profile gate, so Profile A advertised `$0005` — ownership of both the
+  §8.1 `sqtab` and the §8.3 `ct_mul_8x8` — although issue #34 F1 gated
+  sqtab, `sqtab_init` and `mul_8x8` out of Profile A entirely and the
+  `ct_mul_8x8` body is Profile B only. Measured on the pre-fix tree:
+  `profile-a/poly1305_lib.o` exports none of those symbols while
+  `profile-a/lib_manifest.o` exported `$0005`.
+
+  A consumer composing Profile A with c64-x25519 therefore hit the §8.0
+  disjointness assert as a false double-ownership error, and the v0.5.0
+  coverage assert concluded `sqtab` had an owner in the link when this
+  library provides no `sqtab_init` at all — the silent-wrong-result
+  direction (table read with no init). Profile A now reads `$0000`.
+
+  The `LIB_PRECALC_TABLE "sqtab", ...` enumeration row is profile-gated
+  for the same reason, so Profile A's `_PRECALC_` export count drops from
+  15 to 12; it already omitted the Profile-A-only Shoup rows on Profile B.
+
+### Added
+- **`LIB_CHACHA20_POLY1305_SHARED_CONSUMES`** (issue #52) — the companion
+  mask contract v0.5.0 made mandatory for any adopter consuming a §8
+  primitive. Ownership says what this build provides; consumes says what
+  it uses, which is what distinguishes a *deferring consumer* (needs
+  exactly one owner in the link, must be initialized at boot) from a
+  *non-consumer* (no provider obligation). It unlocks the consumer-side
+  coverage assert that turns a missing provider into a named assemble-time
+  error instead of an unresolved external or a silent wrong result.
+
+  | build | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
+  |---|---|---|
+  | Profile A | `$0000` | `$0000` |
+  | Profile B standalone | `$0005` | `$0005` |
+  | Profile B `-D SHARED_CT_MUL_8X8=1` | `$0001` | `$0005` |
+  | Profile B `-D SHARED_SQTAB_INIT=1` | `$0004` | `$0005` |
+  | Profile B, both switches | `$0000` | `$0005` |
+
+  `lib_manifest.s` also carries the §8.0 subset assert (`ownership ⊆
+  consumes`), verified to fire with its named message when the issue-#51
+  gate shape is re-seeded.
+
+### Fixed
 - **`SHARED_CT_MUL_8X8` now actually defers the SPEC §8.3 primitive**
   (issue #47). The switch previously flipped only the manifest ownership
   bit: `poly1305_lib.s` kept exporting `poly_prod_lo` / `poly_prod_hi` /

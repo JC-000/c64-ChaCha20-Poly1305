@@ -75,6 +75,17 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   over-report Profile A and under-report Profile B for consumer
 ;   `.assert resident <= N` checks.
 ;
+;   MEASUREMENT BASIS (corrected in issue #51, after issue #48). These
+;   numbers describe what a CONSUMER links, which since the SPEC §4
+;   segment migration is no longer the same as the in-tree harness PRG:
+;   `main.s`'s 1-byte lib_entry stub holds $0900, so the page-aligned
+;   LIB_CHACHA20_POLY1305_CODE segment starts at $0A00 and the standalone
+;   PRG carries 255 B of inter-segment pad that no consumer pays. Measure
+;   from a consumer-side link (see test_consumer/), not from
+;   build/profile-*/c64_chacha20_poly1305.prg — post-#48 the latter reads
+;   16422 / 17702 B net of the 2-byte header and would over-report both
+;   profiles by ~256 B.
+;
 ;   Actual measurements at this commit:
 ;     Profile A: 16166 B  → padded to 16384 (256-aligned, $4000)
 ;     Profile B: 17446 B  → padded to 17664 (256-aligned, $4500)
@@ -146,21 +157,88 @@ LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 ; ---------------------------------------------------------------------------
 LIB_SHARED_PRIMITIVES_SQTAB            = $0001   ; SPEC §8.0 / §8.1
 LIB_SHARED_PRIMITIVES_CT_MUL_8X8       = $0004   ; SPEC §8.0 / §8.3
-; Mask reflects primitives OWNED in THIS build config (SPEC §8.0, issue #21):
-; a primitive's bit is included iff this build does NOT defer it via its
-; SHARED_*_INIT / SHARED_* switch. A deferring build drops the bit so a
-; consumer composing two libs that share a primitive sees disjoint masks.
+
+; ---------------------------------------------------------------------------
+; SPEC §8.0 three-state build-config semantics (contract v0.5.0).
+;
+; For each §8.x primitive, a build config is in exactly one of three states,
+; and the ownership bit alone cannot distinguish the last two — they impose
+; OPPOSITE obligations on the composing consumer:
+;
+;   owner               PRIMITIVES set, CONSUMES set. Exports the body/init
+;                       per the primitive's §8.x clause.
+;   deferring consumer  PRIMITIVES clear, CONSUMES set. The deferral switch
+;                       is defined, but the build still READS the primitive
+;                       at runtime: the composed link MUST contain exactly
+;                       one owner, and boot MUST initialize it first.
+;   non-consumer        both clear. Profile-gated or permanent; the
+;                       primitive's surface is absent and there is no
+;                       provider obligation at all.
+;
+; Two independent gates therefore drive the two masks:
+;
+;   profile gate    drops the bit from BOTH masks (we do not use the
+;                   primitive in this profile at all)
+;   SHARED_* switch drops the bit from the OWNERSHIP mask only (we still
+;                   use it, someone else provides it)
+;
+; Profile A is a profile-gated NON-CONSUMER of both primitives. Issue #34 F1
+; gated sqtab, sqtab_init and mul_8x8 out of Profile A entirely (shoup_init
+; builds the per-r Shoup tables via incremental ripple-add and never touches
+; sqtab), and the ct_mul_8x8 body lives under .ifndef POLY1305_PROFILE_LONG.
+;
+; Before issue #51 neither mask had a profile gate, so Profile A advertised
+; ownership of $0005 — two primitives it does not emit. Measured on the
+; pre-fix tree: profile-a/poly1305_lib.o exports none of sqtab_init /
+; ct_mul_8x8 / mul_8x8, while profile-a/lib_manifest.o exported
+; LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = $0005. A consumer composing
+; Profile A with c64-x25519 then saw a false double-ownership collision on
+; the §8.0 disjointness assert, and the v0.5.0 coverage assert concluded
+; sqtab had an owner in the link when this library provides no sqtab_init
+; at all — the silent-wrong-result direction (table read with no init).
+;
+; Resulting matrix:
+;
+;   build                                    PRIMITIVES  CONSUMES
+;   Profile A                                   $0000     $0000
+;   Profile B standalone                        $0005     $0005
+;   Profile B -D SHARED_CT_MUL_8X8              $0001     $0005
+;   Profile B -D SHARED_SQTAB_INIT
+;             -D SHARED_CT_MUL_8X8              $0000     $0005
+;
+; The deferral rows only became meaningful with issue #47, which made
+; SHARED_CT_MUL_8X8 gate the body and exports rather than just this mask.
+; ---------------------------------------------------------------------------
+
+; Profile gate — consumption. Drops bits from BOTH masks.
+.ifdef POLY1305_PROFILE_LONG
+  _USE_SQTAB    = 0
+  _USE_CT_MUL   = 0
+.else
+  _USE_SQTAB    = LIB_SHARED_PRIMITIVES_SQTAB
+  _USE_CT_MUL   = LIB_SHARED_PRIMITIVES_CT_MUL_8X8
+.endif
+
+; Deferral gate — ownership. A primitive is owned iff it is consumed AND
+; this build does not defer it (SPEC §8.0 required form, issue #21).
 .ifdef SHARED_SQTAB_INIT
   _OWN_SQTAB    = 0
 .else
-  _OWN_SQTAB    = LIB_SHARED_PRIMITIVES_SQTAB
+  _OWN_SQTAB    = _USE_SQTAB
 .endif
 .ifdef SHARED_CT_MUL_8X8
   _OWN_CT_MUL   = 0
 .else
-  _OWN_CT_MUL   = LIB_SHARED_PRIMITIVES_CT_MUL_8X8
+  _OWN_CT_MUL   = _USE_CT_MUL
 .endif
+
 LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = _OWN_SQTAB | _OWN_CT_MUL
+LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
+
+; SPEC §8.0 adopter-side invariant: ownership bits are a subset of consumes
+; bits. Pinned here so a future gate edit that reintroduces the issue-#51
+; shape fails at assemble time instead of misleading a consumer.
+.assert (LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES & ~LIB_CHACHA20_POLY1305_SHARED_CONSUMES) = 0, error, "a build cannot own a primitive it does not consume"
 
 .export LIB_CHACHA20_POLY1305_REU_BANKS_USED
 .export LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
@@ -174,6 +252,7 @@ LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = _OWN_SQTAB | _OWN_CT_MUL
 .export LIB_SHARED_PRIMITIVES_SQTAB:abs
 .export LIB_SHARED_PRIMITIVES_CT_MUL_8X8:abs
 .export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
+.export LIB_CHACHA20_POLY1305_SHARED_CONSUMES:abs
 
 ; ---------------------------------------------------------------------------
 ; §8.0 catch-loop precalc-table enumeration. Per c64-lib-contract SPEC
@@ -197,13 +276,19 @@ LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = _OWN_SQTAB | _OWN_CT_MUL
 ; sqtab — combined sqtab_lo + sqtab_hi at LIB_SHARED_SQTAB_BASE
 ; (sqtab_lo + $0200 = sqtab_hi; 512 B + 512 B = 1024 B contiguous).
 ; Shared via §8.1 (LIB_SHARED_PRIMITIVES_SQTAB bit, $0001 above).
-; Profile A no longer emits sqtab itself (#34 F1) but the SPEC §8.1
-; canonical-name back-link is still normative when *any* sibling lib
-; in a composed build ships sqtab, so the enumeration row is emitted
-; unconditionally to keep the §8.1 shared-primitive declaration
-; consistent with this library's LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES
-; mask (which also unconditionally claims the SQTAB bit).
+;
+; Profile-gated as of issue #51. This row was previously emitted
+; unconditionally, on the reasoning that the §8.1 canonical-name
+; back-link stays normative when any sibling in a composed build ships
+; sqtab — which was coherent while the ownership mask also claimed the
+; SQTAB bit unconditionally. Under the v0.5.0 three-state semantics that
+; is no longer true: Profile A is a non-consumer of sqtab (#34 F1), so it
+; must enumerate no sqtab row, exactly as it already omits the Shoup
+; r_tab_* rows on Profile B. The enumeration now tracks the CONSUMES
+; mask, which is the honest signal for the §8.0 catch-loop audit.
+.ifndef POLY1305_PROFILE_LONG
 LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES
+.endif
 
 ; chacha_nibswap_hi_tab / chacha_nibswap_lo_tab — C4 branchless
 ; rotl-4 LUTs (commit d0b1d40). 256 B each, page-aligned in the CODE
