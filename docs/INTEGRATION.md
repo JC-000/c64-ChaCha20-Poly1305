@@ -71,15 +71,15 @@ one commit per upstream bump.
 1. Download the release tarball from the GitHub releases page:
 
    ```
-   wget https://github.com/JC-000/c64-ChaCha20-Poly1305/releases/download/v0.6.0/c64-ChaCha20-Poly1305-v0.6.0.tar.gz
+   wget https://github.com/JC-000/c64-ChaCha20-Poly1305/releases/download/v0.7.0/c64-ChaCha20-Poly1305-v0.7.0.tar.gz
    ```
 
 2. Unpack under `third_party/` in your consumer repo:
 
    ```
    mkdir -p third_party
-   tar xzf c64-ChaCha20-Poly1305-v0.6.0.tar.gz -C third_party/
-   # Result: third_party/c64-ChaCha20-Poly1305-v0.6.0/src/{lib,include,c64.cfg}
+   tar xzf c64-ChaCha20-Poly1305-v0.7.0.tar.gz -C third_party/
+   # Result: third_party/c64-ChaCha20-Poly1305-v0.7.0/src/{lib,include,c64.cfg}
    ```
 
 3. Point your consumer's ca65 invocation at the vendored `src/lib`
@@ -87,8 +87,8 @@ one commit per upstream bump.
 
    ```
    CA65FLAGS = -t c64 -g \
-       -I third_party/c64-ChaCha20-Poly1305-v0.6.0/src/lib \
-       -I third_party/c64-ChaCha20-Poly1305-v0.6.0/src/include
+       -I third_party/c64-ChaCha20-Poly1305-v0.7.0/src/lib \
+       -I third_party/c64-ChaCha20-Poly1305-v0.7.0/src/include
    ```
 
 4. Add the library modules to your object list, alongside your own
@@ -146,10 +146,10 @@ of your consumer repo.
 git submodule add https://github.com/JC-000/c64-ChaCha20-Poly1305.git \
     third_party/c64-chacha20poly1305
 cd third_party/c64-chacha20poly1305
-git checkout v0.6.0
+git checkout v0.7.0
 cd ../..
 git add third_party/c64-chacha20poly1305 .gitmodules
-git commit -m "vendor c64-chacha20poly1305 v0.6.0 as submodule"
+git commit -m "vendor c64-chacha20poly1305 v0.7.0 as submodule"
 ```
 
 After that step, the `-I` flags, module list, and linker-config
@@ -352,6 +352,20 @@ on the `feat/v0.4.0-relocatable` branch and its successors.
 The v0.4.0 release also adds Ultimate 64 hardware backend support
 to the validation tooling — that is a tooling-only change and does
 not affect the library API or the linked PRG.
+
+**v0.7.0 (2026-08-13) requires a consumer cfg change.** The library
+no longer emits into the bare `CODE` / `DATA` segments — your
+`SEGMENTS {}` block MUST declare `LIB_CHACHA20_POLY1305_CODE`
+(with `align = $100`) and `LIB_CHACHA20_POLY1305_DATA` (`type = rw`).
+ld65 hard-errors if they are missing, but both *attributes* fail
+silently if dropped; see "Library code + data" above for the exact
+lines and why each one matters. v0.7.0 also stops exporting the §8.x
+bit constants `LIB_SHARED_PRIMITIVES_SQTAB` / `_CT_MUL_8X8` (copy the
+equates locally instead), adds `LIB_<X>_`-prefixed §1 and §8.4 exports
+with a `LIB_NO_BARE_EXPORTS` gate for multi-library links, and rebases
+`LIB_CHACHA20_POLY1305_RESIDENT_BYTES` onto a consumer-independent
+measurement — the values are now smaller, so re-check any
+`.assert resident <= N`.
 
 **v0.6.0 (2026-07-28) removes the `POLY1305_REU` API surface** (issue #34
 F1, PR #38): `poly1305_reu_restore`, `poly1305_reu_sqtab_bank` /

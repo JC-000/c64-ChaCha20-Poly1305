@@ -270,9 +270,12 @@ The library is intended for hobbyist and research use.
 Version constants (`src/lib_version.s`):
 
 - `LIB_VERSION_MAJOR` / `LIB_VERSION_MINOR` / `LIB_VERSION_PATCH` --
-  exported integer equates tracking the released semver (0.6.0).
-  Consumers `.import` them and assemble-time guard, e.g.
-  `.if LIB_VERSION_MINOR < 5` → `.error`.
+  exported integer equates tracking the released semver (0.7.0).
+  Also exported in the collision-free `LIB_CHACHA20_POLY1305_VERSION_*`
+  form (contract §1 v0.7.0); the bare names are deprecated and
+  suppressible with `ca65 -D LIB_NO_BARE_EXPORTS=1`. Consumers
+  `.import` them and assemble-time guard, e.g.
+  `.if LIB_CHACHA20_POLY1305_VERSION_MINOR < 7` → `.error`.
 - `LIB_ABI_VERSION` -- exported-symbol ABI surface version (currently
   1); bumps on any breaking change to public symbol names, calling
   conventions, or the public ZP-cell contract.
@@ -375,16 +378,18 @@ the source:
 - [`docs/BENCH_NSWEEP_v0.5.0.md`](docs/BENCH_NSWEEP_v0.5.0.md) —
   packet-size (n) sweep baseline and the measured A/B crossover.
 - [`docs/BENCH_NSWEEP_v0.6.0.md`](docs/BENCH_NSWEEP_v0.6.0.md) —
-  v0.6.0 n-sweep (part of this release pass).
+  v0.6.0 n-sweep; still current for v0.7.0, whose codegen and
+  measured cycles are unchanged.
 - [`docs/BENCH_NSWEEP_u64_v0.6.0.md`](docs/BENCH_NSWEEP_u64_v0.6.0.md)
-  — v0.6.0 n-sweep on Ultimate 64 hardware (part of this release
-  pass).
+  — v0.6.0 n-sweep on Ultimate 64 hardware; likewise still current.
 - [`docs/precalc-tables.md`](docs/precalc-tables.md) — SPEC §8.0
   precalc-table enumeration rationale and exempt list.
 - [`docs/RELEASE_NOTES_v0.5.0.md`](docs/RELEASE_NOTES_v0.5.0.md) —
   v0.5.0 release notes.
 - [`docs/RELEASE_NOTES_v0.6.0.md`](docs/RELEASE_NOTES_v0.6.0.md) —
-  v0.6.0 release notes (created in this release pass).
+  v0.6.0 release notes.
+- [`docs/RELEASE_NOTES_v0.7.0.md`](docs/RELEASE_NOTES_v0.7.0.md) —
+  v0.7.0 release notes (created in this release pass).
 - [`docs/design/ct_mul_8x8.md`](docs/design/ct_mul_8x8.md) —
   branchless 8×8 multiply design memo (Profile B F3 fix).
 - [`docs/OPTIMIZATION_PLAN.md`](docs/OPTIMIZATION_PLAN.md) — the
@@ -398,12 +403,19 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.6.0** (tagged 2026-07-28;
-`src/lib_version.s` declares 0.6.0, `LIB_ABI_VERSION` stays 1): the
-c64-lib-contract adoption + size-variants release, closing issue #34
-with the ar65 archive variants and the rolled-multiply size knobs
-(config D: 8,230 B linked consumer footprint — see "Size variants"
-above). The prior release, **v0.5.0**, landed the C4 branchless
+The current release is **v0.7.0** (tagged 2026-08-13;
+`src/lib_version.s` declares 0.7.0, `LIB_ABI_VERSION` stays 1): the
+contract-conformance release, bringing the library from
+c64-lib-contract v0.4.0 up to v0.7.2 and making it composable with a
+sibling library for the first time. **It requires a consumer cfg
+change** — the library now emits `LIB_CHACHA20_POLY1305_CODE` /
+`_DATA` instead of bare `CODE`/`DATA`; see
+[`docs/RELEASE_NOTES_v0.7.0.md`](docs/RELEASE_NOTES_v0.7.0.md) for the
+migration steps. Codegen and measured cycles are unchanged. The prior
+release, **v0.6.0** (2026-07-28), was the c64-lib-contract adoption +
+size-variants release, closing issue #34 with the ar65 archive
+variants and the rolled-multiply size knobs (config D: 8,230 B linked
+consumer footprint — see "Size variants" above). **v0.5.0** landed the C4 branchless
 rotl-4 LUT optimization on the ChaCha20 quarter-round (−8.8%
 `chacha20_block`, −3.8% / −1.9% AEAD encrypt at n=1024 for Profile
 A / B vs v0.4.0). Tagged releases are published on the

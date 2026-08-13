@@ -1,8 +1,8 @@
 {
   "backend": "vice",
-  "commit": "36ec121",
-  "generated": "2026-05-20 21:03:26 UTC",
-  "prg_md5": "4afe54d466ad92ca38b91c94a2ea2b36",
+  "commit": "f7cc990",
+  "generated": "2026-08-13 15:41:11 UTC",
+  "prg_md5": "6e9a989f21940826153a63c2d709216f",
   "profile": "B",
   "rows": [
     {
@@ -12,28 +12,28 @@
       "spread": 172
     },
     {
-      "cycles": 39318,
+      "cycles": 39319,
       "name": "chacha20_block",
       "notes": "one 64-byte keystream block, warm state",
-      "spread": 347
+      "spread": 385
     },
     {
-      "cycles": 41026,
+      "cycles": 40946,
       "name": "chacha20_encrypt n=64",
       "notes": "single full block, key/nonce primed, in-place XOR",
-      "spread": 300
+      "spread": 385
     },
     {
-      "cycles": 658274,
+      "cycles": 658271,
       "name": "chacha20_encrypt n=1024",
       "notes": "16 blocks, key/nonce primed, in-place XOR",
-      "spread": 341
+      "spread": 343
     },
     {
-      "cycles": 37664,
+      "cycles": 37445,
       "name": "poly1305_multiply",
       "notes": "one 17x16 mul over clamped RFC r and primed h",
-      "spread": 608
+      "spread": 831
     },
     {
       "cycles": 1846,
@@ -42,16 +42,16 @@
       "spread": 172
     },
     {
-      "cycles": 38002,
+      "cycles": 37891,
       "name": "poly1305_block",
       "notes": "one 16 B block: add + multiply + reduce (A=1 shim)",
-      "spread": 236
+      "spread": 491
     },
     {
-      "cycles": 2495091,
+      "cycles": 2495147,
       "name": "aead_compute_tag",
       "notes": "tag compute over n=1024 ciphertext + 0-byte AAD + lengths",
-      "spread": 47
+      "spread": 39
     },
     {
       "cycles": 313,
@@ -60,35 +60,35 @@
       "spread": 43
     },
     {
-      "cycles": 89103,
+      "cycles": 89147,
       "name": "sqtab_init",
       "notes": "one-shot quarter-square table build (single sample)",
       "spread": 0
     },
     {
-      "cycles": 101.328125,
+      "cycles": 101.359375,
       "name": "ct_mul_8x8",
       "notes": "Profile B 8x8->16 multiply primitive; loop-of-64 with varied (a,b) operands; reported as cycles/call after dividing wrapper measurement by loop count",
-      "spread": 6.046875
+      "spread": 5.984375
     },
     {
-      "cycles": 80513,
+      "cycles": 80516,
       "name": "aead_encrypt n=0",
       "notes": "AEAD per-packet fixed cost (OTK derive + 0-byte tag)",
-      "spread": 389
+      "spread": 388
     },
     {
-      "cycles": 274794,
+      "cycles": 274763,
       "name": "aead_encrypt n=64",
       "notes": "AEAD over one 64-byte plaintext block",
-      "spread": 1338
+      "spread": 1368
     },
     {
-      "cycles": 3195600,
+      "cycles": 3195683,
       "name": "aead_encrypt n=1024",
       "notes": "AEAD over 16 blocks of plaintext",
-      "spread": 1621
+      "spread": 1530
     }
   ],
-  "samples": 3
+  "samples": 5
 }
