@@ -9,5 +9,8 @@ __pycache__/
 # Serena: ignore regenerable/local state, track project.yml + memories
 .serena/
 
+# ca65 language-server cache (regenerable local state)
+.ca65-ls/
+
 # Bench sweep sidecar (regenerable; .md is the committed artifact)
 docs/BENCH_NSWEEP_*.md.json
