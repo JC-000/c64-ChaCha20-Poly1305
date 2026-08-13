@@ -22,7 +22,7 @@ all: full aead_only smoke-full smoke-aead
 #   - zp_config.o           (assembled separately from the lib's
 #                            src/zp_config.s; per SPEC §2 consumers
 #                            either ship their own zp_config or
-#                            override slots via --asm-define)
+#                            override slots via -D)
 # and pulls every other module from the .a archive.
 
 $(BUILD):

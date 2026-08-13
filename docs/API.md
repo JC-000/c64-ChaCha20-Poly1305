@@ -602,25 +602,42 @@ adopter-side subset assert that pins ownership ⊆ consumes.
 
 ## 8. Version and ABI constants
 
-`src/lib_version.s` exports four assemble-time constants:
+`src/lib_version.s` exports each version constant in **two** forms
+(c64-lib-contract SPEC §1, contract v0.7.0 — issues #53/#57):
 
-| Symbol | Value (this release) |
-|--------|---------------------|
-| `LIB_VERSION_MAJOR` | 0 |
-| `LIB_VERSION_MINOR` | 6 |
-| `LIB_VERSION_PATCH` | 0 |
-| `LIB_ABI_VERSION`   | 1 |
+| Prefixed symbol (use this) | Deprecated bare alias | Value (this release) |
+|---|---|---|
+| `LIB_CHACHA20_POLY1305_VERSION_MAJOR` | `LIB_VERSION_MAJOR` | 0 |
+| `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 6 |
+| `LIB_CHACHA20_POLY1305_VERSION_PATCH` | `LIB_VERSION_PATCH` | 0 |
+| `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 1 |
+
+The bare names are identical across every adopter library, so a consumer
+linking two libraries and importing both manifests gets `ld65: Error:
+Duplicate external identifier`. They remain exported by default (required
+through contract v0.x, removed at v1.0), and a composing consumer
+suppresses them across **every** library in the link with:
+
+```
+ca65 -D LIB_NO_BARE_EXPORTS=1 ...
+```
+
+The bare names alias the prefixed ones, so the two forms cannot drift.
 
 The semver triple tracks the released `CHANGELOG.md` version.
 Consumers can assemble-time guard against unsupported versions by
 importing the constants and testing them in a `.if`:
 
 ```ca65
-.import LIB_VERSION_MAJOR, LIB_VERSION_MINOR
-.if LIB_VERSION_MINOR < 5
-    .error "needs c64-ChaCha20-Poly1305 v0.5+"
+.import LIB_CHACHA20_POLY1305_VERSION_MAJOR
+.import LIB_CHACHA20_POLY1305_VERSION_MINOR
+.if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 6
+    .error "needs c64-ChaCha20-Poly1305 v0.6+"
 .endif
 ```
+
+The prefixed guard names which library is out of date, instead of
+reporting one anonymous version.
 
 `LIB_ABI_VERSION` covers the exported-symbol ABI surface: it is
 bumped on any breaking change to public symbol names, calling

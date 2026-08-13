@@ -6,6 +6,68 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Library-prefixed §1 version exports + `LIB_NO_BARE_EXPORTS` gate**
+  (issues #53, #57 item 1; contract v0.7.0). `src/lib_version.s` now
+  exports `LIB_CHACHA20_POLY1305_VERSION_{MAJOR,MINOR,PATCH}` and
+  `LIB_CHACHA20_POLY1305_ABI_VERSION`. The bare `LIB_VERSION_*` names are
+  kept as **aliases** (still required through contract v0.x, removed at
+  v1.0) and are suppressed under `ca65 -D LIB_NO_BARE_EXPORTS=1`, which a
+  consumer applies to every library in the link. Aliasing rather than
+  restating the literals means a release bump touches four lines and the
+  forms cannot drift. §1's TU-isolation rule was already satisfied and is
+  now stated in the file so it stays that way.
+
+- **Library-prefixed §8.4 precalc equates** (issues #54, #57 item 3;
+  contract v0.7.0). `src/precalc_table.inc` is re-copied **verbatim** from
+  the contract canonical (`c64-lib-contract@62a5318`) and all five
+  `LIB_PRECALC_TABLE` invocations pass the fifth library-prefix argument,
+  emitting `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}`
+  beside the gated bare triple. Table *names* stay unprefixed and
+  normative — the prefix identifies the declaring library, never the
+  table. This enables a cross-library check the bare form could not
+  express, verified against c64-x25519 v0.8.0:
+
+  ```asm
+  .assert LIB_X25519_PRECALC_sqtab_SIZE = LIB_CHACHA20_POLY1305_PRECALC_sqtab_SIZE, lderror, "linked libraries disagree on the shared sqtab size"
+  ```
+
+### Fixed
+- **§8.x bit constants are no longer exported** (issue #57 item 2). The
+  two `.export LIB_SHARED_PRIMITIVES_{SQTAB,CT_MUL_8X8}:abs` lines emitted
+  unprefixed names with identical values in every adopter, so linking with
+  c64-x25519 died on `Duplicate external identifier:
+  'LIB_SHARED_PRIMITIVES_CT_MUL_8X8'`. **No SPEC clause ever asked for
+  this export** — and unlike the deprecated bare §1 names, the v0.7.0
+  prefixing does not fix it, so it survived that migration. §8.1/§8.2/§8.3
+  present the bit constants as plain local equates adopters copy verbatim
+  (the v0.6.1 §13.0 clause states the reasoning outright for the analogous
+  `NET_FAMILY_*` bits: only exported symbols can collide). They exist to
+  *build* the two prefixed masks, which are the symbols meant to cross the
+  link. c64-nist-curves has always kept them local, which is why the
+  collision never surfaced there.
+
+- **Copy-paste-facing snippets corrected** (issue #55). `.and` → `&` in
+  the REU-bank collision assert (`lib_manifest.s`): ca65's `.and` is
+  *boolean*, so the published snippet was true whenever both masks were
+  non-zero regardless of which bits were set — a real bank collision
+  passed silently (contract v0.4.2). And `--asm-define` → `-D` at five
+  sites (`Makefile`, `test_consumer/Makefile`, `poly1305_lib.s`,
+  `docs/precalc-tables.md`, a historical `CHANGELOG.md` entry):
+  `--asm-define` is `cl65`'s spelling and `ca65` rejects it outright with
+  `Unknown option`, so every one of those snippets failed when copied
+  (contract v0.7.1).
+
+- **`make lib-verify-shared` hardened against a false-negative class**
+  (contract v0.7.2). `od65` cannot read `.a` archives — pointed at one it
+  prints `(no xo65 object file)` **and exits 0**, so a grep-based audit
+  reports zero matches and looks like a clean pass. The target already
+  read `.o` files, but its "must NOT export" checks would still have
+  passed vacuously against an empty or unreadable dump. Each dump is now
+  sentinel-checked for a symbol known to be present, so a broken dump
+  fails loudly instead of reporting success. Verified by emptying a dump
+  and confirming the sentinel fires.
+
 ### Fixed
 - **Profile A no longer over-claims §8.0 shared-primitive ownership**
   (issue #51). `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` was built with no
@@ -506,8 +568,8 @@ configurable.
   stashes to REU under `POLY1305_REU=1`. Motivating use case:
   co-installing this library with `c64-x25519`, which already
   occupies REU banks 0-1. Override at assemble time via
-  `ca65 --asm-define POLY1305_REU_BANK=3
-  --asm-define POLY1305_REU_OFFSET=$1000`, or by `.include`'ing a
+  `ca65 -D POLY1305_REU_BANK=3
+  -D POLY1305_REU_OFFSET=$1000`, or by `.include`'ing a
   project-wide layout header that defines them before
   `constants_lib.s` is included. The equates are gated on
   `POLY1305_PROFILE_LONG` + `POLY1305_REU`, so Profile B and non-REU

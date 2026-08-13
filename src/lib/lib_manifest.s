@@ -32,7 +32,12 @@
 ; Per c64-lib-contract SPEC §5. Consumers compose per-library masks at
 ; assemble time to detect REU collisions:
 ;
-;   .assert (LIB_NISTCURVES_REU_BANKS_USED .and LIB_CHACHA20_POLY1305_REU_BANKS_USED) = 0
+;   .assert (LIB_NISTCURVES_REU_BANKS_USED & LIB_CHACHA20_POLY1305_REU_BANKS_USED) = 0
+;
+; Bitwise `&`, not ca65's boolean `.and` (contract v0.4.2, contract #41):
+; with `.and` the expression is true whenever both masks are non-zero
+; regardless of which bits are set, so a real bank collision passes
+; silently. This snippet is copy-paste-facing — it must work as written.
 ;
 ; As of issue #34 F1 this library claims no REU banks on any profile.
 ; The pre-F1 Profile-A + POLY1305_REU path stashed the 1 KB quarter-
@@ -249,8 +254,23 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 ; them as absolute-address values rather than `zeropage`; integer-equate
 ; values up to $00ff would otherwise be tagged zeropage and trigger a
 ; `Range error: '5' out of range [0,0]` at the consumer-side .import.
-.export LIB_SHARED_PRIMITIVES_SQTAB:abs
-.export LIB_SHARED_PRIMITIVES_CT_MUL_8X8:abs
+;
+; The §8.x BIT CONSTANTS (LIB_SHARED_PRIMITIVES_SQTAB /
+; _CT_MUL_8X8) are deliberately NOT exported (issue #57 item 2). They are
+; unprefixed names with identical values in every adopter, so exporting
+; them collides at link exactly like the deprecated bare §1 names — and
+; unlike those, no SPEC clause ever asked for the export:
+;
+;   ld65: Error: Duplicate external identifier: 'LIB_SHARED_PRIMITIVES_CT_MUL_8X8'
+;
+; §8.1/§8.2/§8.3 present the bit constants as plain assemble-time equates
+; that each adopter declares locally and consumers copy verbatim; the
+; v0.6.1 §13.0 clause states the reasoning outright for the analogous
+; NET_FAMILY_* bits — both sides of the link carry the header, and only
+; exported symbols can collide. They exist to BUILD the two masks below,
+; which are the prefixed symbols actually meant to cross the link.
+; c64-nist-curves has always kept them local, which is why the collision
+; never surfaced against that library.
 .export LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES:abs
 .export LIB_CHACHA20_POLY1305_SHARED_CONSUMES:abs
 
@@ -287,7 +307,7 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 ; r_tab_* rows on Profile B. The enumeration now tracks the CONSUMES
 ; mask, which is the honest signal for the §8.0 catch-loop audit.
 .ifndef POLY1305_PROFILE_LONG
-LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES
+LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES, "CHACHA20_POLY1305"
 .endif
 
 ; chacha_nibswap_hi_tab / chacha_nibswap_lo_tab — C4 branchless
@@ -297,8 +317,8 @@ LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES
 ; bit shape is generic (V<<4&$FF, V>>4) but no other adopter ships a
 ; rotl-4 fast path today; promote to §8.x only after a second sibling
 ; converges on bit-identical bytes.
-LIB_PRECALC_TABLE "chacha_nibswap_hi_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO
-LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+LIB_PRECALC_TABLE "chacha_nibswap_hi_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
+LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
 
 ; r_tab_lo / r_tab_hi — Profile A Shoup per-r tables at $6000..$7FFF
 ; (4096 B each, page-aligned per limb). Library-private: the content
@@ -307,6 +327,6 @@ LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHAR
 ; no candidate §8.x shared-primitive promotion path. Profile B does
 ; not allocate these tables (uses sqtab via ct_mul_8x8 instead).
 .ifdef POLY1305_PROFILE_LONG
-LIB_PRECALC_TABLE "r_tab_lo", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO
-LIB_PRECALC_TABLE "r_tab_hi", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO
+LIB_PRECALC_TABLE "r_tab_lo", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
+LIB_PRECALC_TABLE "r_tab_hi", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
 .endif
