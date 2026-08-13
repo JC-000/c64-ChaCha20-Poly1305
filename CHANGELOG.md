@@ -6,6 +6,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **`SHARED_CT_MUL_8X8` now actually defers the SPEC §8.3 primitive**
+  (issue #47). The switch previously flipped only the manifest ownership
+  bit: `poly1305_lib.s` kept exporting `poly_prod_lo` / `poly_prod_hi` /
+  `mul_8x8` and kept emitting its own `ct_mul_8x8` body, so a two-archive
+  link of a deferral build against c64-x25519 v0.8.0 — which exports the
+  same names — died with
+  `ld65: Error: Duplicate external identifier: 'poly_prod_hi'`.
+  Reproduced, then fixed per SPEC §8.3 "Migration shape": under
+  `-D SHARED_CT_MUL_8X8=1` the `ct_mul_8x8` body, the legacy `mul_8x8`
+  body and the `poly_prod_lo`/`poly_prod_hi` scratch are all gated out,
+  and `ct_mul_8x8`, `poly_prod_lo`, `poly_prod_hi`, `smc_sum_a_imm` and
+  `smc_diff_a_imm` are imported from the designated owner instead.
+  c64-wireguard can drop its staged-member workaround.
+
+- **`ct_mul_8x8` is now exported**, making this library's §8.3
+  canonical-owner claim satisfiable (issue #47). The manifest and
+  `docs/API.md` have claimed the `$0004` ownership bit since PR #43, but
+  `ct_mul_8x8` was a local label with no `.export`, so no sibling could
+  actually defer *to* us. The `smc_sum_a_imm` / `smc_diff_a_imm` operand
+  bake sites are exported alongside it (unsuffixed aliases of the SMC
+  macro pack's `_SMC` labels, matching c64-x25519's spelling) — a caller
+  patching our body needs them.
+
+  Verified by building a composed PRG in which c64-x25519 v0.8.0 supplies
+  both `ct_mul_8x8` and `mul_tables_init` and this library defers both:
+  **214/214 tests pass** against that binary. All four default builds
+  remain **byte-identical** to before the change.
+
+### Added
+- **`make lib-verify-shared`** — a §8.3 deferral-build linkage guard.
+  Assembles `poly1305_lib.s` in owner and deferral configurations and
+  pins the symbol surface each must present (owner exports all six §8.3
+  names; the deferral build exports none and imports the five it
+  references). Pure `od65` inspection, ~1 s, no emulator. Confirmed to
+  fail with 11 named errors against the pre-#47 source.
+
 ### Changed
 - **c64-lib-contract SPEC §4 segment migration** (issue #48). The library
   no longer emits into the bare ld65 `CODE` / `DATA` segments. All library

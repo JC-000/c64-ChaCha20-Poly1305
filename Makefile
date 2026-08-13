@@ -109,7 +109,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only bench bench-check
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-verify-shared bench bench-check
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -418,6 +418,64 @@ $(LIB_OBJS_DIR):
 
 $(LIB_AEAD_ONLY_OBJS_DIR):
 	mkdir -p $(LIB_AEAD_ONLY_OBJS_DIR)
+
+# ===========================================================================
+# lib-verify-shared — c64-lib-contract SPEC §8.3 deferral-build linkage guard.
+#
+# Regression guard for issue #47: `-D SHARED_CT_MUL_8X8=1` used to flip only
+# the manifest ownership bit while leaving the §8.3 export surface live, so
+# a two-archive link against a sibling owning the same primitive died with
+# `ld65: Error: Duplicate external identifier: 'poly_prod_hi'`. This target
+# assembles poly1305_lib.s in both configurations and pins the symbol
+# surface each one must present:
+#
+#   owner build (default)  MUST export every §8.3 name
+#   deferral build         MUST export NONE of them, and MUST import the
+#                          five it actually references
+#
+# Pure od65 symbol-table inspection — no VICE, no link, runs in ~1 s.
+# ===========================================================================
+LIB_SHARED_VERIFY_DIR = $(LIB_DIR)/verify-shared
+
+# Names the owner build must publish (mul_8x8 is the legacy test-only
+# alias body; it collides with the sibling's export just the same).
+LIB_SHARED_OWNED_SYMS  = ct_mul_8x8 mul_8x8 poly_prod_lo poly_prod_hi \
+                         smc_sum_a_imm smc_diff_a_imm
+# Names the deferral build must resolve from the designated owner.
+LIB_SHARED_IMPORT_SYMS = ct_mul_8x8 poly_prod_lo poly_prod_hi \
+                         smc_sum_a_imm smc_diff_a_imm
+
+lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
+	@$(CA65) $(CA65FLAGS) src/lib/poly1305_lib.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/owner.o
+	@$(CA65) $(CA65FLAGS) -D SHARED_CT_MUL_8X8=1 src/lib/poly1305_lib.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/defer.o
+	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/owner.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/owner.exports
+	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/defer.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/defer.exports
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/defer.imports
+	@fail=0; \
+	for s in $(LIB_SHARED_OWNED_SYMS); do \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/owner.exports || { \
+	        echo "FAIL: owner build does not export $$s"; fail=1; }; \
+	    if grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer.exports; then \
+	        echo "FAIL: SHARED_CT_MUL_8X8 build still exports $$s (issue #47)"; \
+	        fail=1; \
+	    fi; \
+	done; \
+	for s in $(LIB_SHARED_IMPORT_SYMS); do \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer.imports || { \
+	        echo "FAIL: SHARED_CT_MUL_8X8 build does not import $$s"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then \
+	    echo "lib-verify-shared: FAILED"; exit 1; \
+	fi; \
+	echo "lib-verify-shared: OK — §8.3 surface owned in default build, fully deferred under SHARED_CT_MUL_8X8"
+
+$(LIB_SHARED_VERIFY_DIR):
+	mkdir -p $(LIB_SHARED_VERIFY_DIR)
 
 # Reproducible source tarball for a tagged release.
 # Usage: make dist VERSION=v0.5.0

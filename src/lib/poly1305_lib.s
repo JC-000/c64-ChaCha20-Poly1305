@@ -35,7 +35,32 @@
 ; Profile B reads sqtab via ct_mul_8x8 and emits the sqtab init.
 ; Profile A gates these out entirely — see issue #34 F1 and the
 ; "Profile A dead-code trim" comment block at sqtab_init / mul_8x8.
+; c64-lib-contract SPEC §8.3 ct_mul_8x8 migration switch (issue #47).
+;
+; Owner mode (default): this library provides the canonical §8.3 body.
+; SPEC §8.3 names `ct_mul_8x8` as the canonical entry, so it is exported
+; here. Before issue #47 the manifest claimed the $0004 ownership bit
+; while `ct_mul_8x8` stayed a local label with no `.export`, so no
+; sibling could actually defer to this library as provider — the claim
+; was unsatisfiable. `poly_prod_lo` / `poly_prod_hi` are the §8.3
+; product scratch, and `smc_sum_a_imm` / `smc_diff_a_imm` are the
+; operand-bake sites a caller patches with `a` before each call.
+;
+; Deferral mode (`-D SHARED_CT_MUL_8X8=1`): the body below is gated out
+; and every one of these names is imported from the designated owner,
+; per §8.3 "Migration shape". Before issue #47 the switch flipped only
+; the manifest bit while these exports stayed live, so the two-archive
+; link against c64-x25519 v0.8.0 (which exports the same three names)
+; died with `ld65: Error: Duplicate external identifier: 'poly_prod_hi'`.
+.ifndef SHARED_CT_MUL_8X8
+.export ct_mul_8x8
 .export poly_prod_lo, poly_prod_hi
+.export smc_sum_a_imm, smc_diff_a_imm
+.else
+.import ct_mul_8x8
+.import poly_prod_lo, poly_prod_hi
+.import smc_sum_a_imm, smc_diff_a_imm
+.endif
 
 ; c64-lib-contract SPEC §8.1 sqtab-init migration switch.
 ; When a consumer provides a canonical sqtab init (`mul_tables_init`)
@@ -58,6 +83,10 @@
 sqtab_init = mul_tables_init
 .endif
 
+; mul_8x8 is gated on SHARED_CT_MUL_8X8 as well: its body is part of the
+; §8.3 surface this library either owns or defers, and c64-x25519 exports
+; the same name (issue #47).
+;
 ; mul_8x8 is the legacy 8x8 multiplier — replaced by ct_mul_8x8 (the
 ; constant-time, page-cross-safe variant) on every hot path in v0.3.0.
 ; Nothing inside this archive jsrs into mul_8x8 anymore; the only callers
@@ -65,8 +94,10 @@ sqtab_init = mul_tables_init
 ; therefore not exported. The body is left in place (touching the
 ; crypto-code paths is out of scope for the variant); only the external
 ; symbol table entry shrinks.
+.ifndef SHARED_CT_MUL_8X8
 .ifndef LIB_VARIANT_AEAD_ONLY
 .export mul_8x8
+.endif
 .endif
 .endif
 .ifdef POLY1305_PROFILE_LONG
@@ -439,6 +470,14 @@ sq_i:   .res 2, 0              ; 16-bit index counter (0..511)
 ; mult66 — uses only sqtab_lo/hi and dynamically computes |a-b| via a
 ; branchless sign-mask, so no companion table is required.
 
+; --- SPEC §8.3 owned surface (issue #47) -------------------------------------
+; poly_prod_lo/hi and the legacy mul_8x8 body belong to the §8.3
+; primitive. A deferral build imports them from the owner instead (see
+; the migration-switch block at the top of this file), so the
+; definitions below are gated out — otherwise the deferring build would
+; both define and import the same names.
+.ifndef SHARED_CT_MUL_8X8
+
 ; =============================================================================
 ; mul_8x8 - 8-bit x 8-bit → 16-bit multiply using quarter-square table
 ;
@@ -498,9 +537,17 @@ mul_8x8:
 mul_a:          .byte 0
 mul_b:          .byte 0
 mul_s_pg:       .byte 0
+
+.endif          ; .ifndef SHARED_CT_MUL_8X8 (mul_8x8 + poly_prod_lo/hi)
 .endif          ; .ifndef POLY1305_PROFILE_LONG (sqtab_init..mul_s_pg)
 
 .ifndef POLY1305_PROFILE_LONG
+; A deferral build (`-D SHARED_CT_MUL_8X8=1`) gates this body out and
+; calls the owner's canonical `ct_mul_8x8` instead — SPEC §8.3
+; "Migration shape" (issue #47). The callers are unaffected: they bake
+; `a` into smc_sum_a_imm+1 / smc_diff_a_imm+1 and read the result from
+; poly_prod_lo/hi, and all four names resolve to the owner's copy.
+.ifndef SHARED_CT_MUL_8X8
 ; =============================================================================
 ; ct_mul_8x8 — Profile B constant-time 8×8 → 16-bit multiply (v0.3.0 CT fix)
 ;
@@ -584,6 +631,17 @@ ct_mul_8x8:
         sbc sqtab_hi,y                  ; sqtab_hi[|a-b|]
         sta poly_prod_hi
         rts
+
+; Cross-library aliases for the two operand-bake sites (issue #47). The
+; SMC macro pack spells the underlying labels with a `_SMC` suffix
+; (`smc_sum_a_imm_SMC`), but SPEC §8.3 and c64-x25519 use the
+; unsuffixed names, so a deferring sibling patching our body — or our
+; callers patching a sibling's body — needs this spelling to exist.
+; Same address, so the emitted bytes are unchanged.
+smc_sum_a_imm  = smc_sum_a_imm_SMC
+smc_diff_a_imm = smc_diff_a_imm_SMC
+
+.endif  ; .ifndef SHARED_CT_MUL_8X8 (ct_mul_8x8 body)
 .endif
 
 ; =============================================================================
@@ -737,8 +795,8 @@ poly1305_multiply:
 @outer_jloop:
         ldx poly_j
         lda poly_r, x
-        SMC_StoreValue smc_sum_a_imm
-        SMC_StoreValue smc_diff_a_imm
+        sta smc_sum_a_imm+1             ; bake `a` (see §8.3 block, issue #47)
+        sta smc_diff_a_imm+1
 
         ; The poly_pp_ct_mul macro hardcodes the (i, j) pair into
         ; absolute addresses for poly_product[i+j..]. Since j is now a
@@ -821,8 +879,8 @@ poly1305_multiply:
         ; --- Cache r[j] into ct_mul_8x8 immediates (one set per j) ----
         ldx poly_j
         lda poly_r, x
-        SMC_StoreValue smc_sum_a_imm
-        SMC_StoreValue smc_diff_a_imm
+        sta smc_sum_a_imm+1             ; bake `a` (see §8.3 block, issue #47)
+        sta smc_diff_a_imm+1
 
         ; --- Inner i loop: 17 iterations (i = 0..16) -------------------
         ; pp_idx = i + j starts at j; we keep it in poly_carry as a
@@ -874,8 +932,8 @@ poly1305_multiply:
         ; mult66 path): no ZP pointer pair is needed.
         .repeat 16, J
             lda poly_r + J
-            SMC_StoreValue smc_sum_a_imm
-            SMC_StoreValue smc_diff_a_imm
+            sta smc_sum_a_imm+1             ; bake `a` (see §8.3 block, issue #47)
+            sta smc_diff_a_imm+1
             .repeat 17, I
                 poly_pp_ct_mul I, J
             .endrepeat
