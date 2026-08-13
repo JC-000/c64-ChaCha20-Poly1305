@@ -608,7 +608,7 @@ adopter-side subset assert that pins ownership ⊆ consumes.
 | Prefixed symbol (use this) | Deprecated bare alias | Value (this release) |
 |---|---|---|
 | `LIB_CHACHA20_POLY1305_VERSION_MAJOR` | `LIB_VERSION_MAJOR` | 0 |
-| `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 6 |
+| `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 7 |
 | `LIB_CHACHA20_POLY1305_VERSION_PATCH` | `LIB_VERSION_PATCH` | 0 |
 | `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 1 |
 
@@ -631,8 +631,8 @@ importing the constants and testing them in a `.if`:
 ```ca65
 .import LIB_CHACHA20_POLY1305_VERSION_MAJOR
 .import LIB_CHACHA20_POLY1305_VERSION_MINOR
-.if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 6
-    .error "needs c64-ChaCha20-Poly1305 v0.6+"
+.if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 7
+    .error "needs c64-ChaCha20-Poly1305 v0.7+"
 .endif
 ```
 

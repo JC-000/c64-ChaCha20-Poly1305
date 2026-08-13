@@ -80,23 +80,37 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   over-report Profile A and under-report Profile B for consumer
 ;   `.assert resident <= N` checks.
 ;
-;   MEASUREMENT BASIS (corrected in issue #51, after issue #48). These
-;   numbers describe what a CONSUMER links, which since the SPEC §4
-;   segment migration is no longer the same as the in-tree harness PRG:
-;   `main.s`'s 1-byte lib_entry stub holds $0900, so the page-aligned
-;   LIB_CHACHA20_POLY1305_CODE segment starts at $0A00 and the standalone
-;   PRG carries 255 B of inter-segment pad that no consumer pays. Measure
-;   from a consumer-side link (see test_consumer/), not from
-;   build/profile-*/c64_chacha20_poly1305.prg — post-#48 the latter reads
-;   16422 / 17702 B net of the 2-byte header and would over-report both
-;   profiles by ~256 B.
+;   MEASUREMENT BASIS (rebased for v0.7.0). These numbers are now the
+;   library's OWN segment contribution — the sum of
+;   LIB_CHACHA20_POLY1305_CODE + LIB_CHACHA20_POLY1305_DATA across the
+;   archive's member objects, via `od65 --dump-segsize`.
 ;
-;   Actual measurements at this commit:
-;     Profile A: 16166 B  → padded to 16384 (256-aligned, $4000)
-;     Profile B: 17446 B  → padded to 17664 (256-aligned, $4500)
-;   Padding provides a small headroom buffer that absorbs incidental
-;   growth between releases without forcing consumer `.assert`
-;   rewrites. Update on each release.
+;   Through v0.6.0 the basis was "PRG file size minus the 2-byte
+;   LOADADDR header", measured from build/profile-*/*.prg. That number
+;   included things no consumer links — the harness main.s stub, the
+;   BASIC stub, and (after the issue #48 segment migration) 255 B of
+;   inter-segment pad created by the 1-byte lib_entry stub holding
+;   $0900. It also moved when the TEST HARNESS layout changed, which is
+;   not a property of the library at all. By v0.7.0 that had made the
+;   equates UNDER-report the real consumer-side link — the dangerous
+;   direction for a consumer's `.assert resident <= N` fit check.
+;
+;   The segment-sum basis is consumer-independent: it does not move with
+;   anyone's cfg, padding, or entry stub, and it is exactly what SPEC §5
+;   asks for ("code+rodata footprint that must remain CPU-resident in
+;   any consumer"). Reproduce with:
+;
+;     make lib && for o in build/lib/objs/*.o; do od65 --dump-segsize $o; done
+;
+;   Measured at this release (v0.7.0):
+;     Profile A            15 544 B  (CODE 15 249 + DATA 295) -> 15 616
+;     Profile B full       16 838 B  (CODE 16 543 + DATA 295) -> 16 896
+;     Profile B aead-only  16 513 B  (CODE 16 218 + DATA 295) -> 16 640
+;
+;   Each is rounded UP to the next 256-byte boundary, so the equate is
+;   always >= actual (safe direction) and absorbs incidental growth
+;   between releases without forcing consumer `.assert` rewrites.
+;   Update on each release.
 ;
 ;   Consumers wanting the larger of the two for a profile-agnostic
 ;   upper bound should use the Profile B value (it is and will remain
@@ -110,13 +124,18 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   savings on the consumer-side link: 1024 B (5.96%) vs Profile B
 ;   full. The variant exposes its own equate below.
 ;
-;     full        archive linked into Profile B min consumer : 17191 B
-;     aead-only   archive linked into Profile B min consumer : 16167 B
+;     full        archive linked into Profile B min consumer : 17702 B
+;     aead-only   archive linked into Profile B min consumer : 16678 B
+;
+;   (Those two are whole-PRG figures for test_consumer/ and include its
+;   own stub, BASIC header and cfg padding — quoted only to show the
+;   variant delta. The equates themselves use the segment-sum basis
+;   described above, which is why they are smaller.)
 ; ---------------------------------------------------------------------------
 .ifdef POLY1305_PROFILE_LONG
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16384
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15616
 .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
 .endif
 
 ; aead-only variant exposes its own equate so a consumer that
@@ -124,7 +143,7 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
 ; static-assert against a tighter budget. Pattern follows §5's
 ; "library author refreshes them when a release substantively
 ; changes any one of them" — added on a MINOR release.
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16640
 
 ; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_COLD_BYTES

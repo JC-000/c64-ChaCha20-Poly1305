@@ -1,8 +1,8 @@
 {
   "backend": "vice",
-  "commit": "36ec121",
-  "generated": "2026-05-20 20:05:43 UTC",
-  "prg_md5": "4afe54d466ad92ca38b91c94a2ea2b36",
+  "commit": "f7cc990",
+  "generated": "2026-08-13 15:41:06 UTC",
+  "prg_md5": "6e9a989f21940826153a63c2d709216f",
   "profile": "B",
   "rows": [
     {
@@ -48,10 +48,10 @@
       "spread": 491
     },
     {
-      "cycles": 2495140,
+      "cycles": 2495144,
       "name": "aead_compute_tag",
       "notes": "tag compute over n=1024 ciphertext + 0-byte AAD + lengths",
-      "spread": 32
+      "spread": 61
     },
     {
       "cycles": 313,
@@ -69,25 +69,25 @@
       "cycles": 101.359375,
       "name": "ct_mul_8x8",
       "notes": "Profile B 8x8->16 multiply primitive; loop-of-64 with varied (a,b) operands; reported as cycles/call after dividing wrapper measurement by loop count",
-      "spread": 5.359375
+      "spread": 5.34375
     },
     {
-      "cycles": 80519,
+      "cycles": 80521,
       "name": "aead_encrypt n=0",
       "notes": "AEAD per-packet fixed cost (OTK derive + 0-byte tag)",
-      "spread": 388
+      "spread": 340
     },
     {
-      "cycles": 274753,
+      "cycles": 274761,
       "name": "aead_encrypt n=64",
       "notes": "AEAD over one 64-byte plaintext block",
-      "spread": 1381
+      "spread": 1384
     },
     {
-      "cycles": 3195710,
+      "cycles": 3195713,
       "name": "aead_encrypt n=1024",
       "notes": "AEAD over 16 blocks of plaintext",
-      "spread": 1509
+      "spread": 1469
     }
   ],
   "samples": 5

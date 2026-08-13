@@ -4,171 +4,84 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] — 2026-08-13
 
-### Fixed
-- **§5 aggregate equates exported `:abs`** (issue #62). The five §5
-  exports carried no address-size hint, so ca65 inferred it from the
-  *value* — `REU_BANKS_USED` (`$00`), `ZP_USAGE_BYTES` (88) and
-  `COLD_BYTES` (0) came out `zeropage` while a consumer's `.import`
-  defaults to absolute, warning three times in every composed link:
+Contract-conformance release. Brings the library from c64-lib-contract
+v0.4.0 up to **v0.7.2**, closing every open adopter gap: the SPEC §4
+segment migration, a §8.3 deferral that was manifest-only, three
+separate link-collision classes, and the v0.5.0 three-state
+shared-primitive semantics. `src/lib_version.s` now declares 0.7.0.
 
-  ```
-  ld65: Warning: Address size mismatch for 'LIB_CHACHA20_POLY1305_REU_BANKS_USED':
-        Exported from lib_manifest.o as 'zeropage', import as 'absolute'
-  ```
+Together these make the library composable with a sibling for the first
+time: c64-wireguard could previously link this library alongside
+c64-x25519 only by ceding the bare `CODE`/`DATA` segment names, carrying
+a `sed` over the archive members, and verifying manifest values
+out-of-band with `od65` because importing both manifests broke the link.
+All three workarounds can now be dropped.
 
-  Pre-existing, but only became reachable once #57's prefixed exports
-  made these symbols importable at all. Noise rather than breakage — the
-  values resolve and the asserts evaluate — but the diagnostic tracked
-  the value rather than the interface (it would vanish if this library
-  ever claimed an REU bank above `$FF`, and return if it dropped back),
-  and the obvious consumer workaround, `.import ...: zeropage`, pins a
-  manifest constant to an address size that is an artifact of its
-  current value. Measured: 3 warnings before, **0** after.
+Semver: **MINOR** bump. Pre-1.0, so the breaking changes below are
+allowed in MINOR (same basis as v0.6.0's removal of the `poly1305_reu_*`
+surface). `LIB_ABI_VERSION` stays **1**, matching SPEC §1's rule that it
+tracks the MAJOR bump — but note this is the most consumer-breaking
+release the library has had, and the required actions are listed below
+rather than left to the section detail.
 
-### Added
-- **Library-prefixed §1 version exports + `LIB_NO_BARE_EXPORTS` gate**
-  (issues #53, #57 item 1; contract v0.7.0). `src/lib_version.s` now
-  exports `LIB_CHACHA20_POLY1305_VERSION_{MAJOR,MINOR,PATCH}` and
-  `LIB_CHACHA20_POLY1305_ABI_VERSION`. The bare `LIB_VERSION_*` names are
-  kept as **aliases** (still required through contract v0.x, removed at
-  v1.0) and are suppressed under `ca65 -D LIB_NO_BARE_EXPORTS=1`, which a
-  consumer applies to every library in the link. Aliasing rather than
-  restating the literals means a release bump touches four lines and the
-  forms cannot drift. §1's TU-isolation rule was already satisfied and is
-  now stated in the file so it stays that way.
+### Consumer action required
 
-- **Library-prefixed §8.4 precalc equates** (issues #54, #57 item 3;
-  contract v0.7.0). `src/precalc_table.inc` is re-copied **verbatim** from
-  the contract canonical (`c64-lib-contract@62a5318`) and all five
-  `LIB_PRECALC_TABLE` invocations pass the fifth library-prefix argument,
-  emitting `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}`
-  beside the gated bare triple. Table *names* stay unprefixed and
-  normative — the prefix identifies the declaring library, never the
-  table. This enables a cross-library check the bare form could not
-  express, verified against c64-x25519 v0.8.0:
+1. **Add two segment declarations to your ld65 cfg.** The library no
+   longer emits into bare `CODE`/`DATA`:
 
-  ```asm
-  .assert LIB_X25519_PRECALC_sqtab_SIZE = LIB_CHACHA20_POLY1305_PRECALC_sqtab_SIZE, lderror, "linked libraries disagree on the shared sqtab size"
-  ```
+   ```
+   LIB_CHACHA20_POLY1305_CODE: load = MAIN, type = ro, align = $100;
+   LIB_CHACHA20_POLY1305_DATA: load = MAIN, type = rw;
+   ```
 
-### Fixed
-- **§8.x bit constants are no longer exported** (issue #57 item 2). The
-  two `.export LIB_SHARED_PRIMITIVES_{SQTAB,CT_MUL_8X8}:abs` lines emitted
-  unprefixed names with identical values in every adopter, so linking with
-  c64-x25519 died on `Duplicate external identifier:
-  'LIB_SHARED_PRIMITIVES_CT_MUL_8X8'`. **No SPEC clause ever asked for
-  this export** — and unlike the deprecated bare §1 names, the v0.7.0
-  prefixing does not fix it, so it survived that migration. §8.1/§8.2/§8.3
-  present the bit constants as plain local equates adopters copy verbatim
-  (the v0.6.1 §13.0 clause states the reasoning outright for the analogous
-  `NET_FAMILY_*` bits: only exported symbols can collide). They exist to
-  *build* the two prefixed masks, which are the symbols meant to cross the
-  link. c64-nist-curves has always kept them local, which is why the
-  collision never surfaced there.
+   Both attributes are load-bearing and **fail silently** if omitted:
+   `align = $100` is a constant-time invariant (ld65 only *warns* and
+   links the secret-indexed LUTs misaligned), and `type = rw` in a
+   file-emitting area is what makes `sqtab_ready` load as zero. ld65
+   hard-errors if the segments are absent entirely.
 
-- **Copy-paste-facing snippets corrected** (issue #55). `.and` → `&` in
-  the REU-bank collision assert (`lib_manifest.s`): ca65's `.and` is
-  *boolean*, so the published snippet was true whenever both masks were
-  non-zero regardless of which bits were set — a real bank collision
-  passed silently (contract v0.4.2). And `--asm-define` → `-D` at five
-  sites (`Makefile`, `test_consumer/Makefile`, `poly1305_lib.s`,
-  `docs/precalc-tables.md`, a historical `CHANGELOG.md` entry):
-  `--asm-define` is `cl65`'s spelling and `ca65` rejects it outright with
-  `Unknown option`, so every one of those snippets failed when copied
-  (contract v0.7.1).
+2. **If you link this library alongside another**, build every library
+   with `ca65 -D LIB_NO_BARE_EXPORTS=1` and import the `LIB_<X>_`-prefixed
+   manifest equates. The unprefixed forms remain exported by default and
+   are removed at contract v1.0.
 
-- **`make lib-verify-shared` hardened against a false-negative class**
-  (contract v0.7.2). `od65` cannot read `.a` archives — pointed at one it
-  prints `(no xo65 object file)` **and exits 0**, so a grep-based audit
-  reports zero matches and looks like a clean pass. The target already
-  read `.o` files, but its "must NOT export" checks would still have
-  passed vacuously against an empty or unreadable dump. Each dump is now
-  sentinel-checked for a symbol known to be present, so a broken dump
-  fails loudly instead of reporting success. Verified by emptying a dump
-  and confirming the sentinel fires.
+3. **If you imported `LIB_SHARED_PRIMITIVES_SQTAB` or
+   `LIB_SHARED_PRIMITIVES_CT_MUL_8X8`**, copy the equates locally
+   instead — they are no longer exported (they never should have been;
+   see **Fixed**).
 
-### Fixed
-- **Profile A no longer over-claims §8.0 shared-primitive ownership**
-  (issue #51). `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` was built with no
-  profile gate, so Profile A advertised `$0005` — ownership of both the
-  §8.1 `sqtab` and the §8.3 `ct_mul_8x8` — although issue #34 F1 gated
-  sqtab, `sqtab_init` and `mul_8x8` out of Profile A entirely and the
-  `ct_mul_8x8` body is Profile B only. Measured on the pre-fix tree:
-  `profile-a/poly1305_lib.o` exports none of those symbols while
-  `profile-a/lib_manifest.o` exported `$0005`.
-
-  A consumer composing Profile A with c64-x25519 therefore hit the §8.0
-  disjointness assert as a false double-ownership error, and the v0.5.0
-  coverage assert concluded `sqtab` had an owner in the link when this
-  library provides no `sqtab_init` at all — the silent-wrong-result
-  direction (table read with no init). Profile A now reads `$0000`.
-
-  The `LIB_PRECALC_TABLE "sqtab", ...` enumeration row is profile-gated
-  for the same reason, so Profile A's `_PRECALC_` export count drops from
-  15 to 12; it already omitted the Profile-A-only Shoup rows on Profile B.
-
-### Added
-- **`LIB_CHACHA20_POLY1305_SHARED_CONSUMES`** (issue #52) — the companion
-  mask contract v0.5.0 made mandatory for any adopter consuming a §8
-  primitive. Ownership says what this build provides; consumes says what
-  it uses, which is what distinguishes a *deferring consumer* (needs
-  exactly one owner in the link, must be initialized at boot) from a
-  *non-consumer* (no provider obligation). It unlocks the consumer-side
-  coverage assert that turns a missing provider into a named assemble-time
-  error instead of an unresolved external or a silent wrong result.
-
-  | build | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
-  |---|---|---|
-  | Profile A | `$0000` | `$0000` |
-  | Profile B standalone | `$0005` | `$0005` |
-  | Profile B `-D SHARED_CT_MUL_8X8=1` | `$0001` | `$0005` |
-  | Profile B `-D SHARED_SQTAB_INIT=1` | `$0004` | `$0005` |
-  | Profile B, both switches | `$0000` | `$0005` |
-
-  `lib_manifest.s` also carries the §8.0 subset assert (`ownership ⊆
-  consumes`), verified to fire with its named message when the issue-#51
-  gate shape is re-seeded.
-
-### Fixed
-- **`SHARED_CT_MUL_8X8` now actually defers the SPEC §8.3 primitive**
-  (issue #47). The switch previously flipped only the manifest ownership
-  bit: `poly1305_lib.s` kept exporting `poly_prod_lo` / `poly_prod_hi` /
-  `mul_8x8` and kept emitting its own `ct_mul_8x8` body, so a two-archive
-  link of a deferral build against c64-x25519 v0.8.0 — which exports the
-  same names — died with
-  `ld65: Error: Duplicate external identifier: 'poly_prod_hi'`.
-  Reproduced, then fixed per SPEC §8.3 "Migration shape": under
-  `-D SHARED_CT_MUL_8X8=1` the `ct_mul_8x8` body, the legacy `mul_8x8`
-  body and the `poly_prod_lo`/`poly_prod_hi` scratch are all gated out,
-  and `ct_mul_8x8`, `poly_prod_lo`, `poly_prod_hi`, `smc_sum_a_imm` and
-  `smc_diff_a_imm` are imported from the designated owner instead.
-  c64-wireguard can drop its staged-member workaround.
-
-- **`ct_mul_8x8` is now exported**, making this library's §8.3
-  canonical-owner claim satisfiable (issue #47). The manifest and
-  `docs/API.md` have claimed the `$0004` ownership bit since PR #43, but
-  `ct_mul_8x8` was a local label with no `.export`, so no sibling could
-  actually defer *to* us. The `smc_sum_a_imm` / `smc_diff_a_imm` operand
-  bake sites are exported alongside it (unsuffixed aliases of the SMC
-  macro pack's `_SMC` labels, matching c64-x25519's spelling) — a caller
-  patching our body needs them.
-
-  Verified by building a composed PRG in which c64-x25519 v0.8.0 supplies
-  both `ct_mul_8x8` and `mul_tables_init` and this library defers both:
-  **214/214 tests pass** against that binary. All four default builds
-  remain **byte-identical** to before the change.
-
-### Added
-- **`make lib-verify-shared`** — a §8.3 deferral-build linkage guard.
-  Assembles `poly1305_lib.s` in owner and deferral configurations and
-  pins the symbol surface each must present (owner exports all six §8.3
-  names; the deferral build exports none and imports the five it
-  references). Pure `od65` inspection, ~1 s, no emulator. Confirmed to
-  fail with 11 named errors against the pre-#47 source.
+4. **Re-check any `.assert LIB_CHACHA20_POLY1305_RESIDENT_BYTES <= N`.**
+   The values are rebased onto a consumer-independent measurement and are
+   now *smaller*; see **Changed**.
 
 ### Changed
+- **`RESIDENT_BYTES` rebased onto a consumer-independent measurement.**
+  Through v0.6.0 the basis was "PRG file size minus the 2-byte LOADADDR
+  header", taken from `build/profile-*/*.prg`. That figure included
+  things no consumer links — the harness `main.s` stub, the BASIC stub,
+  and (after the §4 migration) 255 B of inter-segment pad — and it moved
+  when the *test harness* layout changed, which is not a property of the
+  library. By this release it had drifted into **under-reporting** the
+  real consumer-side link, the dangerous direction for a
+  `.assert resident <= N` fit check.
+
+  The basis is now the library's own segment contribution
+  (`LIB_CHACHA20_POLY1305_CODE` + `_DATA`, summed across the archive's
+  member objects via `od65 --dump-segsize`), rounded up to the next
+  256-byte boundary so the equate is always ≥ actual:
+
+  | Build | measured | equate | was |
+  |---|---|---|---|
+  | Profile A | 15 544 B | **15 616** | 16 384 |
+  | Profile B full | 16 838 B | **16 896** | 17 664 |
+  | Profile B aead-only | 16 513 B | **16 640** | 16 384 |
+
+  The values are *smaller* than before because the old basis counted
+  harness overhead. Re-check any consumer assert pinned to the old
+  numbers.
+
 - **c64-lib-contract SPEC §4 segment migration** (issue #48). The library
   no longer emits into the bare ld65 `CODE` / `DATA` segments. All library
   code moves to `LIB_CHACHA20_POLY1305_CODE` and all library state to
@@ -213,6 +126,163 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   `examples/smoke_test/` links a vendored v0.3.0 snapshot that predates
   the rename, so its cfg still uses bare `CODE`/`DATA` and is unchanged.
+
+### Added
+- **`LIB_CHACHA20_POLY1305_SHARED_CONSUMES`** (issue #52) — the companion
+  mask contract v0.5.0 made mandatory for any adopter consuming a §8
+  primitive. Ownership says what this build provides; consumes says what
+  it uses, which is what distinguishes a *deferring consumer* (needs
+  exactly one owner in the link, must be initialized at boot) from a
+  *non-consumer* (no provider obligation). It unlocks the consumer-side
+  coverage assert that turns a missing provider into a named assemble-time
+  error instead of an unresolved external or a silent wrong result.
+
+  | build | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
+  |---|---|---|
+  | Profile A | `$0000` | `$0000` |
+  | Profile B standalone | `$0005` | `$0005` |
+  | Profile B `-D SHARED_CT_MUL_8X8=1` | `$0001` | `$0005` |
+  | Profile B `-D SHARED_SQTAB_INIT=1` | `$0004` | `$0005` |
+  | Profile B, both switches | `$0000` | `$0005` |
+
+  `lib_manifest.s` also carries the §8.0 subset assert (`ownership ⊆
+  consumes`), verified to fire with its named message when the issue-#51
+  gate shape is re-seeded.
+
+- **Library-prefixed §1 version exports + `LIB_NO_BARE_EXPORTS` gate**
+  (issues #53, #57 item 1; contract v0.7.0). `src/lib_version.s` now
+  exports `LIB_CHACHA20_POLY1305_VERSION_{MAJOR,MINOR,PATCH}` and
+  `LIB_CHACHA20_POLY1305_ABI_VERSION`. The bare `LIB_VERSION_*` names are
+  kept as **aliases** (still required through contract v0.x, removed at
+  v1.0) and are suppressed under `ca65 -D LIB_NO_BARE_EXPORTS=1`, which a
+  consumer applies to every library in the link. Aliasing rather than
+  restating the literals means a release bump touches four lines and the
+  forms cannot drift. §1's TU-isolation rule was already satisfied and is
+  now stated in the file so it stays that way.
+
+- **Library-prefixed §8.4 precalc equates** (issues #54, #57 item 3;
+  contract v0.7.0). `src/precalc_table.inc` is re-copied **verbatim** from
+  the contract canonical (`c64-lib-contract@62a5318`) and all five
+  `LIB_PRECALC_TABLE` invocations pass the fifth library-prefix argument,
+  emitting `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}`
+  beside the gated bare triple. Table *names* stay unprefixed and
+  normative — the prefix identifies the declaring library, never the
+  table. This enables a cross-library check the bare form could not
+  express, verified against c64-x25519 v0.8.0:
+
+  ```asm
+  .assert LIB_X25519_PRECALC_sqtab_SIZE = LIB_CHACHA20_POLY1305_PRECALC_sqtab_SIZE, lderror, "linked libraries disagree on the shared sqtab size"
+  ```
+
+- **`make lib-verify-shared`** — a §8.3 deferral-build linkage guard.
+  Assembles `poly1305_lib.s` in owner and deferral configurations and
+  pins the symbol surface each must present (owner exports all six §8.3
+  names; the deferral build exports none and imports the five it
+  references). Pure `od65` inspection, ~1 s, no emulator. Confirmed to
+  fail with 11 named errors against the pre-#47 source.
+
+### Fixed
+- **`SHARED_CT_MUL_8X8` now actually defers the SPEC §8.3 primitive**
+  (issue #47). The switch previously flipped only the manifest ownership
+  bit: `poly1305_lib.s` kept exporting `poly_prod_lo` / `poly_prod_hi` /
+  `mul_8x8` and kept emitting its own `ct_mul_8x8` body, so a two-archive
+  link of a deferral build against c64-x25519 v0.8.0 — which exports the
+  same names — died with
+  `ld65: Error: Duplicate external identifier: 'poly_prod_hi'`.
+  Reproduced, then fixed per SPEC §8.3 "Migration shape": under
+  `-D SHARED_CT_MUL_8X8=1` the `ct_mul_8x8` body, the legacy `mul_8x8`
+  body and the `poly_prod_lo`/`poly_prod_hi` scratch are all gated out,
+  and `ct_mul_8x8`, `poly_prod_lo`, `poly_prod_hi`, `smc_sum_a_imm` and
+  `smc_diff_a_imm` are imported from the designated owner instead.
+  c64-wireguard can drop its staged-member workaround.
+
+- **`ct_mul_8x8` is now exported**, making this library's §8.3
+  canonical-owner claim satisfiable (issue #47). The manifest and
+  `docs/API.md` have claimed the `$0004` ownership bit since PR #43, but
+  `ct_mul_8x8` was a local label with no `.export`, so no sibling could
+  actually defer *to* us. The `smc_sum_a_imm` / `smc_diff_a_imm` operand
+  bake sites are exported alongside it (unsuffixed aliases of the SMC
+  macro pack's `_SMC` labels, matching c64-x25519's spelling) — a caller
+  patching our body needs them.
+
+  Verified by building a composed PRG in which c64-x25519 v0.8.0 supplies
+  both `ct_mul_8x8` and `mul_tables_init` and this library defers both:
+  **214/214 tests pass** against that binary. All four default builds
+  remain **byte-identical** to before the change.
+
+- **Profile A no longer over-claims §8.0 shared-primitive ownership**
+  (issue #51). `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` was built with no
+  profile gate, so Profile A advertised `$0005` — ownership of both the
+  §8.1 `sqtab` and the §8.3 `ct_mul_8x8` — although issue #34 F1 gated
+  sqtab, `sqtab_init` and `mul_8x8` out of Profile A entirely and the
+  `ct_mul_8x8` body is Profile B only. Measured on the pre-fix tree:
+  `profile-a/poly1305_lib.o` exports none of those symbols while
+  `profile-a/lib_manifest.o` exported `$0005`.
+
+  A consumer composing Profile A with c64-x25519 therefore hit the §8.0
+  disjointness assert as a false double-ownership error, and the v0.5.0
+  coverage assert concluded `sqtab` had an owner in the link when this
+  library provides no `sqtab_init` at all — the silent-wrong-result
+  direction (table read with no init). Profile A now reads `$0000`.
+
+  The `LIB_PRECALC_TABLE "sqtab", ...` enumeration row is profile-gated
+  for the same reason, so Profile A's `_PRECALC_` export count drops from
+  15 to 12; it already omitted the Profile-A-only Shoup rows on Profile B.
+
+- **§8.x bit constants are no longer exported** (issue #57 item 2). The
+  two `.export LIB_SHARED_PRIMITIVES_{SQTAB,CT_MUL_8X8}:abs` lines emitted
+  unprefixed names with identical values in every adopter, so linking with
+  c64-x25519 died on `Duplicate external identifier:
+  'LIB_SHARED_PRIMITIVES_CT_MUL_8X8'`. **No SPEC clause ever asked for
+  this export** — and unlike the deprecated bare §1 names, the v0.7.0
+  prefixing does not fix it, so it survived that migration. §8.1/§8.2/§8.3
+  present the bit constants as plain local equates adopters copy verbatim
+  (the v0.6.1 §13.0 clause states the reasoning outright for the analogous
+  `NET_FAMILY_*` bits: only exported symbols can collide). They exist to
+  *build* the two prefixed masks, which are the symbols meant to cross the
+  link. c64-nist-curves has always kept them local, which is why the
+  collision never surfaced there.
+
+- **§5 aggregate equates exported `:abs`** (issue #62). The five §5
+  exports carried no address-size hint, so ca65 inferred it from the
+  *value* — `REU_BANKS_USED` (`$00`), `ZP_USAGE_BYTES` (88) and
+  `COLD_BYTES` (0) came out `zeropage` while a consumer's `.import`
+  defaults to absolute, warning three times in every composed link:
+
+  ```
+  ld65: Warning: Address size mismatch for 'LIB_CHACHA20_POLY1305_REU_BANKS_USED':
+        Exported from lib_manifest.o as 'zeropage', import as 'absolute'
+  ```
+
+  Pre-existing, but only became reachable once #57's prefixed exports
+  made these symbols importable at all. Noise rather than breakage — the
+  values resolve and the asserts evaluate — but the diagnostic tracked
+  the value rather than the interface (it would vanish if this library
+  ever claimed an REU bank above `$FF`, and return if it dropped back),
+  and the obvious consumer workaround, `.import ...: zeropage`, pins a
+  manifest constant to an address size that is an artifact of its
+  current value. Measured: 3 warnings before, **0** after.
+
+- **Copy-paste-facing snippets corrected** (issue #55). `.and` → `&` in
+  the REU-bank collision assert (`lib_manifest.s`): ca65's `.and` is
+  *boolean*, so the published snippet was true whenever both masks were
+  non-zero regardless of which bits were set — a real bank collision
+  passed silently (contract v0.4.2). And `--asm-define` → `-D` at five
+  sites (`Makefile`, `test_consumer/Makefile`, `poly1305_lib.s`,
+  `docs/precalc-tables.md`, a historical `CHANGELOG.md` entry):
+  `--asm-define` is `cl65`'s spelling and `ca65` rejects it outright with
+  `Unknown option`, so every one of those snippets failed when copied
+  (contract v0.7.1).
+
+- **`make lib-verify-shared` hardened against a false-negative class**
+  (contract v0.7.2). `od65` cannot read `.a` archives — pointed at one it
+  prints `(no xo65 object file)` **and exits 0**, so a grep-based audit
+  reports zero matches and looks like a clean pass. The target already
+  read `.o` files, but its "must NOT export" checks would still have
+  passed vacuously against an empty or unreadable dump. Each dump is now
+  sentinel-checked for a symbol known to be present, so a broken dump
+  fails loudly instead of reporting success. Verified by emptying a dump
+  and confirming the sentinel fires.
 
 ## [0.6.0] — 2026-07-28
 
