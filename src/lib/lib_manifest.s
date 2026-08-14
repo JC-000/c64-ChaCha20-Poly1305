@@ -102,10 +102,21 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;
 ;     make lib && for o in build/lib/objs/*.o; do od65 --dump-segsize $o; done
 ;
-;   Measured at this release (v0.7.0):
-;     Profile A            15 544 B  (CODE 15 249 + DATA 295) -> 15 616
+;   Measured (issue #69 re-measure, all four configurations):
+;     Profile A full       15 544 B  (CODE 15 249 + DATA 295) -> 15 616
+;     Profile A aead-only  15 219 B  (CODE 14 924 + DATA 295) -> 15 360
 ;     Profile B full       16 838 B  (CODE 16 543 + DATA 295) -> 16 896
 ;     Profile B aead-only  16 513 B  (CODE 16 218 + DATA 295) -> 16 640
+;
+;   VARIANT-AWARE as of issue #69. Until then this equate was gated on
+;   the profile only, so the aead-only archive shipped a manifest
+;   describing the FULL build — it reported 16 896 against a measured
+;   16 513, i.e. it described a build the consumer had not linked.
+;   Contract #62 is the general form of that defect. It over-reported,
+;   which is the safe direction for a `.assert resident <= N` fit check,
+;   and 383 B on 16 513 is 2.3% — inside §5's "within 5% is fine" — so
+;   this is a truthfulness fix rather than a bug fix. Each archive now
+;   describes itself.
 ;
 ;   Each is rounded UP to the next 256-byte boundary, so the equate is
 ;   always >= actual (safe direction) and absorbs incidental growth
@@ -133,17 +144,40 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   described above, which is why they are smaller.)
 ; ---------------------------------------------------------------------------
 .ifdef POLY1305_PROFILE_LONG
+  .ifdef LIB_VARIANT_AEAD_ONLY
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
+  .else
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15616
+  .endif
 .else
+  .ifdef LIB_VARIANT_AEAD_ONLY
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
+  .else
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
+  .endif
 .endif
 
-; aead-only variant exposes its own equate so a consumer that
-; specifically pins the trimmed archive can `.import` this name and
-; static-assert against a tighter budget. Pattern follows §5's
-; "library author refreshes them when a release substantively
-; changes any one of them" — added on a MINOR release.
+; aead-only variant exposes its own equate so a consumer holding the
+; FULL archive can see what the trimmed variant would cost before
+; switching to it. Pattern follows §5's "library author refreshes them
+; when a release substantively changes any one of them" — added on a
+; MINOR release.
+;
+; Profile-aware as of issue #69: it reports the aead-only footprint of
+; THIS profile, so it stays meaningful whichever profile is built. In an
+; aead-only build it necessarily equals RESIDENT_BYTES above — that
+; redundancy is deliberate, since a consumer pinning the trimmed archive
+; may import either name.
+;
+; Note §5 does not define this name, so a consumer following the spec
+; alone would not know to import it. That is why RESIDENT_BYTES itself
+; had to become variant-aware rather than leaving this as the only
+; accurate figure.
+.ifdef POLY1305_PROFILE_LONG
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 15360
+.else
 LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16640
+.endif
 
 ; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_COLD_BYTES
