@@ -18,10 +18,19 @@ outright. **All three workarounds can now be dropped.**
 
 Semver: **MINOR** bump on the pre-1.0 scale — breaking changes are
 permitted there, the same basis on which v0.6.0 removed the
-`poly1305_reu_*` surface. `LIB_ABI_VERSION` stays **1**, per SPEC §1's
-rule that it tracks the MAJOR bump. That said, this is the most
-consumer-breaking release the library has had, so the required migration
-steps are front-and-centre below rather than buried in the detail.
+`poly1305_reu_*` surface. `LIB_ABI_VERSION` stays **1** in this tag, per SPEC §1's
+rule *as it read at release time* — that it tracks the MAJOR bump. This
+is the most consumer-breaking release the library has had, so the
+required migration steps are front-and-centre below rather than buried
+in the detail.
+
+> **Correction (2026-08-14).** Contract **v0.7.5** repudiated that rule:
+> `ABI_VERSION` is now a generation counter independent of MAJOR,
+> incrementing on "a removed or renamed symbol". By that rule this
+> release's surface is **generation 2**, and leaving the counter at 1
+> meant a consumer gate — c64-wireguard has one — could not see the
+> break. Corrected to 2 on `main` under issue #67. This tag is not
+> retagged, so it still reports 1.
 
 Default-build codegen is byte-for-byte unchanged and measured
 performance is flat — see Performance.

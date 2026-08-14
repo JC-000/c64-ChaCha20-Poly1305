@@ -279,9 +279,11 @@ Version constants (`src/lib_version.s`):
   It must be `.assert`/`lderror` rather than `.if`/`.error`: an
   `.import`ed symbol has no value until link, so an `.if` gate does not
   assemble at all. See `docs/API.md` §8.
-- `LIB_ABI_VERSION` -- exported-symbol ABI surface version (currently
-  1); bumps on any breaking change to public symbol names, calling
-  conventions, or the public ZP-cell contract.
+- `LIB_ABI_VERSION` -- monotonic generation counter for the exported
+  symbol surface (currently **2**), deliberately not a mirror of MAJOR.
+  It increments on any breaking export change; generation 2 covers
+  v0.7.0's removed §8.x bit constants and renamed segments. See
+  `docs/API.md` §8.
 
 Under the aead-only archive variant (`-DLIB_VARIANT_AEAD_ONLY=1`, i.e.
 `make lib-aead-only`) the test-only exports vanish:
@@ -409,7 +411,8 @@ profiles from a fully consumer-owned build tree.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 The current release is **v0.7.0** (tagged 2026-08-13;
-`src/lib_version.s` declares 0.7.0, `LIB_ABI_VERSION` stays 1): the
+`src/lib_version.s` declares 0.7.0; the tag reports `LIB_ABI_VERSION`
+1, corrected to 2 on `main` per issue #67): the
 contract-conformance release, bringing the library from
 c64-lib-contract v0.4.0 up to v0.7.2 and making it composable with a
 sibling library for the first time. **It requires a consumer cfg

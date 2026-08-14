@@ -6,6 +6,40 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **`LIB_ABI_VERSION` 1 → 2** (issue #67; contract §1/§7 v0.7.5).
+  `ABI_VERSION` is now a **monotonic generation counter** for the
+  exported surface, independent of MAJOR — it "starts at 1 and
+  increments on any breaking export change — a removed or renamed
+  symbol, a changed calling convention, a changed memory model." The old
+  "matches the MAJOR bump" rule was repudiated because §7 permits
+  breaking changes on MINOR bumps pre-1.0, so MAJOR stays `0` across
+  breakage and a consumer gating on it never fires.
+
+  v0.7.0 removed two exported symbols (the §8.x bit constants, #57) and
+  renamed every library segment (#48), but shipped the counter at 1
+  under the then-current wording. That is a live gap, not a theoretical
+  one: **`c64-wireguard/src/contract_asserts.s:66` imports this equate**
+  as a breakage gate, and it read `1` on both sides of our most breaking
+  release.
+
+  Mitigating, and recorded so it isn't overstated: no consumer ever
+  imported the removed bit constants — every apparent hit across the
+  sibling repos was in a stale agent worktree referencing *x25519's*
+  copy. The removal broke nobody; the defect is that the gate could not
+  have said so.
+
+  The **v0.7.0 tag is not retagged** and still reports 1. Generation 2
+  describes that same surface and ships from `main` onward.
+
+  **Consumer note:** a gate written as
+  `.assert LIB_CHACHA20_POLY1305_ABI_VERSION = 1, lderror, "…"` will now
+  fire. That is the intended behaviour — re-check the integration, then
+  move the expected generation to 2.
+
+  Because this changes an exported equate's value, the next tag is at
+  minimum a MINOR bump, not a PATCH.
+
 ### Fixed
 - **Published version-guard snippets could not assemble** (issue #68;
   contract §1 v0.8.1). All three used `.if` on an `.import`ed symbol.
@@ -95,10 +129,18 @@ All three workarounds can now be dropped.
 
 Semver: **MINOR** bump. Pre-1.0, so the breaking changes below are
 allowed in MINOR (same basis as v0.6.0's removal of the `poly1305_reu_*`
-surface). `LIB_ABI_VERSION` stays **1**, matching SPEC §1's rule that it
-tracks the MAJOR bump — but note this is the most consumer-breaking
-release the library has had, and the required actions are listed below
-rather than left to the section detail.
+surface). `LIB_ABI_VERSION` stays **1** in this tag, matching SPEC §1's
+rule *as it read at release time* — that it tracks the MAJOR bump. Note
+this is the most consumer-breaking release the library has had, and the
+required actions are listed below rather than left to the section
+detail.
+
+> **Correction (2026-08-14, issue #67).** Contract v0.7.5 repudiated
+> that rule — `ABI_VERSION` is a generation counter independent of
+> MAJOR, incrementing on "a removed or renamed symbol". This release
+> removed two exported symbols and renamed every library segment, so its
+> surface is generation **2**. Corrected on `main`; this tag is not
+> retagged and still reports 1.
 
 ### Consumer action required
 

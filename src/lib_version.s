@@ -41,9 +41,27 @@
 ; still before anything runs.
 ;
 ; LIB_ABI_VERSION is the exported-symbol ABI surface; bump on any
-; breaking change to public symbol names, calling conventions, or
-; the public ZP-cell contract. This is the first published library-
-; ABI surface, so it starts at 1.
+; LIB_ABI_VERSION is a MONOTONIC GENERATION COUNTER for the exported
+; surface (SPEC §1/§7, contract v0.7.5) — deliberately NOT a mirror of
+; MAJOR. It starts at 1 and increments on any breaking export change: a
+; removed or renamed symbol, a changed calling convention, a changed
+; memory model.
+;
+; It cannot track MAJOR because §7 permits breaking changes on MINOR
+; bumps while a library is pre-1.0, so MAJOR stays 0 across breakage and
+; carries no signal — a consumer gating on it would never fire for
+; exactly the changes the gate exists to catch.
+;
+; Generation history:
+;   1  v0.6.0 — first published ABI surface.
+;   2  v0.7.0 — BREAKING: removed the exported §8.x bit constants
+;               LIB_SHARED_PRIMITIVES_SQTAB / _CT_MUL_8X8 (issue #57),
+;               and renamed every library segment CODE/DATA ->
+;               LIB_CHACHA20_POLY1305_CODE/_DATA (issue #48).
+;               The counter was left at 1 at release time under §1's
+;               then-current "matches the MAJOR bump" wording, which
+;               contract v0.7.5 has since repudiated; corrected here
+;               (issue #67). The v0.7.0 tag itself still reports 1.
 ;
 ; TU ISOLATION (SPEC §1, contract v0.7.0): this file MUST export the
 ; version equates and NOTHING else. ld65 links whole object members, so
@@ -56,7 +74,7 @@
 LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0
 LIB_CHACHA20_POLY1305_VERSION_MINOR = 7
 LIB_CHACHA20_POLY1305_VERSION_PATCH = 0
-LIB_CHACHA20_POLY1305_ABI_VERSION   = 1
+LIB_CHACHA20_POLY1305_ABI_VERSION   = 2
 
 ; Exported `:abs` so ca65 emits them as absolute values rather than
 ; zeropage: an integer equate <= $00ff would otherwise be tagged
