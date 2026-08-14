@@ -242,12 +242,27 @@ Both attributes are load-bearing, and both fail quietly if you drop them:
   secret-derived X/Y. Without page alignment an `abs,x` page cross costs
   +1 cycle on a secret-dependent condition — a CT violation. ld65 only
   emits a *warning* ("Segment ... isn't aligned properly") and links the
-  tables misaligned anyway, so nothing will fail loudly.
+  tables misaligned anyway, so nothing fails loudly.
+
+  That warning exists because our *sources* carry `.align 256` — ld65
+  checks the cfg against that directive, not against the missing
+  attribute (contract v0.8.3). Do not treat it as a general safety net:
+  a library expressing alignment only in its cfg gets no diagnostic at
+  all.
 - **`LIB_CHACHA20_POLY1305_DATA` must PRG-load as zero.** Declaring it
-  `type = bss` writes no file bytes, so `poly1305_init`'s `sqtab_ready`
-  gate reads power-on garbage, skips `sqtab_init`, and poisons every
-  Poly1305 multiplication. There is no link error for this — see
-  `src/lib/data_lib.s:12-25`.
+  `type = bss` writes no file bytes — and produces **no ld65 diagnostic
+  whatsoever**, not a warning and not an error. The bss warning keys on
+  the segment's byte values, and this segment is 19 `.res` reservations,
+  so it vanishes silently. Measured on our real objects (issue #71):
+  295 bytes leave the image, and then
+
+  | `_DATA` placement | what happens |
+  |---|---|
+  | last in the file-emitting area | addresses unchanged; `sqtab_ready` reads power-on garbage, `sqtab_init` is skipped, every Poly1305 multiplication reads an uninitialised table |
+  | anything file-emitting after it | every byte past the hole **loads 295 B below its linked address** — `aead_encrypt` links at `$4824`, loads at `$46FD` |
+
+  The second mode can appear to work by coincidence when the absent
+  content is zeros. See `src/lib/data_lib.s:12-32`.
 
 Also declare bss-type segments **last** in the file-backed memory area:
 ld65 writes no file bytes for bss, so a file-emitting segment declared

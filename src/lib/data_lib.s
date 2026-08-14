@@ -19,9 +19,15 @@
 ;
 ; Consumer cfg requirement (issue #48): LIB_CHACHA20_POLY1305_DATA MUST be
 ; declared `type = rw` in a file-emitting memory area — never `type = bss`.
-; A bss-type declaration writes no file bytes, which reintroduces exactly
-; the power-on-garbage failure described above, silently and with no link
-; error.
+;
+; A bss-type declaration writes no file bytes and produces NO ld65
+; diagnostic whatsoever — measured, issue #71. The bss warning keys on
+; the segment's byte values (contract v0.8.3) and this segment is all
+; `.res` reservations, so it vanishes silently. 295 bytes leave the
+; image, reintroducing exactly the power-on-garbage failure described
+; above; and if the consumer places anything file-emitting after this
+; segment, everything past the hole additionally loads 295 bytes below
+; its linked address.
 
 .export cc20_state, cc20_key, cc20_nonce, cc20_counter, cc20_remain_hi
 .export poly_h, poly_r, poly_s, poly_product, poly1305_tag
