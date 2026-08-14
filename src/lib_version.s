@@ -25,13 +25,20 @@
 ; literals, so a release bump touches four lines and the two forms
 ; cannot drift apart (SPEC §1).
 ;
-; Consumers can assemble-time guard against unsupported versions via:
+; Consumers guard against unsupported versions via:
 ;
 ;     .import LIB_CHACHA20_POLY1305_VERSION_MAJOR
 ;     .import LIB_CHACHA20_POLY1305_VERSION_MINOR
-;     .if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 7
-;         .error "needs c64-ChaCha20-Poly1305 v0.7+"
-;     .endif
+;     .assert (LIB_CHACHA20_POLY1305_VERSION_MAJOR > 0) .or (LIB_CHACHA20_POLY1305_VERSION_MINOR >= 7), lderror, "needs c64-ChaCha20-Poly1305 v0.7+"
+;
+; It MUST be `.assert` / `lderror`, not `.if` / `.error` (SPEC §1,
+; contract v0.8.1). `.if` needs an assemble-time constant, and an
+; `.import`ed symbol has no value until link, so ca65 rejects an
+; `.if`-based gate outright with `Constant expression expected` — it
+; never assembles at all. `.assert` with the `lderror` action defers
+; evaluation to ld65, the only stage that knows the imported value.
+; The guard therefore fires at link rather than assemble time, which is
+; still before anything runs.
 ;
 ; LIB_ABI_VERSION is the exported-symbol ABI surface; bump on any
 ; breaking change to public symbol names, calling conventions, or

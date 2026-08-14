@@ -625,16 +625,26 @@ ca65 -D LIB_NO_BARE_EXPORTS=1 ...
 The bare names alias the prefixed ones, so the two forms cannot drift.
 
 The semver triple tracks the released `CHANGELOG.md` version.
-Consumers can assemble-time guard against unsupported versions by
-importing the constants and testing them in a `.if`:
+Consumers guard against unsupported versions by importing the constants
+and asserting on them:
 
 ```ca65
 .import LIB_CHACHA20_POLY1305_VERSION_MAJOR
 .import LIB_CHACHA20_POLY1305_VERSION_MINOR
-.if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 7
-    .error "needs c64-ChaCha20-Poly1305 v0.7+"
-.endif
+.assert (LIB_CHACHA20_POLY1305_VERSION_MAJOR > 0) .or (LIB_CHACHA20_POLY1305_VERSION_MINOR >= 7), lderror, "needs c64-ChaCha20-Poly1305 v0.7+"
 ```
+
+**It must be `.assert` / `lderror`, not `.if` / `.error`** (SPEC §1,
+contract v0.8.1). `.if` requires an assemble-time constant, and an
+`.import`ed symbol has no value until link — ca65 rejects an `.if`-based
+gate with `Constant expression expected`, so it never assembles at all
+rather than silently passing. `.assert` with the `lderror` action defers
+evaluation to ld65, the only stage that knows the imported value. The
+trade is that the guard fires at link rather than assemble time; it
+still fires before anything runs.
+
+This documentation shipped the broken `.if` form through v0.7.0
+(issue #68).
 
 The prefixed guard names which library is out of date, instead of
 reporting one anonymous version.

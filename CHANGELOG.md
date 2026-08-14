@@ -7,6 +7,49 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Published version-guard snippets could not assemble** (issue #68;
+  contract §1 v0.8.1). All three used `.if` on an `.import`ed symbol.
+  `.if` needs an assemble-time constant and an imported symbol has no
+  value until link, so ca65 rejected the guard outright:
+
+  ```
+  guard.s(4): Error: Constant expression expected
+  ```
+
+  A consumer pasting it got a build failure, not a working check — worse
+  than a guard that silently passes. Fixed at all three sites
+  (`docs/API.md`, `src/lib_version.s` header, `README.md`) to the
+  `.assert … , lderror, "…"` form, which defers evaluation to ld65, the
+  only stage that knows the imported value. Verified both directions
+  against the real `lib_version.o`: assembles and links clean against
+  the shipped 0.7.0, and fires with the intended message when the floor
+  is raised to 0.8.
+
+  Our *logic* was already correct — `MAJOR = 0 .and MINOR < 7` has two
+  boolean operands, so `.and` was right, unlike the SPEC's own example.
+  Only the `.if` mechanism was fatal.
+
+- **README drift from the v0.7.0 pass** (issue #68). Four corrections,
+  each measured against a real build rather than re-derived:
+  - manifest exports **seven** equates, not eight — the two §8.x bit
+    constants stopped being exported in #57, and `SHARED_CONSUMES` was
+    missing from the list entirely
+  - `RESIDENT_BYTES` figures were the pre-v0.7.0 values (16384/17664/
+    16384); they are now 15616/16896/16640 on the rebased basis
+  - each enumerated table emits **six** `_PRECALC_` equates since
+    contract v0.7.0 (prefixed + deprecated bare), not three; a default
+    build surfaces 24 on Profile A and 18 on Profile B, dropping to 12
+    and 9 under `-D LIB_NO_BARE_EXPORTS=1`. The stated Profile A count
+    also predated #51's profile-gating of the `sqtab` row.
+  - the audit grep is `_PRECALC_`, not `LIB_PRECALC_`, which misses
+    every prefixed export; and `od65` cannot read `.a` archives
+
+- **`test_consumer/min_consumer.cfg` now states the consequence** of
+  getting `type = rw` wrong, not just the requirement (contract §4
+  v0.8.0: "state the consequence, not just the requirement"). That file
+  tells the reader to copy from it, so it is the one that travels.
+
+### Fixed
 - **`precalc_table.inc` re-copied from the v0.7.4 canonical** (issue #65).
   The §8.4 macro now pins the `_REGION` and `_SHARED` exports `: abs`, so
   they stop inferring `zeropage` from their byte-sized values and warning
