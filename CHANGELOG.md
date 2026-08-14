@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **§4 cfg declarations understated both the diagnostics and the `bss`
+  consequence** (issue #71; contract v0.8.3). The v0.8.0 clause we wrote
+  those declarations against carried a wrong risk assessment, corrected
+  upstream after a `c64-nist-curves` report: **both placement
+  diagnostics are conditional on the library's shape, not on the
+  violation.**
+
+  Re-measured against our own Profile B objects on ld65 V2.18:
+
+  - The `bss` violation produces **no diagnostic at all** — not a
+    warning, not an error. The bss warning keys on the segment's byte
+    values, and `LIB_CHACHA20_POLY1305_DATA` is 19 `.res` reservations,
+    so it vanishes silently. We previously said "no link error", which
+    was true but understated.
+  - 295 bytes leave the image either way, and the consequence depends
+    on placement:
+
+    | `_DATA` placement | effect |
+    |---|---|
+    | last in the file-emitting area (both our shipped cfgs) | addresses unchanged; `sqtab_ready` reads power-on garbage — the failure we documented |
+    | anything file-emitting after it | every byte past the hole loads **295 B below** its linked address; `aead_encrypt` links at `$4824`, loads at `$46FD` |
+
+    Only the first was documented. The second is what a consumer
+    ordering segments differently would hit, and it can appear to work
+    by coincidence when the absent content is zeros.
+  - The alignment warning fires for us **because our sources carry
+    `.align 256`** — ld65 checks the cfg against that directive, not
+    against the missing attribute. Now stated, so the declaration stays
+    correct if those tables ever stop using `.align`.
+
+  Corrected in `src/c64.cfg`, `test_consumer/min_consumer.cfg`,
+  `docs/INTEGRATION.md` and the `src/lib/data_lib.s` header. The
+  `align = $100` and `type = rw` requirements themselves are unchanged
+  and still correct — only the stated rationale and severity were wrong.
+
 ### Changed
 - **`LIB_ABI_VERSION` 1 → 2** (issue #67; contract §1/§7 v0.7.5).
   `ABI_VERSION` is now a **monotonic generation counter** for the
