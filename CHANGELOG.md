@@ -6,6 +6,53 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Build targets now accept consumer-supplied defines** (issue #74;
+  [contract #76](https://github.com/JC-000/c64-lib-contract/issues/76)
+  A.1). `CA65FLAGS` was hard-assigned, so a consumer following §2's
+  normative `ca65 -D <slot>=$<addr>` had nowhere to put it — passing
+  `CA65FLAGS` clobbered the include paths and failed with
+  `Cannot open include file 'precalc_table.inc'`. §2's prescribed
+  override was normative and unreachable here.
+
+  Every target now forwards `EXTRA_CA65FLAGS`:
+
+  ```
+  make lib EXTRA_CA65FLAGS="-D LIB_SHARED_SQTAB_BASE=\$9000"
+  make lib-app-owned EXTRA_CA65FLAGS="-D LIB_NO_BARE_EXPORTS=1"
+  ```
+
+  One line, additive, and it makes every existing target
+  defines-accepting at once. Overriding `CA65` still works but silently
+  drops `-t c64 -g`; `EXTRA_CA65FLAGS` is the supported seam.
+
+- **`make lib-app-owned`** → `build/lib/c64-chacha20-poly1305-app-owned.a`
+  (issue #74; contract #76 A.2, [#72](https://github.com/JC-000/c64-lib-contract/issues/72)).
+  The SPEC §8.0 `APP_OWNED` configuration: the consumer's own modules
+  provide both shared primitives and this library defers both. Built with
+  `SHARED_SQTAB_INIT` + `SHARED_CT_MUL_8X8`.
+
+  Contract #76 counts **0 of 4 adopters** shipping such a target, which
+  is what forces consumers into `ar65` member surgery — the practice that
+  makes contract #72's manifest divergence reachable. Since #47 our
+  deferral switches gate bodies, exports and manifest bits together, so
+  the archive is truthful by construction:
+
+  | archive | measured | `RESIDENT_BYTES` | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
+  |---|---|---|---|---|
+  | full | 16 838 B | 16 896 | `$0005` | `$0005` |
+  | aead-only | 16 513 B | 16 640 | `$0005` | `$0005` |
+  | **app-owned** | 16 582 B | 16 640 | **`$0000`** | **`$0005`** |
+
+  That last row is §8.0's "deferring consumer" state — owns nothing,
+  consumes both. Verified by linking the prebuilt archive against
+  c64-x25519 as the §8.1/§8.3 provider: **links clean, both §8.0
+  composition asserts satisfied, zero `ar65` surgery**, with `ct_mul_8x8`
+  resolving to x25519's `mul_8x8.o` in the map.
+
+  `RESIDENT_BYTES` gating extended to cover it, continuing #69's
+  per-variant work.
+
 ### Fixed
 - **Each archive's manifest now describes that archive** (issue #69;
   contract [#62](https://github.com/JC-000/c64-lib-contract/issues/62)).
