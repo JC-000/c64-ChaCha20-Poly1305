@@ -610,7 +610,7 @@ adopter-side subset assert that pins ownership ⊆ consumes.
 | `LIB_CHACHA20_POLY1305_VERSION_MAJOR` | `LIB_VERSION_MAJOR` | 0 |
 | `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 7 |
 | `LIB_CHACHA20_POLY1305_VERSION_PATCH` | `LIB_VERSION_PATCH` | 0 |
-| `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 1 |
+| `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 2 |
 
 The bare names are identical across every adopter library, so a consumer
 linking two libraries and importing both manifests gets `ld65: Error:
@@ -625,21 +625,47 @@ ca65 -D LIB_NO_BARE_EXPORTS=1 ...
 The bare names alias the prefixed ones, so the two forms cannot drift.
 
 The semver triple tracks the released `CHANGELOG.md` version.
-Consumers can assemble-time guard against unsupported versions by
-importing the constants and testing them in a `.if`:
+Consumers guard against unsupported versions by importing the constants
+and asserting on them:
 
 ```ca65
 .import LIB_CHACHA20_POLY1305_VERSION_MAJOR
 .import LIB_CHACHA20_POLY1305_VERSION_MINOR
-.if LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0 .and LIB_CHACHA20_POLY1305_VERSION_MINOR < 7
-    .error "needs c64-ChaCha20-Poly1305 v0.7+"
-.endif
+.assert (LIB_CHACHA20_POLY1305_VERSION_MAJOR > 0) .or (LIB_CHACHA20_POLY1305_VERSION_MINOR >= 7), lderror, "needs c64-ChaCha20-Poly1305 v0.7+"
 ```
+
+**It must be `.assert` / `lderror`, not `.if` / `.error`** (SPEC §1,
+contract v0.8.1). `.if` requires an assemble-time constant, and an
+`.import`ed symbol has no value until link — ca65 rejects an `.if`-based
+gate with `Constant expression expected`, so it never assembles at all
+rather than silently passing. `.assert` with the `lderror` action defers
+evaluation to ld65, the only stage that knows the imported value. The
+trade is that the guard fires at link rather than assemble time; it
+still fires before anything runs.
+
+This documentation shipped the broken `.if` form through v0.7.0
+(issue #68).
 
 The prefixed guard names which library is out of date, instead of
 reporting one anonymous version.
 
-`LIB_ABI_VERSION` covers the exported-symbol ABI surface: it is
-bumped on any breaking change to public symbol names, calling
-conventions, or the public ZP-cell contract (§6 / `zp_config.s`).
-It is 1 — the first published library-ABI surface — as of v0.6.0.
+`LIB_ABI_VERSION` is a **monotonic generation counter** for the
+exported symbol surface (SPEC §1/§7, contract v0.7.5) — deliberately
+*not* a mirror of MAJOR. It starts at 1 and increments on any breaking
+export change: a removed or renamed symbol, a changed calling
+convention, a changed memory model.
+
+It cannot track MAJOR, because §7 permits breaking changes on MINOR
+bumps while a library is pre-1.0 — MAJOR stays `0` across breakage, so a
+consumer gating on it would never fire for exactly the changes the gate
+exists to catch.
+
+| generation | since | what broke |
+|---|---|---|
+| 1 | v0.6.0 | first published ABI surface |
+| 2 | v0.7.0 | removed the exported §8.x bit constants (#57); renamed all library segments (#48) |
+
+Generation 2 is the correct value for v0.7.0's surface. The v0.7.0 tag
+itself still reports 1: it was cut under §1's then-current "matches the
+MAJOR bump" wording, which contract v0.7.5 repudiated. Corrected in
+issue #67; published tags are not retagged.

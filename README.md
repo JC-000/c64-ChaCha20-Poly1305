@@ -274,11 +274,16 @@ Version constants (`src/lib_version.s`):
   Also exported in the collision-free `LIB_CHACHA20_POLY1305_VERSION_*`
   form (contract §1 v0.7.0); the bare names are deprecated and
   suppressible with `ca65 -D LIB_NO_BARE_EXPORTS=1`. Consumers
-  `.import` them and assemble-time guard, e.g.
-  `.if LIB_CHACHA20_POLY1305_VERSION_MINOR < 7` → `.error`.
-- `LIB_ABI_VERSION` -- exported-symbol ABI surface version (currently
-  1); bumps on any breaking change to public symbol names, calling
-  conventions, or the public ZP-cell contract.
+  `.import` them and guard with
+  `.assert (… VERSION_MAJOR > 0) .or (… VERSION_MINOR >= 7), lderror, "…"`.
+  It must be `.assert`/`lderror` rather than `.if`/`.error`: an
+  `.import`ed symbol has no value until link, so an `.if` gate does not
+  assemble at all. See `docs/API.md` §8.
+- `LIB_ABI_VERSION` -- monotonic generation counter for the exported
+  symbol surface (currently **2**), deliberately not a mirror of MAJOR.
+  It increments on any breaking export change; generation 2 covers
+  v0.7.0's removed §8.x bit constants and renamed segments. See
+  `docs/API.md` §8.
 
 Under the aead-only archive variant (`-DLIB_VARIANT_AEAD_ONLY=1`, i.e.
 `make lib-aead-only`) the test-only exports vanish:
@@ -296,21 +301,23 @@ See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 
 ## Manifest equates (consumer fit checks)
 
-`src/lib/lib_manifest.s` exports eight integer equates per the
+`src/lib/lib_manifest.s` exports seven integer equates per the
 [c64-lib-contract SPEC §5](https://github.com/JC-000/c64-lib-contract)
-aggregate-manifest convention (five §5 aggregate equates plus the
-three §8 shared-primitive masks). Consumers `.import` them and use
+aggregate-manifest convention (five §5 aggregate equates plus the two
+§8 shared-primitive masks). Consumers `.import` them and use
 `.assert` to detect REU/ZP/footprint collisions at assemble time:
 
 - `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed. Always `$00`: the library issues no REU DMA in any profile (the former Profile A `POLY1305_REU` stash was removed by the issue #34 F1 slimming, PR #38).
 - `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
-- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile-aware since the issue #34 F1 slimming diverged the two footprints: Profile A = 16384 (actual 16166 + 256-aligned headroom), Profile B = 17664 (actual 17446 + headroom).
-- `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (16384).
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile-aware since the issue #34 F1 slimming diverged the two footprints. Rebased in v0.7.0 onto the library's own segment sum rather than whole-PRG size: Profile A = 15616 (measured 15544), Profile B = 16896 (measured 16838), each rounded up to the next 256-byte boundary.
+- `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (16640, measured 16513).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
-- `LIB_SHARED_PRIMITIVES_SQTAB` (`$0001`) / `LIB_SHARED_PRIMITIVES_CT_MUL_8X8` (`$0004`) — SPEC §8.0 shared-primitive bit values, exported `:abs`.
+- `LIB_CHACHA20_POLY1305_SHARED_CONSUMES` — bitmask of shared primitives this build *uses*, whether or not it owns them (`$0005` on Profile B, `$0000` on Profile A). Paired with the ownership mask below, it distinguishes a deferring consumer — which needs exactly one owner in the link — from a non-consumer, which needs no provider at all.
 - `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` — bitmask of shared primitives this build owns (`$0005` in the default standalone build; defining `SHARED_SQTAB_INIT` or `SHARED_CT_MUL_8X8` drops the corresponding bit so composed libraries see disjoint masks, issue #21).
 
-In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits three exported equates — `LIB_PRECALC_<name>_{SIZE,REGION,SHARED}` — that cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep LIB_PRECALC_`. Profile A surfaces 15 such exports (`sqtab`, `chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`); Profile B surfaces 9 (the three profile-agnostic tables only). See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
+The §8.x bit constants themselves (`LIB_SHARED_PRIMITIVES_SQTAB` = `$0001`, `LIB_SHARED_PRIMITIVES_CT_MUL_8X8` = `$0004`) are **not** exported — they are plain local equates that consumers copy, since their names and values are identical in every adopter and exporting them collides at link (issue #57). They exist only to build the two masks above, which are the symbols meant to cross the link.
+
+In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits **six** exported equates since contract v0.7.0 — the library-prefixed `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}` plus the deprecated bare `LIB_PRECALC_<name>_*` triple, the latter suppressed under `-D LIB_NO_BARE_EXPORTS=1`. Cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep _PRECALC_` — note `_PRECALC_`, not `LIB_PRECALC_`, since the older pattern misses every prefixed export. Profile A enumerates four tables (`chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`) and Profile B three (`sqtab` plus the two nibswap tables) — so a default build surfaces **24** and **18** `_PRECALC_` exports respectively, dropping to **12** and **9** under `-D LIB_NO_BARE_EXPORTS=1` once the deprecated bare triples are suppressed. `sqtab` is profile-gated as of issue #51 — Profile A neither emits nor consumes it, so it enumerates no `sqtab` row. `od65` cannot read `.a` archives, so audit the per-variant object dirs, never the archive. See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
 
 ## Layout
 
@@ -404,7 +411,8 @@ profiles from a fully consumer-owned build tree.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 The current release is **v0.7.0** (tagged 2026-08-13;
-`src/lib_version.s` declares 0.7.0, `LIB_ABI_VERSION` stays 1): the
+`src/lib_version.s` declares 0.7.0; the tag reports `LIB_ABI_VERSION`
+1, corrected to 2 on `main` per issue #67): the
 contract-conformance release, bringing the library from
 c64-lib-contract v0.4.0 up to v0.7.2 and making it composable with a
 sibling library for the first time. **It requires a consumer cfg
