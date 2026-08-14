@@ -7,6 +7,38 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Each archive's manifest now describes that archive** (issue #69;
+  contract [#62](https://github.com/JC-000/c64-lib-contract/issues/62)).
+  `RESIDENT_BYTES` was gated on the profile only, so the aead-only
+  archive shipped a manifest describing the **full** build — reporting
+  16 896 against a measured 16 513, a build the consumer had not linked.
+
+  Now gated on `LIB_VARIANT_AEAD_ONLY` as well. All four configurations
+  re-measured from the library's own segment sum and verified to
+  over-report their own build by less than one page:
+
+  | configuration | measured | `RESIDENT_BYTES` | headroom |
+  |---|---|---|---|
+  | Profile A full | 15 544 B | 15 616 | +72 |
+  | Profile A aead-only | 15 219 B | 15 360 | +141 |
+  | Profile B full | 16 838 B | 16 896 | +58 |
+  | Profile B aead-only | 16 513 B | 16 640 | +127 |
+
+  `AEAD_ONLY_RESIDENT_BYTES` is profile-aware for the same reason, so it
+  reports the trimmed footprint of whichever profile is built. In an
+  aead-only build it equals `RESIDENT_BYTES`; that redundancy is
+  deliberate, since a consumer pinning the trimmed archive may import
+  either name.
+
+  Truthfulness rather than a bug fix: the old value **over**-reported,
+  which is the safe direction for `.assert resident <= N`, and 383 B on
+  16 513 is 2.3% — inside §5's own "within 5% is fine". A consumer
+  asserting against the old figure still passes against the new, smaller
+  one. It is fixed because §5 does not define
+  `AEAD_ONLY_RESIDENT_BYTES`, so a consumer following the spec alone had
+  no way to reach the accurate number.
+
+### Fixed
 - **§4 cfg declarations understated both the diagnostics and the `bss`
   consequence** (issue #71; contract v0.8.3). The v0.8.0 clause we wrote
   those declarations against carried a wrong risk assessment, corrected
