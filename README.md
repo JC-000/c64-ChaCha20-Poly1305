@@ -18,8 +18,8 @@ make profile-b              # Profile B: stock C64, portable baseline, lower ini
 make                        # alias for profile-a
 make profile-b-rolled       # Profile B with fully-rolled poly1305_multiply (min code)
 make profile-b-rolled-outer # Profile B with outer-loop-rolled poly1305_multiply
-make lib                    # full ar65 archive -> build/lib/c64-chacha20-poly1305.a
-make lib-aead-only          # trimmed archive -> build/lib/c64-chacha20-poly1305-aead-only.a
+make lib                    # full ar65 archive -> build/lib/chacha20poly1305.a
+make lib-aead-only          # trimmed archive -> build/lib/chacha20poly1305-aead-only.a
 make bench                  # granular bench -> docs/BENCH_REPORT.md (+ JSON sidecar)
 make bench-check            # bench + drift gate vs docs/BENCH_REPORT.baseline.json
 make dist VERSION=vX.Y.Z    # reproducible source tarball (tools/build_release.sh)
@@ -31,7 +31,7 @@ converted from the ld65 label output by the Makefile).
 
 The `lib` / `lib-aead-only` targets produce ar65 static archives under
 `build/lib/` per the c64-lib-contract SPEC §6 consumption paths:
-downstream projects link `c64-chacha20-poly1305.a` (or the aead-only
+downstream projects link `chacha20poly1305.a` (or the aead-only
 variant) directly into their own ld65 build instead of integrating the
 PRG. `test_consumer/` is the worked example of an archive-consuming
 build; see [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the full
