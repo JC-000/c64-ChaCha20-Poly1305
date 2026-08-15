@@ -385,8 +385,8 @@ the source:
 - [`docs/BENCH_NSWEEP_v0.5.0.md`](docs/BENCH_NSWEEP_v0.5.0.md) —
   packet-size (n) sweep baseline and the measured A/B crossover.
 - [`docs/BENCH_NSWEEP_v0.6.0.md`](docs/BENCH_NSWEEP_v0.6.0.md) —
-  v0.6.0 n-sweep; still current for v0.7.0, whose codegen and
-  measured cycles are unchanged.
+  v0.6.0 n-sweep; still current through v0.8.0, whose codegen is
+  byte-identical and measured cycles unchanged.
 - [`docs/BENCH_NSWEEP_u64_v0.6.0.md`](docs/BENCH_NSWEEP_u64_v0.6.0.md)
   — v0.6.0 n-sweep on Ultimate 64 hardware; likewise still current.
 - [`docs/precalc-tables.md`](docs/precalc-tables.md) — SPEC §8.0
@@ -410,16 +410,23 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.7.0** (tagged 2026-08-13;
-`src/lib_version.s` declares 0.7.0; the tag reports `LIB_ABI_VERSION`
-1, corrected to 2 on `main` per issue #67): the
-contract-conformance release, bringing the library from
-c64-lib-contract v0.4.0 up to v0.7.2 and making it composable with a
-sibling library for the first time. **It requires a consumer cfg
-change** — the library now emits `LIB_CHACHA20_POLY1305_CODE` /
-`_DATA` instead of bare `CODE`/`DATA`; see
-[`docs/RELEASE_NOTES_v0.7.0.md`](docs/RELEASE_NOTES_v0.7.0.md) for the
-migration steps. Codegen and measured cycles are unchanged. The prior
+The current release is **v0.8.0** (tagged 2026-08-15;
+`src/lib_version.s` declares 0.8.0 and `LIB_ABI_VERSION` **3**): the
+packaging-and-naming conformance release, bringing the library from
+c64-lib-contract v0.7.2 up to v0.9.2. **It is breaking on two axes** —
+the four general-purpose ZP slots are renamed to
+`chacha20poly1305_zp_*` under the SPEC §2 prefix registry, and archives
+gain their canonical `chacha20poly1305[-variant].a` basenames; see
+[`docs/RELEASE_NOTES_v0.8.0.md`](docs/RELEASE_NOTES_v0.8.0.md) for the
+migration steps. The default-build PRG is **byte-identical to v0.7.0**,
+so codegen and measured cycles are unchanged.
+
+The prior release, **v0.7.0** (2026-08-13; its tag reports
+`LIB_ABI_VERSION` 1, corrected afterwards per issue #67), was the
+contract-conformance release that brought the library from
+c64-lib-contract v0.4.0 up to v0.7.2 and made it composable with a
+sibling library for the first time, moving library code to
+`LIB_CHACHA20_POLY1305_CODE`/`_DATA`. The prior
 release, **v0.6.0** (2026-07-28), was the c64-lib-contract adoption +
 size-variants release, closing issue #34 with the ar65 archive
 variants and the rolled-multiply size knobs (config D: 8,230 B linked
