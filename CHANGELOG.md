@@ -6,6 +6,47 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **§6.7 image guard for the equate-placed sqtab window** (issue #80;
+  contract v0.10.0 §6.7, corrected by v0.10.2). `src/c64.cfg`'s `MAIN`
+  now publishes its extent via `define = yes`, and `src/main.s` — which
+  ships in no archive — asserts `__MAIN_LAST__ <= LIB_SHARED_SQTAB_BASE`.
+
+  `MAIN` spans `$0900–$9FFF`, which contains the `$8000` sqtab default.
+  ld65 does not know the equate-placed window exists, so a growing
+  segment could be placed across the table, link clean, and corrupt it at
+  runtime with no diagnostic at any stage.
+
+  The base is derived **source-level** through the new
+  `src/include/sqtab_base.inc`, never `.import`ed — §8.1 forbids
+  exporting `LIB_SHARED_SQTAB_BASE`. Holding the default in one shared
+  include is itself a v0.10.2 MUST: two copies could silently disagree
+  and the guard would then check a different window than the table
+  occupies.
+
+  Costs nothing — both profiles are byte-identical with and without it.
+
+### Changed
+- **Catch-loop citations follow the v0.10.3 heading split.** Contract
+  v0.10.1 folded the precalc-table clause into §8.0 and v0.10.3 restored
+  it as its own **§8.4** heading (reported as contract #109). Our
+  references in `README.md`, `src/lib/lib_manifest.s` and
+  `docs/precalc-tables.md` now cite §8.4.
+
+  `src/precalc_table.inc` is deliberately **not** touched: it is a
+  byte-identical copy of the contract's canonical file, which §8.4
+  requires be copied verbatim and explicitly says not to edit locally.
+  Its own header still cites §8.0 — that is upstream's to correct, and
+  editing our copy would break the verbatim property the clause depends
+  on.
+
+- **README records contract conformance** against SPEC v0.10.3
+  clause-by-clause, plus two standing obligations: `lib-verify-shared`
+  is grandfathered in the §6.1 reserved `lib-*` namespace until the next
+  MAJOR, and §6.6 requires release notes to state footprint deltas per
+  (profile × variant).
+
+
 ## [0.8.0] — 2026-08-15
 
 Contract-conformance release: `c64-lib-contract` v0.7.2 → **v0.9.2**.

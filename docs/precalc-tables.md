@@ -1,6 +1,7 @@
 # Precalculated tables — c64-ChaCha20-Poly1305
 
-Per c64-lib-contract SPEC v0.3.1 §8.0 catch-loop. Lists every
+Per c64-lib-contract SPEC §8.4 catch-loop (numbered §8.0 until the
+v0.10.3 heading split). Lists every
 precomputed table in this library that clears the §8.0 floor
 (>= 256 B AND one of: REU-resident, hot-loop-read, page-aligned for
 fetch alignment).

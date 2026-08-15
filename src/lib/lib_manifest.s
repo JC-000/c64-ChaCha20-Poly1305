@@ -357,7 +357,7 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 .export LIB_CHACHA20_POLY1305_SHARED_CONSUMES:abs
 
 ; ---------------------------------------------------------------------------
-; §8.0 catch-loop precalc-table enumeration. Per c64-lib-contract SPEC
+; §8.4 catch-loop precalc-table enumeration. Per c64-lib-contract SPEC
 ; v0.3.1 §8.0; canonical macro source in src/precalc_table.inc (copied
 ; verbatim from the contract repo at b039ab9; do not edit local copy).
 ;
@@ -387,7 +387,7 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 ; is no longer true: Profile A is a non-consumer of sqtab (#34 F1), so it
 ; must enumerate no sqtab row, exactly as it already omits the Shoup
 ; r_tab_* rows on Profile B. The enumeration now tracks the CONSUMES
-; mask, which is the honest signal for the §8.0 catch-loop audit.
+; mask, which is the honest signal for the §8.4 catch-loop audit.
 .ifndef POLY1305_PROFILE_LONG
 LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES, "CHACHA20_POLY1305"
 .endif
