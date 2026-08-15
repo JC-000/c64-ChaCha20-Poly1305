@@ -29,10 +29,30 @@ consumer `smoke_test.cfg`, consumer `smoke_test.s`).
 In the library repo (or your vendored copy of it):
 
 ```
-make lib              # build/lib/c64-chacha20-poly1305.a
-make lib-aead-only    # build/lib/c64-chacha20-poly1305-aead-only.a
-make lib-app-owned    # build/lib/c64-chacha20-poly1305-app-owned.a
+make lib              # build/lib/chacha20poly1305.a
+make lib-aead-only    # build/lib/chacha20poly1305-aead-only.a
+make lib-app-owned    # build/lib/chacha20poly1305-app-owned.a
 ```
+
+**Archive basenames changed.** Contract v0.9.0 §6.1 fixes the basename
+as `<shortname>[-<variant>].a`, where `<shortname>` is the §1 library
+prefix lowercased — for this library, `chacha20poly1305`. Our previous
+`c64-chacha20-poly1305*.a` spelling is named a deprecated dialect there.
+
+During the §6.5 rename window every target writes **both** names; the
+two files are byte-identical copies of the same `ar65` output, so a
+consumer can link either and get the same archive. Nothing else about
+the archive changed — same members, same exports, same manifest.
+
+| canonical (link this) | deprecated (removed at next MAJOR) |
+|---|---|
+| `chacha20poly1305.a` | `c64-chacha20-poly1305.a` |
+| `chacha20poly1305-aead-only.a` | `c64-chacha20-poly1305-aead-only.a` |
+| `chacha20poly1305-app-owned.a` | `c64-chacha20-poly1305-app-owned.a` |
+
+Unlike a symbol rename, a filename rename cannot collide at link time,
+so this needs no `LIB_NO_BARE_EXPORTS`-style gate — migrate whenever
+convenient, before the next MAJOR drops the old form.
 
 **Passing your own defines.** Every target forwards `CONTRACT_DEFINES`
 to `ca65` — the contract-normative spelling, so a multi-library consumer
@@ -102,7 +122,7 @@ ca65 -t c64 -g -I <lib>/src/include -I <lib>/src/lib \
     <lib>/src/zp_config.s -o build/zp_config.o
 ld65 -C my_consumer.cfg -m build/my_consumer.map \
     build/my_consumer.o build/zp_config.o \
-    <lib>/build/lib/c64-chacha20-poly1305.a -o my_consumer.prg
+    <lib>/build/lib/chacha20poly1305.a -o my_consumer.prg
 ```
 
 The worked, buildable example is [`test_consumer/`](../test_consumer)

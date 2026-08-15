@@ -8,8 +8,11 @@ CFG        = min_consumer.cfg
 
 PROJECT_ROOT = ..
 
-LIB_FULL = $(PROJECT_ROOT)/build/lib/c64-chacha20-poly1305.a
-LIB_AEAD = $(PROJECT_ROOT)/build/lib/c64-chacha20-poly1305-aead-only.a
+# Canonical §6.1 basenames. The deprecated `c64-chacha20-poly1305*.a`
+# copies are still produced during the §6.5 window; linking the canonical
+# ones here is what proves a consumer can migrate off the old spelling.
+LIB_FULL = $(PROJECT_ROOT)/build/lib/chacha20poly1305.a
+LIB_AEAD = $(PROJECT_ROOT)/build/lib/chacha20poly1305-aead-only.a
 
 BUILD = build
 
