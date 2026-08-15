@@ -460,8 +460,17 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.8.0** (tagged 2026-08-15;
-`src/lib_version.s` declares 0.8.0 and `LIB_ABI_VERSION` **3**): the
+The current release is **v0.9.0** (tagged 2026-08-15;
+`src/lib_version.s` declares 0.9.0, `LIB_ABI_VERSION` **3**): a
+hardening release — the §6.7 image guard against silent sqtab
+corruption, the `make verify-zp-usage` drift ratchet, and a
+clause-by-clause conformance record against c64-lib-contract v0.10.3.
+**No migration required**: both PRGs and the exported symbol surface are
+byte-identical to v0.8.0, so it is a drop-in. See
+[`docs/RELEASE_NOTES_v0.9.0.md`](docs/RELEASE_NOTES_v0.9.0.md).
+
+The prior release, **v0.8.0** (2026-08-15;
+`LIB_ABI_VERSION` **3**), was the
 packaging-and-naming conformance release, bringing the library from
 c64-lib-contract v0.7.2 up to v0.9.2. **It is breaking on two axes** —
 the four general-purpose ZP slots are renamed to

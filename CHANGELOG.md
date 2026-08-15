@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-15
+
+Hardening release: a link-time guard against a silent sqtab-corruption
+mode, a drift ratchet for the hand-maintained `ZP_USAGE_BYTES` equate,
+and a clause-by-clause conformance record against `c64-lib-contract`
+**v0.10.3**.
+
+**Nothing breaks.** Both PRGs are byte-identical to v0.8.0
+(`52b87cdf…` / `dd043279…`), the exported surface is identical (95
+symbols, diffed), footprints are unchanged in every (profile × variant)
+combination, and `ABI_VERSION` stays **3**.
+
+MINOR on one trigger: `make verify-zp-usage` is a new make target, which
+§6.5 makes contract surface and §7 classifies as additive.
+
+See [`docs/RELEASE_NOTES_v0.9.0.md`](docs/RELEASE_NOTES_v0.9.0.md).
+
 ### Added
 - **§6.7 image guard for the equate-placed sqtab window** (issue #80;
   contract v0.10.0 §6.7, corrected by v0.10.2). `src/c64.cfg`'s `MAIN`
