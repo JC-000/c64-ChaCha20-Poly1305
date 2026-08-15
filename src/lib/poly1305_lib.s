@@ -135,12 +135,11 @@ sqtab_init = mul_tables_init
 ;   - $0200 page-delta required because ct_mul_8x8's SMC dispatch
 ;     bakes (>sqtab_hi - >sqtab_lo) = 2 into an opcode patch.
 .ifndef POLY1305_PROFILE_LONG
-.ifndef LIB_SHARED_SQTAB_BASE
-LIB_SHARED_SQTAB_BASE = $8000     ; per-lib default for standalone builds
-.endif
+; The default lives in one place so src/main.s's §6.7 image guard cannot
+; drift onto a different window than the table actually occupies.
+.include "sqtab_base.inc"
 sqtab_lo        = LIB_SHARED_SQTAB_BASE
 sqtab_hi        = LIB_SHARED_SQTAB_BASE + $0200
-.assert (LIB_SHARED_SQTAB_BASE & $00ff) = 0, error, "sqtab base must be page-aligned"
 .assert sqtab_hi = sqtab_lo + $0200,        error, "sqtab_hi must follow sqtab_lo by $0200"
 
 ; v0.3.0 CT fix: the Step 12 sqtab2_lo/sqtab2_hi tables at $8400..$87FF
