@@ -31,7 +31,56 @@ In the library repo (or your vendored copy of it):
 ```
 make lib              # build/lib/c64-chacha20-poly1305.a
 make lib-aead-only    # build/lib/c64-chacha20-poly1305-aead-only.a
+make lib-app-owned    # build/lib/c64-chacha20-poly1305-app-owned.a
 ```
+
+**Passing your own defines.** Every target forwards `CONTRACT_DEFINES`
+to `ca65` — the contract-normative spelling, so a multi-library consumer
+script uses one variable name across every library it builds:
+
+```
+make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
+```
+
+(`EXTRA_CA65FLAGS` remains as a back-compat alias and is also appended.)
+
+**Use `0x` hex, never `$` hex.** `-D LIB_SHARED_SQTAB_BASE=$9000` is
+mangled before `ca65` ever sees it: the shell expands `$9` as a
+positional parameter, which is empty, leaving `-D ...=000` — **decimal
+zero**. It does not error or warn, so the 1 KB quarter-square table
+silently lands at `$0000`. Measured; `ca65` accepts both spellings, but
+only `0x` survives shell and make unquoted.
+
+Do **not** override `CA65FLAGS` itself — that drops the `-I` include
+paths and fails with `Cannot open include file 'precalc_table.inc'`.
+Overriding `CA65` works but silently drops `-t c64 -g` unless you repeat
+them. `CONTRACT_DEFINES` is the supported seam.
+
+**ZP slot overrides do not go here.** There is deliberately no
+`CONTRACT_ZP_DEFINES` for this library: the archives ship no
+ZP-defining member. `src/zp_config.s` is excluded from every archive
+precisely so you assemble your own copy — so §2 slot overrides belong in
+*that* assembly (or in your own replacement file), not in a define
+forwarded through these targets. See "Zero-page slots" below.
+
+**The app-owned variant** (`lib-app-owned`) is for a consumer whose own
+modules provide both §8 shared primitives. It is built with
+`SHARED_SQTAB_INIT` + `SHARED_CT_MUL_8X8`, so the §8.1 sqtab init and the
+§8.3 `ct_mul_8x8` body are gated out and imported instead — you must
+supply `mul_tables_init`, `ct_mul_8x8`, `poly_prod_lo`/`poly_prod_hi` and
+the `smc_sum_a_imm`/`smc_diff_a_imm` bake sites. `make lib-verify-shared`
+pins that exact imported surface.
+
+Its manifest is truthful for that configuration:
+`LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES = $0000` (owns nothing) with
+`SHARED_CONSUMES = $0005` (uses both) — SPEC §8.0's "deferring consumer"
+state. Verified linking against c64-x25519 as the provider, with both
+§8.0 composition asserts satisfied and no `ar65` member surgery.
+
+If you link two or more libraries, build them **all** with
+`-D LIB_NO_BARE_EXPORTS=1`; otherwise the deprecated bare §1/§8.4 exports
+collide (`Duplicate external identifier: 'LIB_PRECALC_sqtab_SHARED'`).
 
 Both are ar65 archives per c64-lib-contract SPEC §6, assembled as
 Profile B (`POLY1305_PROFILE_LONG` undefined; the aead-only variant
@@ -118,7 +167,7 @@ one commit per upstream bump.
    A consumer cfg that otherwise mirrors the library's memory map
    byte-for-byte is safe. Relocation is now
    partly configurable at assemble time: the 1 KB quarter-square
-   table moves with `-DLIB_SHARED_SQTAB_BASE=$<addr>` (default
+   table moves with `-D LIB_SHARED_SQTAB_BASE=0x<addr>` (default
    `$8000`; PR #39), and the ZP slots move by editing — or shipping
    your own copy of — `src/zp_config.s`, whose `.exportzp` header
    owns every slot (PR #32). The Profile A Shoup tables

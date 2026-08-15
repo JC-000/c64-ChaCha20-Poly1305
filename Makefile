@@ -32,9 +32,49 @@ LIB_FULL_AR    = $(LIB_DIR)/$(LIB_NAME).a
 LIB_AEAD_ONLY_AR        = $(LIB_DIR)/$(LIB_NAME)-aead-only.a
 LIB_AEAD_ONLY_OBJS_DIR  = $(LIB_DIR)/objs-aead-only
 
+# app-owned variant (contract §8.0 APP_OWNED, issue #74): the consumer's
+# own modules provide BOTH shared primitives, and this library defers
+# both. Built with SHARED_SQTAB_INIT + SHARED_CT_MUL_8X8, so the §8.1
+# sqtab init and the §8.3 ct_mul_8x8 body are gated out and imported
+# instead. Its manifest is truthful by construction as of issue #47 —
+# SHARED_PRIMITIVES = $0000, SHARED_CONSUMES = $0005 — so a consumer
+# gets a composable archive without ar65 member surgery.
+LIB_APP_OWNED_AR        = $(LIB_DIR)/$(LIB_NAME)-app-owned.a
+LIB_APP_OWNED_OBJS_DIR  = $(LIB_DIR)/objs-app-owned
+
 CA65 = ca65
 LD65 = ld65
-CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src
+
+# Consumer-supplied assembler defines (contract §6 A.1 / issue #74).
+# Appended to every ca65 invocation so a consumer can reach §8.1's
+# LIB_SHARED_SQTAB_BASE, the §8 SHARED_* deferral switches, and
+# LIB_NO_BARE_EXPORTS without clobbering the base flags:
+#
+#   make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+#   make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
+#
+# USE 0x HEX, NOT $ HEX. `-D FOO=$9000` is mangled before ca65 ever sees
+# it: the shell expands `$9` as a positional parameter, which is empty,
+# leaving `-D FOO=000` — decimal zero. It does not error or warn. Pasted
+# into a sqtab override that silently places the 1 KB table at $0000.
+# ca65 accepts both spellings; only 0x survives shell and make unquoted.
+#
+# Do NOT override CA65FLAGS itself — that drops the -I include paths and
+# fails with "Cannot open include file 'precalc_table.inc'". Overriding
+# CA65 works but silently drops -t c64 -g unless you repeat them.
+#
+# NOTE ON ZP SLOTS: there is deliberately no CONTRACT_ZP_DEFINES here.
+# This library ships no ZP-defining member in its archives — consumers
+# assemble their own src/zp_config.s, so §2 slot overrides belong in
+# that assembly, not in a define forwarded through these targets. See
+# docs/INTEGRATION.md.
+CONTRACT_DEFINES ?=
+
+# Back-compat alias for the pre-ratification spelling. Both are appended,
+# so an existing caller keeps working.
+EXTRA_CA65FLAGS ?=
+
+CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src $(CONTRACT_DEFINES) $(EXTRA_CA65FLAGS)
 CFG = src/c64.cfg
 
 # --- Module list -----------------------------------------------------------
@@ -109,7 +149,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-verify-shared bench bench-check
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -350,6 +390,14 @@ LIB_AEAD_ONLY_OBJS = $(LIB_AEAD_ONLY_OBJS_DIR)/word32_lib.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/lib_version.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/lib_manifest.o
 
+LIB_APP_OWNED_OBJS = $(LIB_APP_OWNED_OBJS_DIR)/word32_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/chacha20_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/poly1305_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/chacha20poly1305_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/data_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/lib_version.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/lib_manifest.o
+
 # --- Full archive (Profile B, every export) --------------------------------
 $(LIB_OBJS_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
@@ -409,6 +457,43 @@ lib-aead-only: $(LIB_AEAD_ONLY_AR)
 $(LIB_AEAD_ONLY_AR): $(LIB_AEAD_ONLY_OBJS) | $(LIB_DIR)
 	rm -f $@
 	ar65 r $@ $(LIB_AEAD_ONLY_OBJS)
+
+# --- app-owned variant (contract §8.0 APP_OWNED, issue #74) ----------------
+# Both shared primitives deferred to the consumer's own modules. The
+# consumer must supply the §8.1 canonical `mul_tables_init` and the §8.3
+# `ct_mul_8x8` (plus poly_prod_lo/hi and the two SMC bake sites) — see
+# `make lib-verify-shared` for the exact imported surface.
+LIB_APP_OWNED_DEFINE = -DSHARED_SQTAB_INIT=1 -DSHARED_CT_MUL_8X8=1
+
+$(LIB_APP_OWNED_OBJS_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+lib-app-owned: $(LIB_APP_OWNED_AR)
+
+$(LIB_APP_OWNED_AR): $(LIB_APP_OWNED_OBJS) | $(LIB_DIR)
+	rm -f $@
+	ar65 r $@ $(LIB_APP_OWNED_OBJS)
+
+$(LIB_APP_OWNED_OBJS_DIR):
+	mkdir -p $(LIB_APP_OWNED_OBJS_DIR)
 
 $(LIB_DIR):
 	mkdir -p $(LIB_DIR)

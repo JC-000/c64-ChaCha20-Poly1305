@@ -144,6 +144,10 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   described above, which is why they are smaller.)
 ; ---------------------------------------------------------------------------
 .ifdef POLY1305_PROFILE_LONG
+  ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
+  ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
+  ; switches remove nothing further — an app-owned Profile A build
+  ; measures the same 15 544 B as a full one.
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
   .else
@@ -153,7 +157,16 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15616
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .else
+    .ifdef SHARED_CT_MUL_8X8
+      ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
+      ; consumer. Measured 16 582 B. A build that is BOTH aead-only and
+      ; app-owned lands in the aead-only branch above at 16 640, which
+      ; over-reports it — the safe direction, and no shipped target
+      ; combines them.
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
+    .else
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
+    .endif
   .endif
 .endif
 

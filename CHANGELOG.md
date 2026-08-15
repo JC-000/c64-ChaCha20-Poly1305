@@ -6,6 +6,69 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Build targets now accept consumer-supplied defines** (issue #74;
+  [contract #76](https://github.com/JC-000/c64-lib-contract/issues/76)
+  A.1). `CA65FLAGS` was hard-assigned, so a consumer following §2's
+  normative `ca65 -D <slot>=$<addr>` had nowhere to put it — passing
+  `CA65FLAGS` clobbered the include paths and failed with
+  `Cannot open include file 'precalc_table.inc'`. §2's prescribed
+  override was normative and unreachable here.
+
+  Every target now forwards **`CONTRACT_DEFINES`** — the
+  contract-normative spelling, so a multi-library consumer script uses
+  one variable name across every library it builds. `EXTRA_CA65FLAGS`
+  remains as a back-compat alias and is also appended.
+
+  ```
+  make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+  make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
+  ```
+
+  One line, additive, and it makes every existing target
+  defines-accepting at once. Overriding `CA65` still works but silently
+  drops `-t c64 -g`; `CONTRACT_DEFINES` is the supported seam.
+
+  **Documented with `0x` hex, not `$` hex** — measured, and the failure
+  is silent. `-D LIB_SHARED_SQTAB_BASE=$9000` never reaches ca65 intact:
+  the shell expands `$9` as a positional parameter, which is empty,
+  leaving `-D ...=000` — **decimal zero**, with no error or warning. A
+  consumer pasting it would place the 1 KB quarter-square table at
+  `$0000`. ca65 accepts both spellings; only `0x` survives shell and
+  make unquoted.
+
+  **No `CONTRACT_ZP_DEFINES`**, deliberately: our archives ship no
+  ZP-defining member — `src/zp_config.s` is excluded precisely so
+  consumers assemble their own — so §2 slot overrides belong in that
+  assembly rather than a forwarded define.
+
+- **`make lib-app-owned`** → `build/lib/c64-chacha20-poly1305-app-owned.a`
+  (issue #74; contract #76 A.2, [#72](https://github.com/JC-000/c64-lib-contract/issues/72)).
+  The SPEC §8.0 `APP_OWNED` configuration: the consumer's own modules
+  provide both shared primitives and this library defers both. Built with
+  `SHARED_SQTAB_INIT` + `SHARED_CT_MUL_8X8`.
+
+  Contract #76 counts **0 of 4 adopters** shipping such a target, which
+  is what forces consumers into `ar65` member surgery — the practice that
+  makes contract #72's manifest divergence reachable. Since #47 our
+  deferral switches gate bodies, exports and manifest bits together, so
+  the archive is truthful by construction:
+
+  | archive | measured | `RESIDENT_BYTES` | `SHARED_PRIMITIVES` | `SHARED_CONSUMES` |
+  |---|---|---|---|---|
+  | full | 16 838 B | 16 896 | `$0005` | `$0005` |
+  | aead-only | 16 513 B | 16 640 | `$0005` | `$0005` |
+  | **app-owned** | 16 582 B | 16 640 | **`$0000`** | **`$0005`** |
+
+  That last row is §8.0's "deferring consumer" state — owns nothing,
+  consumes both. Verified by linking the prebuilt archive against
+  c64-x25519 as the §8.1/§8.3 provider: **links clean, both §8.0
+  composition asserts satisfied, zero `ar65` surgery**, with `ct_mul_8x8`
+  resolving to x25519's `mul_8x8.o` in the map.
+
+  `RESIDENT_BYTES` gating extended to cover it, continuing #69's
+  per-variant work.
+
 ### Fixed
 - **Each archive's manifest now describes that archive** (issue #69;
   contract [#62](https://github.com/JC-000/c64-lib-contract/issues/62)).
@@ -584,7 +647,7 @@ manifest equates, variant build targets) plus removal of the
   [PR #41](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/41)
   — see **Fixed**). The quarter-square table base becomes the
   contract's canonical consumer-overridable equate
-  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`).
+  (`-D LIB_SHARED_SQTAB_BASE=0x<addr>`).
 - **c64-lib-contract SPEC §8.3 `ct_mul_8x8` canonical-owner bit
   `$0004`**
   ([PR #43](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/43),
@@ -668,7 +731,7 @@ manifest equates, variant build targets) plus removal of the
   Behavior is unchanged under documented use — `ct_mul_8x8` always
   patches the hi byte before the indexed load executes — but the
   static image was out of sync with a consumer override
-  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`) until the patch ran.
+  (`-D LIB_SHARED_SQTAB_BASE=0x<addr>`) until the patch ran.
   Defense in depth: assembled bytes are now `BD 00 <hi(sqtab_lo)>` /
   `BD 00 <hi(sqtab_hi)>` from the start. The fix itself changes no default-build bytes —
   fingerprints are identical before and after it within this release

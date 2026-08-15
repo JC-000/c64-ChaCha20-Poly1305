@@ -799,7 +799,7 @@ a hypothetical cold-jump consumer that skipped the patch would read
 from the correct page.
 
 **Bytes were out of sync under a consumer override.** Multi-lib
-PRGs may set `-DLIB_SHARED_SQTAB_BASE=$<addr>` (e.g. `$7800`) to
+PRGs may set `-D LIB_SHARED_SQTAB_BASE=0x<addr>` (e.g. `0x7800`) to
 share one sqtab across c64-x25519 / c64-chacha20-poly1305 / a
 host-app primitives table. The equate then resolves to `$7800`, the
 dispatch correctly patches `$78` / `$7A` into the hi byte at
