@@ -6,6 +6,40 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Release tarball omitted `src/include/sqtab_base.inc`** — a clean
+  extraction could not build the library. `tools/build_release.sh` ships
+  an explicit path allowlist, and the file added by issue #80 was never
+  added to it. The failure was partial and therefore easy to miss:
+  Profile A builds fine (it includes no sqtab), so only `make lib` and
+  `make profile-b` failed, with `Cannot open include file
+  'sqtab_base.inc'`.
+
+  Caught by the clean-extraction check in the release procedure, before
+  any release was published.
+
+  Also added, same cause: `tools/verify_zp_usage.py` (so
+  `make verify-zp-usage` works from a tarball), `docs/precalc-tables.md`
+  (the §8.4 doc half — the clause requires both the doc and the macro),
+  and `docs/REPRO_CHECK.md` (linked from every release-notes file).
+
+- **`build_release.sh` now ratchets its own manifest.** An allowlist is
+  the right shape for a reproducible tarball, but it fails *silently*
+  when a source grows a new dependency. The script now extracts what it
+  just built and verifies the shipped tree closes over its own
+  `.include` graph, plus that every tool a supported target invokes is
+  present; on a gap it names the missing file and deletes the tarball
+  rather than leaving a broken artifact behind.
+
+  Verified by seeding the original omission — it now fails with
+  `MANIFEST ERROR: a shipped source .include's 'sqtab_base.inc'`.
+
+  The tools check is deliberately scoped: `bench_granular.py` and
+  `build_release.sh` itself are correctly absent from a source tarball
+  (the bench targets need the unshipped test harness, and re-rolling a
+  release from inside a release tarball is not a supported operation).
+
+
 ## [0.9.0] — 2026-08-15
 
 Hardening release: a link-time guard against a silent sqtab-corruption

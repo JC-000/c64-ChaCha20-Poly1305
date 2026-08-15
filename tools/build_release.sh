@@ -57,7 +57,7 @@ git archive \
   --format=tar \
   "$TAG" \
   src/c64.cfg src/main.s \
-  src/include/ca65hl src/include/smc.inc \
+  src/include/ca65hl src/include/smc.inc src/include/sqtab_base.inc \
   src/zp_config.s src/lib_version.s src/precalc_table.inc \
   src/lib/constants_lib.s src/lib/data_lib.s \
   src/lib/word32_lib.s src/lib/chacha20_lib.s \
@@ -66,9 +66,62 @@ git archive \
   Makefile README.md CHANGELOG.md LICENSE \
   docs/API.md docs/INTEGRATION.md docs/MEMORY_MAP.md \
   docs/AUDIT.md docs/CT_ANALYSIS.md \
+  docs/precalc-tables.md docs/REPRO_CHECK.md \
+  tools/verify_zp_usage.py \
   test/rfc7539_vectors.json \
   "$NOTES" \
   | gzip -n -9 > "$OUT"
+
+# ---------------------------------------------------------------------------
+# Manifest ratchet.
+#
+# The file list above is an explicit allowlist — the right shape for a
+# reproducible tarball, but it fails SILENTLY when a source grows a new
+# dependency: git archive omits the unlisted file, the tarball builds far
+# enough to look fine, and the break surfaces only in whichever target needs
+# it. That is exactly how src/include/sqtab_base.inc was omitted from the
+# first v0.9.0 tarball — Profile A built clean and `make lib` failed, because
+# only Profile B includes it.
+#
+# So verify the shipped tree closes over its own .include graph, and that
+# every tools/ script a shipped make target invokes is present. Turns a silent
+# omission into a named failure at packaging time.
+# ---------------------------------------------------------------------------
+CHECKDIR="$(mktemp -d)"
+trap 'rm -rf "$CHECKDIR"' EXIT
+tar xzf "$OUT" -C "$CHECKDIR"
+ROOT_CHECK="$CHECKDIR/c64-ChaCha20-Poly1305-${TAG}"
+missing=0
+
+incs="$(find "$ROOT_CHECK/src" \( -name '*.s' -o -name '*.inc' \) -print0 \
+        | xargs -0 grep -ho '\.include "[^"]*"' 2>/dev/null \
+        | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+for inc in $incs; do
+  if [ -z "$(find "$ROOT_CHECK/src" -name "$inc" -print -quit)" ]; then
+    echo "MANIFEST ERROR: a shipped source .include's '$inc', which the tarball omits" >&2
+    missing=1
+  fi
+done
+
+# Scoped deliberately. The Makefile also invokes tools/bench_granular.py and
+# tools/build_release.sh, and those are correctly ABSENT from a source tarball:
+# the bench targets need the c64-test-harness (not shipped, and not a build
+# dependency), and re-rolling a release from inside a release tarball is not a
+# supported operation. Only tools a consumer needs to BUILD or VERIFY the
+# library are required here.
+REQUIRED_TOOLS="tools/verify_zp_usage.py"
+for t in $REQUIRED_TOOLS; do
+  if [ ! -f "$ROOT_CHECK/$t" ]; then
+    echo "MANIFEST ERROR: the shipped Makefile invokes '$t', which the tarball omits" >&2
+    missing=1
+  fi
+done
+
+if [ "$missing" -ne 0 ]; then
+  echo "tarball manifest incomplete — $OUT would not build from a clean extraction" >&2
+  rm -f "$OUT"
+  exit 1
+fi
 
 SIZE=$(wc -c < "$OUT" | tr -d ' ')
 SHA=$(shasum -a 256 "$OUT" | cut -d' ' -f1)
