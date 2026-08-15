@@ -226,7 +226,7 @@ cc20_qr_table:
 ; Each (lda abs,x) is 4 cy with no page-cross penalty thanks to .align 256
 ; — preserves CT (X is derived from secret state).
 ;
-; Pre-save b3>>4 into zp_tmp1 (wraps into new_b0), then walk b3..b0:
+; Pre-save b3>>4 into chacha20poly1305_zp_tmp1 (wraps into new_b0), then walk b3..b0:
 ; each step keeps X = old b_i across the two LUT reads (hi_tab[b_i],
 ; lo_tab[b_{i-1}]) before X is reloaded with b_{i-1}. 80 cy total
 ; (vs ~124 cy for the prior asl/lsr/ora chain). Clobbers A and X.
@@ -241,7 +241,7 @@ cc20_qr_table:
         ; Save (b3 >> 4) — wraps into new_b0's low nibble.
         ldx dst+3
         lda chacha_nibswap_lo_tab,x
-        sta zp_tmp1
+        sta chacha20poly1305_zp_tmp1
 
         ; new_b3 = (b3 << 4) | (b2 >> 4)
         lda chacha_nibswap_hi_tab,x   ; b3 << 4 (X still = old b3)
@@ -267,9 +267,9 @@ cc20_qr_table:
         ora dst+1
         sta dst+1
 
-        ; new_b0 = (b0 << 4) | (b3 >> 4 from zp_tmp1)
+        ; new_b0 = (b0 << 4) | (b3 >> 4 from chacha20poly1305_zp_tmp1)
         lda chacha_nibswap_hi_tab,x   ; b0 << 4 (X still = old b0)
-        ora zp_tmp1
+        ora chacha20poly1305_zp_tmp1
         sta dst
 .endif
 .endmacro

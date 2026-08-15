@@ -223,7 +223,7 @@ rotr32_4:
         asl
         asl
         asl                    ; b0_low << 4 (for wrapping into b3 high)
-        sta zp_tmp1            ; save wrap value
+        sta chacha20poly1305_zp_tmp1            ; save wrap value
 
         ; b0 = (b0 >> 4) | (b1 << 4)
         ldy #0
@@ -232,14 +232,14 @@ rotr32_4:
         lsr
         lsr
         lsr
-        sta zp_tmp2            ; b0 >> 4
+        sta chacha20poly1305_zp_tmp2            ; b0 >> 4
         ldy #1
         lda (w32_dst),y
         asl
         asl
         asl
         asl
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #0
         sta (w32_dst),y
 
@@ -250,14 +250,14 @@ rotr32_4:
         lsr
         lsr
         lsr
-        sta zp_tmp2
+        sta chacha20poly1305_zp_tmp2
         ldy #2
         lda (w32_dst),y
         asl
         asl
         asl
         asl
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #1
         sta (w32_dst),y
 
@@ -268,14 +268,14 @@ rotr32_4:
         lsr
         lsr
         lsr
-        sta zp_tmp2
+        sta chacha20poly1305_zp_tmp2
         ldy #3
         lda (w32_dst),y
         asl
         asl
         asl
         asl
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #2
         sta (w32_dst),y
 
@@ -286,7 +286,7 @@ rotr32_4:
         lsr
         lsr
         lsr
-        ora zp_tmp1            ; wrapped b0 low nibble
+        ora chacha20poly1305_zp_tmp1            ; wrapped b0 low nibble
         sta (w32_dst),y
         rts
 
@@ -389,7 +389,7 @@ rotl32_4:
         lsr
         lsr
         lsr                    ; b3 >> 4 (for wrapping into b0 low)
-        sta zp_tmp1            ; save wrap value
+        sta chacha20poly1305_zp_tmp1            ; save wrap value
 
         ; b3 = (b3 << 4) | (b2 >> 4)
         ldy #3
@@ -398,14 +398,14 @@ rotl32_4:
         asl
         asl
         asl
-        sta zp_tmp2            ; b3 << 4
+        sta chacha20poly1305_zp_tmp2            ; b3 << 4
         ldy #2
         lda (w32_dst),y
         lsr
         lsr
         lsr
         lsr
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #3
         sta (w32_dst),y
 
@@ -416,14 +416,14 @@ rotl32_4:
         asl
         asl
         asl
-        sta zp_tmp2
+        sta chacha20poly1305_zp_tmp2
         ldy #1
         lda (w32_dst),y
         lsr
         lsr
         lsr
         lsr
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #2
         sta (w32_dst),y
 
@@ -434,14 +434,14 @@ rotl32_4:
         asl
         asl
         asl
-        sta zp_tmp2
+        sta chacha20poly1305_zp_tmp2
         ldy #0
         lda (w32_dst),y
         lsr
         lsr
         lsr
         lsr
-        ora zp_tmp2
+        ora chacha20poly1305_zp_tmp2
         ldy #1
         sta (w32_dst),y
 
@@ -452,7 +452,7 @@ rotl32_4:
         asl
         asl
         asl
-        ora zp_tmp1            ; wrapped b3 high nibble
+        ora chacha20poly1305_zp_tmp1            ; wrapped b3 high nibble
         sta (w32_dst),y
         rts
 

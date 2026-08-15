@@ -15,7 +15,7 @@
 ; and resolve cleanly across translation units.
 ;
 ; Slot inventory:
-;   zp_tmp1/zp_tmp2                                     : 2 x 1-byte scratch
+;   chacha20poly1305_zp_tmp1/_zp_tmp2                   : 2 x 1-byte scratch
 ;   w32_src1/w32_src2/w32_dst                           : 3 x 2-byte pointers
 ;   cc20_round/cc20_qr_idx                              : 2 x 1-byte counters
 ;   cc20_data_ptr                                       : 1 x 2-byte pointer
@@ -26,7 +26,7 @@
 ;   cc20_work                                           : 64-byte block
 ;                                                         ($40..$7F)
 ;   cc20_keystream                                      : alias of cc20_work
-;   zp_ptr1/zp_ptr2                                     : 2 x 2-byte pointers
+;   chacha20poly1305_zp_ptr1/_zp_ptr2                   : 2 x 2-byte pointers
 ;
 ; See src/lib/constants_lib.s for per-slot purpose commentary.
 ; =============================================================================
@@ -34,11 +34,36 @@
 .segment "ZEROPAGE"
 
 ; --- General-purpose ZP scratch (word32 nibble rotates) ---
-.ifndef zp_tmp1
-  zp_tmp1  = $02                        ; temp byte
+;
+; Registry migration (contract v0.9.0 §2, gate added v0.9.1 §6.5). The
+; bare `zp_tmp*` / `zp_ptr*` spellings are unregistered general-purpose
+; names that c64-nist-curves also ships, so two libraries in one link
+; collide on them (contract #83) — a collision that was the only thing
+; preventing a silent address overlap between actively-used scratch.
+; The canonical names take this library's `<shortname>_zp_<role>` form.
+;
+; The bare aliases further down ride the §6.5 rename window and are
+; suppressed by LIB_NO_BARE_EXPORTS. Gating them is what makes the
+; window worth anything: an ungated alias would keep the collision alive
+; for the window's whole duration, so a composed link would be no better
+; off the day the window opened than the day before.
+;
+; A consumer's deprecated-spelling override is still honoured, so
+; `-D zp_tmp1=0x40` keeps working through the window and moves the
+; canonical slot with it.
+.ifndef chacha20poly1305_zp_tmp1
+  .ifdef zp_tmp1
+    chacha20poly1305_zp_tmp1 = zp_tmp1  ; deprecated override spelling
+  .else
+    chacha20poly1305_zp_tmp1 = $02      ; temp byte
+  .endif
 .endif
-.ifndef zp_tmp2
-  zp_tmp2  = $03                        ; temp byte
+.ifndef chacha20poly1305_zp_tmp2
+  .ifdef zp_tmp2
+    chacha20poly1305_zp_tmp2 = zp_tmp2  ; deprecated override spelling
+  .else
+    chacha20poly1305_zp_tmp2 = $03      ; temp byte
+  .endif
 .endif
 
 ; --- word32 operand pointers (32-bit add/xor/rotate primitives) ---
@@ -103,18 +128,49 @@
 .endif
 
 ; --- General-purpose 16-bit pointers (poly1305 / aead) ---
-.ifndef zp_ptr1
-  zp_ptr1 = $fb                         ; 2-byte pointer ($fb-$fc)
+; Same registry migration as the scratch bytes above.
+.ifndef chacha20poly1305_zp_ptr1
+  .ifdef zp_ptr1
+    chacha20poly1305_zp_ptr1 = zp_ptr1  ; deprecated override spelling
+  .else
+    chacha20poly1305_zp_ptr1 = $fb      ; 2-byte pointer ($fb-$fc)
+  .endif
 .endif
-.ifndef zp_ptr2
-  zp_ptr2 = $fd                         ; 2-byte pointer ($fd-$fe)
+.ifndef chacha20poly1305_zp_ptr2
+  .ifdef zp_ptr2
+    chacha20poly1305_zp_ptr2 = zp_ptr2  ; deprecated override spelling
+  .else
+    chacha20poly1305_zp_ptr2 = $fd      ; 2-byte pointer ($fd-$fe)
+  .endif
 .endif
 
 ; --- Exports ---
-.exportzp zp_tmp1, zp_tmp2
+.exportzp chacha20poly1305_zp_tmp1, chacha20poly1305_zp_tmp2
 .exportzp w32_src1, w32_src2, w32_dst
 .exportzp cc20_round, cc20_qr_idx, cc20_data_ptr, cc20_remain, cc20_buf_pos
 .exportzp poly_i, poly_j, poly_carry, poly_tmp
 .exportzp ct_diff_raw, ct_sign_mask
 .exportzp cc20_work, cc20_keystream
-.exportzp zp_ptr1, zp_ptr2
+.exportzp chacha20poly1305_zp_ptr1, chacha20poly1305_zp_ptr2
+
+; --- Deprecated bare aliases (contract §6.5 rename window) ---
+; Shipped for one MINOR alongside the canonical names, removed at the
+; next MAJOR. Suppressed build-wide by `ca65 -D LIB_NO_BARE_EXPORTS=1`,
+; which is the gate §6.5 names for bare-name cases and the same flag a
+; composing consumer already sets for the §1 version exports.
+.ifndef LIB_NO_BARE_EXPORTS
+  .ifndef zp_tmp1
+    zp_tmp1 = chacha20poly1305_zp_tmp1
+  .endif
+  .ifndef zp_tmp2
+    zp_tmp2 = chacha20poly1305_zp_tmp2
+  .endif
+  .ifndef zp_ptr1
+    zp_ptr1 = chacha20poly1305_zp_ptr1
+  .endif
+  .ifndef zp_ptr2
+    zp_ptr2 = chacha20poly1305_zp_ptr2
+  .endif
+  .exportzp zp_tmp1, zp_tmp2
+  .exportzp zp_ptr1, zp_ptr2
+.endif

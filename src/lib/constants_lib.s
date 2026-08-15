@@ -18,7 +18,7 @@
 
 ; --- ZP imports (definitions live in src/zp_config.s) -----------------------
 ; General-purpose ZP scratch (word32 nibble rotates).
-.importzp zp_tmp1, zp_tmp2
+.importzp chacha20poly1305_zp_tmp1, chacha20poly1305_zp_tmp2
 
 ; word32 operand pointers (32-bit add/xor/rotate primitives).
 .importzp w32_src1, w32_src2, w32_dst
@@ -40,7 +40,7 @@
 .importzp ct_diff_raw, ct_sign_mask
 
 ; General-purpose 16-bit pointers used by poly1305 / aead.
-.importzp zp_ptr1, zp_ptr2
+.importzp chacha20poly1305_zp_ptr1, chacha20poly1305_zp_ptr2
 
 ; --- Build profile flag -----------------------------------------------------
 ; POLY1305_PROFILE_LONG selects "Profile A" (long-message / REU-assisted,

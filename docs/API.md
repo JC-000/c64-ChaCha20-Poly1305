@@ -315,7 +315,7 @@ cells) was deleted. Upgrade notes for consumers of the removed API:
 - **Purpose**: Process one 16-byte block. `h += block`, then
   `h *= r mod p`.
 - **Signature**:
-  - `zp_ptr1` ($fb-$fc) = pointer to 16-byte block.
+  - `chacha20poly1305_zp_ptr1` ($fb-$fc) = pointer to 16-byte block.
   - A = high bit value (1 for normal blocks, 0 for the final
     length-block / partial-padded form).
 - **Preconditions**: `poly1305_init` run; `sqtab_ready != 0`.
@@ -335,9 +335,9 @@ cells) was deleted. Upgrade notes for consumers of the removed API:
 - **Example**:
   ```ca65
   lda #<my_block
-  sta zp_ptr1
+  sta chacha20poly1305_zp_ptr1
   lda #>my_block
-  sta zp_ptr1+1
+  sta chacha20poly1305_zp_ptr1+1
   lda #1                ; hibit = 1 for full-message block
   jsr poly1305_block
   ```
@@ -348,7 +348,7 @@ cells) was deleted. Upgrade notes for consumers of the removed API:
 - **Purpose**: Process a multi-byte message as 16-byte blocks,
   zero-padding the final partial block per RFC 7539.
 - **Signature**:
-  - `zp_ptr1` = data pointer.
+  - `chacha20poly1305_zp_ptr1` = data pointer.
   - `cc20_remain` = length (byte; repurposed as a generic byte counter).
 - **Preconditions**: `poly1305_init` run.
 - **Postconditions**: `poly_h` advanced over all input bytes;

@@ -1051,7 +1051,7 @@ poly1305_reduce:
 ; =============================================================================
 ; poly1305_block - Process one 16-byte block
 ;
-; Input: zp_ptr1 points to 16-byte block
+; Input: chacha20poly1305_zp_ptr1 points to 16-byte block
 ;        A = high bit to add (1 for normal blocks, 0 for final partial)
 ;
 ; Operations: h += block (with high bit), then h *= r mod p
@@ -1062,7 +1062,7 @@ poly1305_block:
         sta poly_carry          ; save high bit value
 
 .ifdef POLY1305_PROFILE_LONG
-        ; h += block (16 bytes from (zp_ptr1))
+        ; h += block (16 bytes from (chacha20poly1305_zp_ptr1))
         ; IMPORTANT: Use DEX/BNE for loop control — CPY clobbers carry,
         ; which would break carry propagation in the multi-byte addition.
         clc
@@ -1070,7 +1070,7 @@ poly1305_block:
         ldy #0
 @add_block:
         lda poly_h,y
-        adc (zp_ptr1),y
+        adc (chacha20poly1305_zp_ptr1),y
         sta poly_h,y
         iny
         dex
@@ -1082,7 +1082,7 @@ poly1305_block:
         sta poly_h+16
 .else
         ; Profile B (Step 12 P7): straight-line block-add. Y walks the
-        ; 16 byte indexes 0..15 so the `adc (zp_ptr1),y` stays a single
+        ; 16 byte indexes 0..15 so the `adc (chacha20poly1305_zp_ptr1),y` stays a single
         ; addressing mode, while `lda/sta poly_h,y` uses absolute,y.
         ; Compared to the Profile A DEX/BNE loop (~321 cy for 16 iters),
         ; the straight-line chain drops loop-control cycles (iny+dex+bne
@@ -1098,7 +1098,7 @@ poly1305_block:
         ldy #0
         .repeat 16, K
             lda poly_h + K
-            adc (zp_ptr1),y
+            adc (chacha20poly1305_zp_ptr1),y
             sta poly_h + K
             .if K < 15
                 iny
@@ -1117,7 +1117,7 @@ poly1305_block:
 ; =============================================================================
 ; poly1305_update - Process message data
 ;
-; Input: zp_ptr1 = pointer to data, cc20_remain = length
+; Input: chacha20poly1305_zp_ptr1 = pointer to data, cc20_remain = length
 ;        (Reuses cc20_remain as a general byte counter)
 ;
 ; Clobbers: A, X, Y
@@ -1137,12 +1137,12 @@ poly1305_update:
 
         ; Advance pointer by 16
         clc
-        lda zp_ptr1
+        lda chacha20poly1305_zp_ptr1
         adc #16
-        sta zp_ptr1
-        lda zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1
+        lda chacha20poly1305_zp_ptr1+1
         adc #0
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
 
         lda cc20_remain
         sec
@@ -1166,7 +1166,7 @@ poly1305_update:
         ldx cc20_remain
         beq @pad_done
 @copy_partial:
-        lda (zp_ptr1),y
+        lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
         dex
@@ -1177,11 +1177,11 @@ poly1305_update:
         lda #$01
         sta aead_scratch,y
 
-        ; Point zp_ptr1 to scratch buffer
+        ; Point chacha20poly1305_zp_ptr1 to scratch buffer
         lda #<aead_scratch
-        sta zp_ptr1
+        sta chacha20poly1305_zp_ptr1
         lda #>aead_scratch
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
 
         ; Process with high bit = 0 (the 0x01 in the buffer handles it)
         lda #0
