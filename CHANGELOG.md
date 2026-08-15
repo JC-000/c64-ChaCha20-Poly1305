@@ -647,7 +647,7 @@ manifest equates, variant build targets) plus removal of the
   [PR #41](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/41)
   — see **Fixed**). The quarter-square table base becomes the
   contract's canonical consumer-overridable equate
-  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`).
+  (`-D LIB_SHARED_SQTAB_BASE=0x<addr>`).
 - **c64-lib-contract SPEC §8.3 `ct_mul_8x8` canonical-owner bit
   `$0004`**
   ([PR #43](https://github.com/JC-000/c64-ChaCha20-Poly1305/pull/43),
@@ -731,7 +731,7 @@ manifest equates, variant build targets) plus removal of the
   Behavior is unchanged under documented use — `ct_mul_8x8` always
   patches the hi byte before the indexed load executes — but the
   static image was out of sync with a consumer override
-  (`-DLIB_SHARED_SQTAB_BASE=$<addr>`) until the patch ran.
+  (`-D LIB_SHARED_SQTAB_BASE=0x<addr>`) until the patch ran.
   Defense in depth: assembled bytes are now `BD 00 <hi(sqtab_lo)>` /
   `BD 00 <hi(sqtab_hi)>` from the start. The fix itself changes no default-build bytes —
   fingerprints are identical before and after it within this release

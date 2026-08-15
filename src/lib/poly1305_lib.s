@@ -127,7 +127,7 @@ sqtab_init = mul_tables_init
 ; ($8000) preserved verbatim from prior releases, so byte output
 ; under default build is unchanged. A multi-lib PRG that links any
 ; other §8.1 adopter (c64-nist-curves, c64-x25519, c64-ChaCha20-Poly1305,
-; etc.) supplies a single `-D LIB_SHARED_SQTAB_BASE=$<addr>`
+; etc.) supplies a single `-D LIB_SHARED_SQTAB_BASE=0x<addr>`
 ; and the libs agree on one shared 1 KB table.
 ;
 ; The two .asserts catch misconfigurations at assemble time:

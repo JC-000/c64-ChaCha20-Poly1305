@@ -167,7 +167,7 @@ one commit per upstream bump.
    A consumer cfg that otherwise mirrors the library's memory map
    byte-for-byte is safe. Relocation is now
    partly configurable at assemble time: the 1 KB quarter-square
-   table moves with `-DLIB_SHARED_SQTAB_BASE=$<addr>` (default
+   table moves with `-D LIB_SHARED_SQTAB_BASE=0x<addr>` (default
    `$8000`; PR #39), and the ZP slots move by editing — or shipping
    your own copy of — `src/zp_config.s`, whose `.exportzp` header
    owns every slot (PR #32). The Profile A Shoup tables
