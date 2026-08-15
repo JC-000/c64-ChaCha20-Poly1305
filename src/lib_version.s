@@ -29,7 +29,7 @@
 ;
 ;     .import LIB_CHACHA20_POLY1305_VERSION_MAJOR
 ;     .import LIB_CHACHA20_POLY1305_VERSION_MINOR
-;     .assert (LIB_CHACHA20_POLY1305_VERSION_MAJOR > 0) .or (LIB_CHACHA20_POLY1305_VERSION_MINOR >= 7), lderror, "needs c64-ChaCha20-Poly1305 v0.7+"
+;     .assert (LIB_CHACHA20_POLY1305_VERSION_MAJOR > 0) .or (LIB_CHACHA20_POLY1305_VERSION_MINOR >= 8), lderror, "needs c64-ChaCha20-Poly1305 v0.8+"
 ;
 ; It MUST be `.assert` / `lderror`, not `.if` / `.error` (SPEC §1,
 ; contract v0.8.1). `.if` needs an assemble-time constant, and an
@@ -87,7 +87,7 @@
 ; src/lib/lib_manifest.s. Do not add exports here.
 
 LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0
-LIB_CHACHA20_POLY1305_VERSION_MINOR = 7
+LIB_CHACHA20_POLY1305_VERSION_MINOR = 8
 LIB_CHACHA20_POLY1305_VERSION_PATCH = 0
 LIB_CHACHA20_POLY1305_ABI_VERSION   = 3
 

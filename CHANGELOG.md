@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-15
+
+Contract-conformance release: `c64-lib-contract` v0.7.2 → **v0.9.2**.
+Naming, packaging and manifest only — the default-build PRG is
+**byte-identical to v0.7.0** (`52b87cdf…`), so measured performance is
+unchanged and not re-measured.
+
+Breaking for consumers on two axes: the four general-purpose ZP slot
+names, and `LIB_CHACHA20_POLY1305_ABI_VERSION` 1 → **3**. See
+[`docs/RELEASE_NOTES_v0.8.0.md`](docs/RELEASE_NOTES_v0.8.0.md) for the
+migration steps.
+
 ### Changed
 - **BREAKING — ZP slot names take the §2 registry prefix** (issue #76;
   SPEC v0.9.0 §2, gate added v0.9.1 §6.5). `zp_tmp1`, `zp_tmp2`,
