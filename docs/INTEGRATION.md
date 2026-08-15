@@ -239,6 +239,57 @@ directory name).
 A consumer MUST NOT use any of the following addresses without
 first relocating them in the library source (only safe at v0.4.0+):
 
+### Mirror the sqtab image guard (contract §6.7)
+
+The §8.1 sqtab is placed by an **equate** (`LIB_SHARED_SQTAB_BASE`,
+default `$8000`), not a segment — §8.x requires that form so
+independently-built libraries can be pointed at one address. The
+consequence is that **ld65 does not know the region exists**: a memory
+area spanning the window will place growing segments straight across the
+table, link with no error, and corrupt it at runtime with no diagnostic
+at any stage.
+
+This library guards its **own** image, but that guard cannot protect
+yours — you author your own memory map, and §6.7 forbids putting the
+check in an archive member (it would force every consumer to name a
+`MAIN` area with `define = yes` or eat an unresolved external). So add
+the mirror in your own build:
+
+```
+# your cfg — the area publishes its extent
+MAIN: file = %O, start = $0900, size = $9700, define = yes;
+```
+
+```asm
+; a TU in your own build (not in any library archive)
+.ifndef LIB_SHARED_SQTAB_BASE
+LIB_SHARED_SQTAB_BASE = $8000     ; must match what you pass via -D
+.endif
+.import __MAIN_LAST__
+.assert __MAIN_LAST__ <= LIB_SHARED_SQTAB_BASE, lderror, "image overruns the sqtab window"
+```
+
+Note you define the equate **source-level** rather than importing it:
+§8.1 forbids libraries from exporting `LIB_SHARED_SQTAB_BASE`, because
+two libraries exporting the same unprefixed name collide in any composed
+link. Keep the `.ifndef` guard so your `-D` override still moves the
+check along with the table.
+
+Keep `__MAIN_LAST__` a **hard** import. An `lderror` assert whose operand
+is missing degrades to `Warning: Cannot evaluate assertion` — a silent
+no-op — so it is the unresolved external that keeps the guard honest.
+
+Measured on this library (ld65 V2.18): the guard costs nothing —
+`define = yes` only publishes symbols and `.assert` emits no code, so the
+PRG is byte-identical with and without it. The boundary is exact to the
+page: with the image ending at `$4D27`, a base of `$4E00` passes and
+`$4D00` fires. (Byte-exactness as described in §6.7 is not observable
+here because §8.1 separately requires the base to be page-aligned.)
+
+If you relink with `-D LIB_SHARED_SQTAB_BASE=0x<addr>`, both the table
+and the assert move together — that is the point of comparing against the
+equate rather than a hardcoded address.
+
 ### Zero page (always)
 
 > **Slot names changed (SPEC §2 prefix registry).** The four
