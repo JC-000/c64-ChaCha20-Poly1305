@@ -140,6 +140,32 @@ file, which §8.4 requires be copied verbatim and which says not to edit
 locally. Its header still cites §8.0; that is upstream's to fix, and
 editing our copy would break the verbatim property.
 
+### Release tarball manifest fixed and ratcheted
+
+Found while verifying this very release: a clean extraction of the first
+v0.9.0 tarball **could not build the library**. `tools/build_release.sh`
+ships an explicit path allowlist, and `src/include/sqtab_base.inc` —
+added by issue #80 in this same release — was never added to it.
+
+The failure was partial, which is what made it dangerous: Profile A
+builds clean because it includes no sqtab, so only `make lib` and
+`make profile-b` broke. Checking only the default target would have
+shipped it.
+
+Three more files were omitted for the same reason and are now included:
+`tools/verify_zp_usage.py`, `docs/precalc-tables.md` (§8.4 requires the
+doc half, not just the macro) and `docs/REPRO_CHECK.md`.
+
+The script now **ratchets its own manifest**: it extracts what it just
+built, verifies the shipped tree closes over its own `.include` graph
+and that every tool a supported target invokes is present, then names
+the missing file and deletes the tarball rather than leaving a broken
+artifact behind. Negative-tested by re-seeding the original omission.
+
+The `v0.9.0` tag was moved onto the commit carrying this fix, so the tag
+ships tooling that reproduces its own tarball. No release had been
+published at that point and nothing had consumed the earlier tag.
+
 ## Footprint (§6.6, per profile × variant)
 
 Every combination is unchanged from v0.8.0. Measured from each archive's
