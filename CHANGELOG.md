@@ -7,6 +7,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Canonical archive basenames** (issue #76;
+  [contract #76](https://github.com/JC-000/c64-lib-contract/issues/76)
+  Gap 1, SPEC v0.9.0 §6.1). Archives are now written as
+  `chacha20poly1305[-<variant>].a` — `<shortname>` being the §1 library
+  prefix lowercased. The previous `c64-chacha20-poly1305*.a` spelling is
+  a deprecated dialect under §6.1.
+
+  Per the §6.5 rename window both names are produced for one MINOR
+  release and the old form is dropped at the next MAJOR. The two files
+  are byte-identical copies of the same `ar65` output — verified per
+  build, not assumed — so either links to the same result. A filename,
+  unlike an exported symbol, cannot collide at link time, so no
+  opt-out define is needed.
+
+  `test_consumer/` now links the canonical names, which is what
+  demonstrates the migration rather than merely documenting it.
+
 - **Build targets now accept consumer-supplied defines** (issue #74;
   [contract #76](https://github.com/JC-000/c64-lib-contract/issues/76)
   A.1). `CA65FLAGS` was hard-assigned, so a consumer following §2's

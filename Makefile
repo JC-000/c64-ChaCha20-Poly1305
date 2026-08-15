@@ -16,16 +16,29 @@ PROFILE_BR_DIR = build/profile-b-rolled
 PROFILE_BO_DIR = build/profile-b-rolled-outer
 
 # Library archive outputs (c64-lib-contract SPEC §6). `make lib` builds
-# the full Profile-B archive `build/lib/c64-chacha20-poly1305.a`. Each
+# the full Profile-B archive `build/lib/chacha20poly1305.a`. Each
 # `make lib-<variant>` target builds a trimmed archive next to it as
-# `build/lib/c64-chacha20-poly1305-<variant>.a`. Per-variant object
+# `build/lib/chacha20poly1305-<variant>.a`. Per-variant object
 # files live in their own subdir (`build/lib/objs/`, `build/lib/objs-
 # <variant>/`) so the variants' `.ifndef`-gated assembly results don't
 # clobber Profile A/B's .o cache.
 LIB_DIR        = build/lib
 LIB_OBJS_DIR   = $(LIB_DIR)/objs
-LIB_NAME       = c64-chacha20-poly1305
+# Canonical archive basename per contract §6.1: <shortname>[-<variant>].a
+# where <shortname> is the §1 prefix lowercased. v0.9.0 names our previous
+# `c64-chacha20-poly1305` spelling a deprecated dialect.
+LIB_NAME       = chacha20poly1305
+
+# Deprecated basename, shipped alongside the canonical one for one MINOR
+# release per the §6.5 rename window, dropped at the next MAJOR. Archives
+# can dual-name (unlike archive members), so both are produced from the
+# same objects and are byte-identical copies.
+LIB_NAME_DEPRECATED = c64-chacha20-poly1305
+
 LIB_FULL_AR    = $(LIB_DIR)/$(LIB_NAME).a
+LIB_FULL_AR_DEPRECATED       = $(LIB_DIR)/$(LIB_NAME_DEPRECATED).a
+LIB_AEAD_ONLY_AR_DEPRECATED  = $(LIB_DIR)/$(LIB_NAME_DEPRECATED)-aead-only.a
+LIB_APP_OWNED_AR_DEPRECATED  = $(LIB_DIR)/$(LIB_NAME_DEPRECATED)-app-owned.a
 
 # Per-variant archive paths. New variants get one line each here plus a
 # build recipe below; the rule shape is generic.
@@ -350,7 +363,7 @@ clean:
 # references — no mid-build `sed`, no copying intermediate .o files.
 #
 # Targets:
-#   make lib              build/lib/c64-chacha20-poly1305.a
+#   make lib              build/lib/chacha20poly1305.a (+ deprecated alias)
 #                         Full Profile-B archive. Every public ABI
 #                         export plus the test-only entry points
 #                         (chacha20_quarter_round, mul_8x8, rotl32_1,
@@ -358,7 +371,7 @@ clean:
 #                         test harness can jsr() into the same labels
 #                         the upstream harness does.
 #
-#   make lib-aead-only    build/lib/c64-chacha20-poly1305-aead-only.a
+#   make lib-aead-only    build/lib/chacha20poly1305-aead-only.a (+ alias)
 #                         Trimmed archive for consumers that only need
 #                         the documented AEAD ABI (aead_encrypt,
 #                         aead_decrypt, plus their poly1305_lib_init
@@ -425,8 +438,9 @@ $(LIB_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_
 lib: $(LIB_FULL_AR)
 
 $(LIB_FULL_AR): $(LIB_OBJS) | $(LIB_DIR)
-	rm -f $@
+	rm -f $@ $(LIB_FULL_AR_DEPRECATED)
 	ar65 r $@ $(LIB_OBJS)
+	cp $@ $(LIB_FULL_AR_DEPRECATED)	# §6.5 window: deprecated basename, drop at next MAJOR
 
 # --- aead-only variant (test-only exports stripped) ------------------------
 LIB_AEAD_ONLY_DEFINE = -DLIB_VARIANT_AEAD_ONLY=1
@@ -455,8 +469,9 @@ $(LIB_AEAD_ONLY_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES
 lib-aead-only: $(LIB_AEAD_ONLY_AR)
 
 $(LIB_AEAD_ONLY_AR): $(LIB_AEAD_ONLY_OBJS) | $(LIB_DIR)
-	rm -f $@
+	rm -f $@ $(LIB_AEAD_ONLY_AR_DEPRECATED)
 	ar65 r $@ $(LIB_AEAD_ONLY_OBJS)
+	cp $@ $(LIB_AEAD_ONLY_AR_DEPRECATED)	# §6.5 window: deprecated basename, drop at next MAJOR
 
 # --- app-owned variant (contract §8.0 APP_OWNED, issue #74) ----------------
 # Both shared primitives deferred to the consumer's own modules. The
@@ -489,8 +504,9 @@ $(LIB_APP_OWNED_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_APP_OWNED_OBJ
 lib-app-owned: $(LIB_APP_OWNED_AR)
 
 $(LIB_APP_OWNED_AR): $(LIB_APP_OWNED_OBJS) | $(LIB_DIR)
-	rm -f $@
+	rm -f $@ $(LIB_APP_OWNED_AR_DEPRECATED)
 	ar65 r $@ $(LIB_APP_OWNED_OBJS)
+	cp $@ $(LIB_APP_OWNED_AR_DEPRECATED)	# §6.5 window: deprecated basename, drop at next MAJOR
 
 $(LIB_APP_OWNED_OBJS_DIR):
 	mkdir -p $(LIB_APP_OWNED_OBJS_DIR)
