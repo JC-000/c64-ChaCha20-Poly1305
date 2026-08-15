@@ -162,7 +162,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -554,6 +554,13 @@ LIB_SHARED_OWNED_SYMS  = ct_mul_8x8 mul_8x8 poly_prod_lo poly_prod_hi \
 # Names the deferral build must resolve from the designated owner.
 LIB_SHARED_IMPORT_SYMS = ct_mul_8x8 poly_prod_lo poly_prod_hi \
                          smc_sum_a_imm smc_diff_a_imm
+
+# R2 audit: the §5 ZP_USAGE_BYTES equate is hand-maintained, so nothing
+# tied it to the actual .exportzp surface until this check. Deliberately
+# NOT named lib-* — contract §6.1 reserves that namespace for targets that
+# produce archives.
+verify-zp-usage: lib
+	python3 tools/verify_zp_usage.py
 
 lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	@$(CA65) $(CA65FLAGS) src/lib/poly1305_lib.s \

@@ -317,7 +317,57 @@ aggregate-manifest convention (five §5 aggregate equates plus the two
 
 The §8.x bit constants themselves (`LIB_SHARED_PRIMITIVES_SQTAB` = `$0001`, `LIB_SHARED_PRIMITIVES_CT_MUL_8X8` = `$0004`) are **not** exported — they are plain local equates that consumers copy, since their names and values are identical in every adopter and exporting them collides at link (issue #57). They exist only to build the two masks above, which are the symbols meant to cross the link.
 
-In addition, the manifest emits the [SPEC §8.0 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits **six** exported equates since contract v0.7.0 — the library-prefixed `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}` plus the deprecated bare `LIB_PRECALC_<name>_*` triple, the latter suppressed under `-D LIB_NO_BARE_EXPORTS=1`. Cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep _PRECALC_` — note `_PRECALC_`, not `LIB_PRECALC_`, since the older pattern misses every prefixed export. Profile A enumerates four tables (`chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`) and Profile B three (`sqtab` plus the two nibswap tables) — so a default build surfaces **24** and **18** `_PRECALC_` exports respectively, dropping to **12** and **9** under `-D LIB_NO_BARE_EXPORTS=1` once the deprecated bare triples are suppressed. `sqtab` is profile-gated as of issue #51 — Profile A neither emits nor consumes it, so it enumerates no `sqtab` row. `od65` cannot read `.a` archives, so audit the per-variant object dirs, never the archive. See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
+In addition, the manifest emits the [SPEC §8.4 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits **six** exported equates since contract v0.7.0 — the library-prefixed `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}` plus the deprecated bare `LIB_PRECALC_<name>_*` triple, the latter suppressed under `-D LIB_NO_BARE_EXPORTS=1`. Cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep _PRECALC_` — note `_PRECALC_`, not `LIB_PRECALC_`, since the older pattern misses every prefixed export. Profile A enumerates four tables (`chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`) and Profile B three (`sqtab` plus the two nibswap tables) — so a default build surfaces **24** and **18** `_PRECALC_` exports respectively, dropping to **12** and **9** under `-D LIB_NO_BARE_EXPORTS=1` once the deprecated bare triples are suppressed. `sqtab` is profile-gated as of issue #51 — Profile A neither emits nor consumes it, so it enumerates no `sqtab` row. `od65` cannot read `.a` archives, so audit the per-variant object dirs, never the archive. See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
+
+## Contract conformance
+
+This library implements
+[c64-lib-contract](https://github.com/JC-000/c64-lib-contract) and is
+aligned to **SPEC v0.10.3**, audited clause-by-clause rather than
+assumed. §13 (network backend ABI) and §8.2 (`reu_mul`) do not apply —
+this is not a network backend, and the library neither owns nor consumes
+the REU multiply table (`SHARED_CONSUMES = $0005`).
+
+| Clause | How this library satisfies it |
+|---|---|
+| §1 version identification | prefixed + deprecated bare exports; `src/lib_version.s` exports nothing else (TU isolation) |
+| §2 zero page | 24 `.exportzp` slots, every one `.ifndef`-guarded; names under the registered `cc20_` `poly_` `w32_` `ct_` `chacha_` `chacha20poly1305_` prefixes |
+| §3 REU | claims no banks — `LIB_CHACHA20_POLY1305_REU_BANKS_USED = $0000` |
+| §4 segment naming | library sources emit only `LIB_CHACHA20_POLY1305_CODE`/`_DATA`; cfg declares the load-bearing `align = $100` and `type = rw` attributes |
+| §5 manifest | aggregate equates in `src/lib/lib_manifest.s`, separate from `lib_version.s` |
+| §6.1–§6.4 build | `lib`, `lib-aead-only`, `lib-app-owned`; `CONTRACT_DEFINES` on every target; per-archive manifests |
+| §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
+| §6.6 footprint | per-archive, safe-direction, with the required `COLD_BYTES` companion |
+| §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window |
+| §8.0/§8.1/§8.3/§8.4 | bit constants, `LIB_SHARED_SQTAB_BASE` and `sqtab_lo`/`sqtab_hi` all unexported; deferral imports the provider rather than stubbing |
+
+**`make verify-zp-usage`** is the R2 audit: it derives the occupied
+zero-page set from the exported slot addresses in `zp_config.o` and
+checks it against the §5 `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` equate,
+which is otherwise a hand-maintained literal free to drift. It also
+rejects an unintended alias (two distinct slots on one address would
+*shrink* the union rather than fail) and an understated equate, per
+§6.6's safe-direction rule. Current result: 24 exported names, 88 bytes
+occupied, equate 88. Not named `lib-*` — §6.1 reserves that namespace
+for targets producing archives.
+
+**ZP slot overrides do not go through these targets.** This library uses
+the §6.2 consumer-assembled-source model: no archive member defines ZP,
+so you assemble your own `src/zp_config.s` and override there. Passing a
+slot define to a `lib*` target instead fails loudly —
+`Symbol 'chacha20poly1305_zp_tmp1' is already defined` — rather than
+silently producing a mismatched archive. See
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md).
+
+Two standing obligations, recorded so they are not lost between releases:
+
+- **§6.1 reserved namespace.** `lib-*` is reserved for targets producing
+  archives. `make lib-verify-shared` is a verification target and is
+  grandfathered under that clause **until this library's next MAJOR**,
+  at which point it must be renamed out of the `lib-` namespace.
+- **§6.6 release notes.** Every release MUST state footprint deltas
+  **per (profile × variant)** — a single per-version number is
+  meaningless when one tag carries several footprint pairs.
 
 ## Layout
 
