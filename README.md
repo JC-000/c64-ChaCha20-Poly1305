@@ -341,6 +341,16 @@ the REU multiply table (`SHARED_CONSUMES = $0005`).
 | §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window |
 | §8.0/§8.1/§8.3/§8.4 | bit constants, `LIB_SHARED_SQTAB_BASE` and `sqtab_lo`/`sqtab_hi` all unexported; deferral imports the provider rather than stubbing |
 
+**`make verify-zp-usage`** is the R2 audit: it derives the occupied
+zero-page set from the exported slot addresses in `zp_config.o` and
+checks it against the §5 `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` equate,
+which is otherwise a hand-maintained literal free to drift. It also
+rejects an unintended alias (two distinct slots on one address would
+*shrink* the union rather than fail) and an understated equate, per
+§6.6's safe-direction rule. Current result: 24 exported names, 88 bytes
+occupied, equate 88. Not named `lib-*` — §6.1 reserves that namespace
+for targets producing archives.
+
 **ZP slot overrides do not go through these targets.** This library uses
 the §6.2 consumer-assembled-source model: no archive member defines ZP,
 so you assemble your own `src/zp_config.s` and override there. Passing a

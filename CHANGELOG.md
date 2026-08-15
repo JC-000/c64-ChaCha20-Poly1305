@@ -26,6 +26,28 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Costs nothing — both profiles are byte-identical with and without it.
 
+- **`make verify-zp-usage`** — the R2 exported-vs-summed ZP audit. The
+  §5 `ZP_USAGE_BYTES` equate is a hand-maintained literal with nothing
+  tying it to the actual `.exportzp` surface, so adding or widening a
+  slot would leave it silently stale — and a consumer sizing its own ZP
+  budget against a stale number is the failure this catches.
+
+  It derives the occupied set from exported slot addresses in the built
+  object (not from source text), and fails on three drift modes: an
+  understated equate (§6.6 safe-direction), an exported slot with no
+  declared width (uncounted, so usage is understated), and an unintended
+  alias — two distinct slots sharing an address would shrink the union
+  rather than fail, so aliases are checked by name.
+
+  All three failure modes were verified by seeding them, not assumed.
+  Current result: 24 exported names, 88 bytes occupied, equate 88, with
+  every shared address an intended alias (four bare↔canonical §2 pairs
+  plus `cc20_keystream`↔`cc20_work`). Profile A occupies 86, under the
+  declared 88 — the equate is deliberately the A+B union.
+
+  Not named `lib-*`: §6.1 reserves that namespace for archive-producing
+  targets.
+
 ### Changed
 - **Catch-loop citations follow the v0.10.3 heading split.** Contract
   v0.10.1 folded the precalc-table clause into §8.0 and v0.10.3 restored
