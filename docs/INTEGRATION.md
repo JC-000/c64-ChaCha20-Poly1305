@@ -241,14 +241,51 @@ first relocating them in the library source (only safe at v0.4.0+):
 
 ### Zero page (always)
 
+> **Slot names changed (SPEC §2 prefix registry).** The four
+> general-purpose slots below are now `chacha20poly1305_zp_tmp1`,
+> `_zp_tmp2`, `_zp_ptr1` and `_zp_ptr2`. The bare `zp_tmp*` / `zp_ptr*`
+> spellings were unregistered names that `c64-nist-curves` also exports,
+> so linking the two libraries failed outright with
+> `ld65: Error: Duplicate external identifier: 'zp_ptr2'` — and that
+> error was the only thing preventing a silent overlap between two
+> libraries' live scratch.
+>
+> The bare names still work: `src/zp_config.s` exports them as aliases
+> for the §6.5 rename window, and `-D zp_tmp1=0x40` still relocates the
+> canonical slot. They are removed at the next MAJOR.
+>
+> **If you compose this library with another**, build with
+> `-D LIB_NO_BARE_EXPORTS=1` — the same flag you already set for the §1
+> version exports. That suppresses the bare aliases, which is what makes
+> the composed link succeed. Measured: our gated `zp_config.o` links
+> cleanly against an **unmodified** `c64-nist-curves` `zp_config.o`, so
+> you do not need to wait for that library to migrate.
+>
+> **If you supply these slots from your own `zp_config`** rather than
+> assembling ours — `c64-wireguard` does — you must also export the
+> canonical spellings, or the link fails with an unresolved external.
+> Aliasing is enough:
+>
+> ```asm
+> chacha20poly1305_zp_tmp1 = zp_tmp1
+> chacha20poly1305_zp_tmp2 = zp_tmp2
+> chacha20poly1305_zp_ptr1 = zp_ptr1
+> chacha20poly1305_zp_ptr2 = zp_ptr2
+> .exportzp chacha20poly1305_zp_tmp1, chacha20poly1305_zp_tmp2
+> .exportzp chacha20poly1305_zp_ptr1, chacha20poly1305_zp_ptr2
+> ```
+>
+> This is why `LIB_CHACHA20_POLY1305_ABI_VERSION` is now **3**.
+
+
 | ZP slot | Owner | Notes |
 |---------|-------|-------|
-| `$02..$03` | `zp_tmp1`, `zp_tmp2` | word32/poly1305 scratch |
+| `$02..$03` | `chacha20poly1305_zp_tmp1/_tmp2` | word32/poly1305 scratch (was `zp_tmp1/2`) |
 | `$04..$09` | `w32_src1/src2/dst` | word32 operand pointers |
 | `$14..$19` | ChaCha20 state | round/qr idx, data ptr, remain, buf pos |
 | `$1a..$1d` | Poly1305 state | i, j, carry, tmp |
 | `$40..$7f` | `cc20_work` / `cc20_keystream` | 64-byte ChaCha20 working state |
-| `$fb..$fe` | `zp_ptr1`, `zp_ptr2` | general-purpose 16-bit pointers |
+| `$fb..$fe` | `chacha20poly1305_zp_ptr1/_ptr2` | general-purpose 16-bit pointers (was `zp_ptr1/2`) |
 
 ### Zero page (Profile B only: `POLY1305_PROFILE_LONG` undefined)
 

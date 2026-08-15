@@ -56,12 +56,12 @@ LIB_CHACHA20_POLY1305_REU_BANKS_USED = $00
 ; LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES
 ;   Total bytes of zero-page this library owns.
 ;
-;   $02-$03 zp_tmp1/2              (2 B)
+;   $02-$03 chacha20poly1305_zp_tmp1/2              (2 B)
 ;   $04-$09 w32_src1/src2/dst      (6 B)
 ;   $14-$19 cc20_round..buf_pos    (6 B)
 ;   $1A-$1F poly_i..ct_sign_mask   (6 B — $1E/$1F are Profile B only)
 ;   $40-$7F cc20_work hot state    (64 B)
-;   $FB-$FE zp_ptr1/2              (4 B)
+;   $FB-$FE chacha20poly1305_zp_ptr1/2              (4 B)
 ;   --------------------------------------
 ;   Total 88 B (counted as union of A+B for a safe consumer upper bound).
 ; ---------------------------------------------------------------------------

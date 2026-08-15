@@ -40,7 +40,6 @@
 ; The guard therefore fires at link rather than assemble time, which is
 ; still before anything runs.
 ;
-; LIB_ABI_VERSION is the exported-symbol ABI surface; bump on any
 ; LIB_ABI_VERSION is a MONOTONIC GENERATION COUNTER for the exported
 ; surface (SPEC §1/§7, contract v0.7.5) — deliberately NOT a mirror of
 ; MAJOR. It starts at 1 and increments on any breaking export change: a
@@ -62,6 +61,22 @@
 ;               then-current "matches the MAJOR bump" wording, which
 ;               contract v0.7.5 has since repudiated; corrected here
 ;               (issue #67). The v0.7.0 tag itself still reports 1.
+;   3  unreleased — BREAKING: the general-purpose ZP slots zp_tmp1,
+;               zp_tmp2, zp_ptr1 and zp_ptr2 are renamed to
+;               chacha20poly1305_zp_* per the SPEC §2 prefix registry
+;               (issue #76). The library's TUs now .importzp the
+;               canonical names, so a consumer that supplied the bare
+;               slots from its own zp_config — c64-wireguard does — must
+;               export the canonical spellings or the link fails with an
+;               unresolved external.
+;
+;               The deprecated bare names are still exported by
+;               src/zp_config.s for the §6.5 rename window, but they sit
+;               behind LIB_NO_BARE_EXPORTS (contract v0.9.1 §6.5): a
+;               composing consumer sets that flag, and for it the bare
+;               exports disappear. That suppression is itself a removal
+;               from the surface such a consumer sees, which is the
+;               second reason this generation increments.
 ;
 ; TU ISOLATION (SPEC §1, contract v0.7.0): this file MUST export the
 ; version equates and NOTHING else. ld65 links whole object members, so
@@ -74,7 +89,7 @@
 LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0
 LIB_CHACHA20_POLY1305_VERSION_MINOR = 7
 LIB_CHACHA20_POLY1305_VERSION_PATCH = 0
-LIB_CHACHA20_POLY1305_ABI_VERSION   = 2
+LIB_CHACHA20_POLY1305_ABI_VERSION   = 3
 
 ; Exported `:abs` so ca65 emits them as absolute values rather than
 ; zeropage: an integer equate <= $00ff would otherwise be tagged

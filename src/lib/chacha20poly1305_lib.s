@@ -207,9 +207,9 @@ aead_compute_tag:
         lda #0
         sta cc20_remain_hi      ; AAD length is always <= 255
         lda aead_aad_ptr
-        sta zp_ptr1
+        sta chacha20poly1305_zp_ptr1
         lda aead_aad_ptr+1
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
         jsr aead_process_padded
 
 @skip_aad:
@@ -222,9 +222,9 @@ aead_compute_tag:
         lda aead_data_len+1
         sta cc20_remain_hi
         lda aead_data_ptr
-        sta zp_ptr1
+        sta chacha20poly1305_zp_ptr1
         lda aead_data_ptr+1
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
         jsr aead_process_padded
 
 @skip_ct:
@@ -257,9 +257,9 @@ aead_compute_tag:
 
         ; Process as one 16-byte block with hibit=1
         lda #<aead_scratch
-        sta zp_ptr1
+        sta chacha20poly1305_zp_ptr1
         lda #>aead_scratch
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
         lda #1
         jsr poly1305_block
 
@@ -270,7 +270,7 @@ aead_compute_tag:
 ; =============================================================================
 ; aead_process_padded - Process data as Poly1305 blocks, zero-padding last block
 ;
-; Input: zp_ptr1 = data pointer
+; Input: chacha20poly1305_zp_ptr1 = data pointer
 ;        cc20_remain = length low byte, cc20_remain_hi = length high byte
 ; All blocks processed with hibit=1. Last partial block is zero-padded to 16.
 ;
@@ -299,12 +299,12 @@ aead_process_padded:
 
         ; Advance pointer by 16
         clc
-        lda zp_ptr1
+        lda chacha20poly1305_zp_ptr1
         adc #16
-        sta zp_ptr1
-        lda zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1
+        lda chacha20poly1305_zp_ptr1+1
         adc #0
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
 
         ; 16-bit subtract 16
         lda cc20_remain
@@ -322,7 +322,7 @@ aead_process_padded:
         ; branching on it is CT-safe.
         ;
         ; Copy chain: 15 identical fixed-size (6-byte) slots. Slot @cp_k
-        ; copies byte k from (zp_ptr1),y into aead_scratch,y and bumps
+        ; copies byte k from (chacha20poly1305_zp_ptr1),y into aead_scratch,y and bumps
         ; Y. Jumping to @cp_base + (15-n)*6 leaves exactly n slots to
         ; fall through, so bytes 0..n-1 get copied and Y ends at n.
         ;
@@ -332,16 +332,16 @@ aead_process_padded:
         ; writing zero into aead_scratch+n..+15. aead_scratch+0 is
         ; handled by the copy chain (n>=1 always here).
         lda cc20_remain         ; n in 1..15
-        sta zp_tmp1             ; stash n for zfill dispatch
+        sta chacha20poly1305_zp_tmp1             ; stash n for zfill dispatch
         ; --- compute copy-chain entry = @cp_base + (15-n)*6 ---
         ; n is in 1..15 so `eor #15` yields (15-n) (xor = subtract when
         ; the minuend has all low bits set and the subtrahend has none
         ; beyond them).
         eor #15                 ; A = 15 - n
-        sta zp_tmp2             ; k = 15 - n
+        sta chacha20poly1305_zp_tmp2             ; k = 15 - n
         asl                     ; 2k
         clc
-        adc zp_tmp2             ; 3k
+        adc chacha20poly1305_zp_tmp2             ; 3k
         asl                     ; 6k
         clc
         adc #<@cp_base
@@ -352,60 +352,60 @@ aead_process_padded:
         ldy #0
         SMC @partial_smc, { jmp $0000 }
 @cp_base:
-@cp15:  lda (zp_ptr1),y
+@cp15:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp14:  lda (zp_ptr1),y
+@cp14:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp13:  lda (zp_ptr1),y
+@cp13:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp12:  lda (zp_ptr1),y
+@cp12:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp11:  lda (zp_ptr1),y
+@cp11:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp10:  lda (zp_ptr1),y
+@cp10:  lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp9:   lda (zp_ptr1),y
+@cp9:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp8:   lda (zp_ptr1),y
+@cp8:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp7:   lda (zp_ptr1),y
+@cp7:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp6:   lda (zp_ptr1),y
+@cp6:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp5:   lda (zp_ptr1),y
+@cp5:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp4:   lda (zp_ptr1),y
+@cp4:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp3:   lda (zp_ptr1),y
+@cp3:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp2:   lda (zp_ptr1),y
+@cp2:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
-@cp1:   lda (zp_ptr1),y
+@cp1:   lda (chacha20poly1305_zp_ptr1),y
         sta aead_scratch,y
         iny
 
         ; --- compute zfill entry = @zf1 + (n-1)*3 ---
-        lda zp_tmp1             ; n
+        lda chacha20poly1305_zp_tmp1             ; n
         sec
         sbc #1                  ; n-1
-        sta zp_tmp2             ; m = n-1 (0..14)
+        sta chacha20poly1305_zp_tmp2             ; m = n-1 (0..14)
         asl                     ; 2m
         clc
-        adc zp_tmp2             ; 3m
+        adc chacha20poly1305_zp_tmp2             ; 3m
         clc
         adc #<@zf1
         SMC_StoreLowByte @zfill_smc
@@ -432,9 +432,9 @@ aead_process_padded:
 
         ; Process zero-padded block with hibit=1
         lda #<aead_scratch
-        sta zp_ptr1
+        sta chacha20poly1305_zp_ptr1
         lda #>aead_scratch
-        sta zp_ptr1+1
+        sta chacha20poly1305_zp_ptr1+1
         lda #1
         jsr poly1305_block
 

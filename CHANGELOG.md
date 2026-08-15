@@ -6,6 +6,41 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING — ZP slot names take the §2 registry prefix** (issue #76;
+  SPEC v0.9.0 §2, gate added v0.9.1 §6.5). `zp_tmp1`, `zp_tmp2`,
+  `zp_ptr1` and `zp_ptr2` become `chacha20poly1305_zp_*`. The bare
+  spellings were unregistered general-purpose names that
+  `c64-nist-curves` also exports, so linking the two libraries failed
+  with `ld65: Error: Duplicate external identifier: 'zp_ptr2'` — and
+  that error was the only thing standing between two libraries' live
+  scratch and a silent address overlap.
+
+  The bare names ship on as aliases for the §6.5 rename window and are
+  removed at the next MAJOR. They sit behind `LIB_NO_BARE_EXPORTS`,
+  which §6.5 names as the canonical gate for bare-name cases: an
+  ungated alias would preserve the collision for the window's whole
+  duration, leaving a composed link no better off than before. A
+  consumer's deprecated-spelling override still works — `-D zp_tmp1=0x40`
+  relocates the canonical slot (measured: canonical reads `0x40`).
+
+  Gating **our** side is sufficient: our `zp_config.o` built with
+  `-D LIB_NO_BARE_EXPORTS=1` links cleanly against an *unmodified*
+  `c64-nist-curves` `zp_config.o`. The same pair without the flag still
+  reproduces the duplicate-identifier error.
+
+  **`LIB_CHACHA20_POLY1305_ABI_VERSION` is now 3.** Two reasons: the
+  library's TUs `.importzp` the canonical names, so a consumer that
+  supplied the bare slots from its own `zp_config` must export the
+  canonical spellings or fail to link (`c64-wireguard` is in exactly
+  this position); and under `LIB_NO_BARE_EXPORTS` the bare exports
+  disappear, which is a removal from the surface a composing consumer
+  sees.
+
+  The rename is **codegen-neutral** — the test PRG is byte-identical
+  before and after (`52b87cdf…`), so nothing about placement or timing
+  moved.
+
 ### Added
 - **Canonical archive basenames** (issue #76;
   [contract #76](https://github.com/JC-000/c64-lib-contract/issues/76)
@@ -59,7 +94,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumers assemble their own — so §2 slot overrides belong in that
   assembly rather than a forwarded define.
 
-- **`make lib-app-owned`** → `build/lib/c64-chacha20-poly1305-app-owned.a`
+- **`make lib-app-owned`** → `build/lib/chacha20poly1305-app-owned.a`
   (issue #74; contract #76 A.2, [#72](https://github.com/JC-000/c64-lib-contract/issues/72)).
   The SPEC §8.0 `APP_OWNED` configuration: the consumer's own modules
   provide both shared primitives and this library defers both. Built with

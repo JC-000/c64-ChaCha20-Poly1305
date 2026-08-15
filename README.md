@@ -261,8 +261,8 @@ The library is intended for hobbyist and research use.
 - `chacha20_encrypt` -- XOR keystream with data at `cc20_data_ptr` (in place)
 - `poly1305_lib_init` -- one-time library init: on Profile B, build the quarter-square table and set the `sqtab_ready` flag (optional: if omitted, `poly1305_init` auto-builds on first call). On Profile A the body is a bare `rts`, retained as an exported entry point so cross-profile consumers keep working unchanged.
 - `poly1305_init` -- clamp `poly_r`, zero `poly_h`, build multiplication tables (Shoup per-r in Profile A, quarter-square in Profile B). Skips sqtab build if already done.
-- `poly1305_block` -- process one 16-byte block pointed to by `zp_ptr1`
-- `poly1305_update` -- process a buffer at `zp_ptr1` of length `cc20_remain`
+- `poly1305_block` -- process one 16-byte block pointed to by `chacha20poly1305_zp_ptr1`
+- `poly1305_update` -- process a buffer at `chacha20poly1305_zp_ptr1` of length `cc20_remain`
 - `poly1305_final` -- finalize and write tag to `poly1305_tag`
 - `aead_encrypt` -- full ChaCha20-Poly1305 AEAD encrypt
 - `aead_decrypt` -- full ChaCha20-Poly1305 AEAD decrypt (returns A=0 on auth success)
