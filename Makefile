@@ -45,21 +45,36 @@ LIB_APP_OWNED_OBJS_DIR  = $(LIB_DIR)/objs-app-owned
 CA65 = ca65
 LD65 = ld65
 
-# Consumer-supplied assembler flags (contract §6 / issue #74). Appended to
-# every ca65 invocation so a consumer can reach §2's normative
-# `ca65 -D <slot>=$<addr>` overrides — and §8.1's LIB_SHARED_SQTAB_BASE,
-# and the §8 SHARED_* deferral switches — without clobbering the base
-# flags:
+# Consumer-supplied assembler defines (contract §6 A.1 / issue #74).
+# Appended to every ca65 invocation so a consumer can reach §8.1's
+# LIB_SHARED_SQTAB_BASE, the §8 SHARED_* deferral switches, and
+# LIB_NO_BARE_EXPORTS without clobbering the base flags:
 #
-#   make lib EXTRA_CA65FLAGS="-D LIB_SHARED_SQTAB_BASE=\$$9000"
-#   make lib EXTRA_CA65FLAGS="-D LIB_NO_BARE_EXPORTS=1"
+#   make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+#   make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
 #
-# Overriding CA65FLAGS wholesale would drop the -I include paths and fail
-# with "Cannot open include file 'precalc_table.inc'"; overriding CA65
-# silently drops -t c64 -g unless the caller repeats them. This is the
-# supported seam.
+# USE 0x HEX, NOT $ HEX. `-D FOO=$9000` is mangled before ca65 ever sees
+# it: the shell expands `$9` as a positional parameter, which is empty,
+# leaving `-D FOO=000` — decimal zero. It does not error or warn. Pasted
+# into a sqtab override that silently places the 1 KB table at $0000.
+# ca65 accepts both spellings; only 0x survives shell and make unquoted.
+#
+# Do NOT override CA65FLAGS itself — that drops the -I include paths and
+# fails with "Cannot open include file 'precalc_table.inc'". Overriding
+# CA65 works but silently drops -t c64 -g unless you repeat them.
+#
+# NOTE ON ZP SLOTS: there is deliberately no CONTRACT_ZP_DEFINES here.
+# This library ships no ZP-defining member in its archives — consumers
+# assemble their own src/zp_config.s, so §2 slot overrides belong in
+# that assembly, not in a define forwarded through these targets. See
+# docs/INTEGRATION.md.
+CONTRACT_DEFINES ?=
+
+# Back-compat alias for the pre-ratification spelling. Both are appended,
+# so an existing caller keeps working.
 EXTRA_CA65FLAGS ?=
-CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src $(EXTRA_CA65FLAGS)
+
+CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src $(CONTRACT_DEFINES) $(EXTRA_CA65FLAGS)
 CFG = src/c64.cfg
 
 # --- Module list -----------------------------------------------------------

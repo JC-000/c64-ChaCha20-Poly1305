@@ -34,19 +34,35 @@ make lib-aead-only    # build/lib/c64-chacha20-poly1305-aead-only.a
 make lib-app-owned    # build/lib/c64-chacha20-poly1305-app-owned.a
 ```
 
-**Passing your own defines.** Every target forwards `EXTRA_CA65FLAGS` to
-`ca65`, which is how you reach the §2 ZP-slot overrides, §8.1's
-`LIB_SHARED_SQTAB_BASE`, and `LIB_NO_BARE_EXPORTS`:
+**Passing your own defines.** Every target forwards `CONTRACT_DEFINES`
+to `ca65` — the contract-normative spelling, so a multi-library consumer
+script uses one variable name across every library it builds:
 
 ```
-make lib EXTRA_CA65FLAGS="-D LIB_SHARED_SQTAB_BASE=\$9000"
-make lib-app-owned EXTRA_CA65FLAGS="-D LIB_NO_BARE_EXPORTS=1"
+make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
 ```
+
+(`EXTRA_CA65FLAGS` remains as a back-compat alias and is also appended.)
+
+**Use `0x` hex, never `$` hex.** `-D LIB_SHARED_SQTAB_BASE=$9000` is
+mangled before `ca65` ever sees it: the shell expands `$9` as a
+positional parameter, which is empty, leaving `-D ...=000` — **decimal
+zero**. It does not error or warn, so the 1 KB quarter-square table
+silently lands at `$0000`. Measured; `ca65` accepts both spellings, but
+only `0x` survives shell and make unquoted.
 
 Do **not** override `CA65FLAGS` itself — that drops the `-I` include
 paths and fails with `Cannot open include file 'precalc_table.inc'`.
 Overriding `CA65` works but silently drops `-t c64 -g` unless you repeat
-them. `EXTRA_CA65FLAGS` is the supported seam.
+them. `CONTRACT_DEFINES` is the supported seam.
+
+**ZP slot overrides do not go here.** There is deliberately no
+`CONTRACT_ZP_DEFINES` for this library: the archives ship no
+ZP-defining member. `src/zp_config.s` is excluded from every archive
+precisely so you assemble your own copy — so §2 slot overrides belong in
+*that* assembly (or in your own replacement file), not in a define
+forwarded through these targets. See "Zero-page slots" below.
 
 **The app-owned variant** (`lib-app-owned`) is for a consumer whose own
 modules provide both §8 shared primitives. It is built with

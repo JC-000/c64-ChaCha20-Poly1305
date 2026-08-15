@@ -15,16 +15,32 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Cannot open include file 'precalc_table.inc'`. §2's prescribed
   override was normative and unreachable here.
 
-  Every target now forwards `EXTRA_CA65FLAGS`:
+  Every target now forwards **`CONTRACT_DEFINES`** — the
+  contract-normative spelling, so a multi-library consumer script uses
+  one variable name across every library it builds. `EXTRA_CA65FLAGS`
+  remains as a back-compat alias and is also appended.
 
   ```
-  make lib EXTRA_CA65FLAGS="-D LIB_SHARED_SQTAB_BASE=\$9000"
-  make lib-app-owned EXTRA_CA65FLAGS="-D LIB_NO_BARE_EXPORTS=1"
+  make lib CONTRACT_DEFINES="-D LIB_SHARED_SQTAB_BASE=0x9000"
+  make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
   ```
 
   One line, additive, and it makes every existing target
   defines-accepting at once. Overriding `CA65` still works but silently
-  drops `-t c64 -g`; `EXTRA_CA65FLAGS` is the supported seam.
+  drops `-t c64 -g`; `CONTRACT_DEFINES` is the supported seam.
+
+  **Documented with `0x` hex, not `$` hex** — measured, and the failure
+  is silent. `-D LIB_SHARED_SQTAB_BASE=$9000` never reaches ca65 intact:
+  the shell expands `$9` as a positional parameter, which is empty,
+  leaving `-D ...=000` — **decimal zero**, with no error or warning. A
+  consumer pasting it would place the 1 KB quarter-square table at
+  `$0000`. ca65 accepts both spellings; only `0x` survives shell and
+  make unquoted.
+
+  **No `CONTRACT_ZP_DEFINES`**, deliberately: our archives ship no
+  ZP-defining member — `src/zp_config.s` is excluded precisely so
+  consumers assemble their own — so §2 slot overrides belong in that
+  assembly rather than a forwarded define.
 
 - **`make lib-app-owned`** → `build/lib/c64-chacha20-poly1305-app-owned.a`
   (issue #74; contract #76 A.2, [#72](https://github.com/JC-000/c64-lib-contract/issues/72)).
