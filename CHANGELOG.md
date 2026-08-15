@@ -94,7 +94,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumers assemble their own — so §2 slot overrides belong in that
   assembly rather than a forwarded define.
 
-- **`make lib-app-owned`** → `build/lib/c64-chacha20-poly1305-app-owned.a`
+- **`make lib-app-owned`** → `build/lib/chacha20poly1305-app-owned.a`
   (issue #74; contract #76 A.2, [#72](https://github.com/JC-000/c64-lib-contract/issues/72)).
   The SPEC §8.0 `APP_OWNED` configuration: the consumer's own modules
   provide both shared primitives and this library defers both. Built with
