@@ -336,6 +336,7 @@ the REU multiply table (`SHARED_CONSUMES = $0005`).
 | §4 segment naming | library sources emit only `LIB_CHACHA20_POLY1305_CODE`/`_DATA`; cfg declares the load-bearing `align = $100` and `type = rw` attributes |
 | §5 manifest | aggregate equates in `src/lib/lib_manifest.s`, separate from `lib_version.s` |
 | §6.1–§6.4 build | `lib`, `lib-aead-only`, `lib-app-owned`; `CONTRACT_DEFINES` on every target; per-archive manifests |
+| §6.3 reachability | Profile A/B ride `CONTRACT_DEFINES` (one member list, so no target of their own); a knob change invalidates the object cache, so no build can exit 0 with the artifact the knob did not request |
 | §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
 | §6.6 footprint | per-archive, safe-direction, with the required `COLD_BYTES` companion |
 | §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window |
@@ -350,6 +351,18 @@ rejects an unintended alias (two distinct slots on one address would
 §6.6's safe-direction rule. Current result: 24 exported names, 88 bytes
 occupied, equate 88. Not named `lib-*` — §6.1 reserves that namespace
 for targets producing archives.
+
+**`make verify-knob-staleness`** pins the §6.3 guard (contract SPEC
+v0.10.5). `CONTRACT_DEFINES` reaches every `ca65` invocation but no make
+*prerequisite*, so before issue #86 a knob change reused every stale
+object and shipped the previous configuration under a zero exit code —
+the clause's shape-3 "silent no-op". The Makefile now records the
+flattened knob string in `build/.contract-defines.stamp` and invalidates
+every object and archive when it changes; unchanged knobs leave the tree
+alone, so same-knob builds stay incremental. The audit checks all four
+legs — change rebuilds, artifact flips profile, same knob is
+incremental, revert rebuilds back — because the last two are what
+separate a staleness check from an unconditional rebuild.
 
 **ZP slot overrides do not go through these targets.** This library uses
 the §6.2 consumer-assembled-source model: no archive member defines ZP,

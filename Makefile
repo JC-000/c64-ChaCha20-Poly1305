@@ -90,6 +90,35 @@ EXTRA_CA65FLAGS ?=
 CA65FLAGS = -t c64 -g -I src/include -I src/lib -I src $(CONTRACT_DEFINES) $(EXTRA_CA65FLAGS)
 CFG = src/c64.cfg
 
+# --- §6.3 knob-staleness guard (contract SPEC v0.10.5, issue #86) ----------
+# CONTRACT_DEFINES / EXTRA_CA65FLAGS reach every ca65 invocation through
+# CA65FLAGS above, but they reach no make *prerequisite*: the object cache is
+# keyed on source mtimes alone. So a re-invocation with different knobs reused
+# every stale object and exited 0 with an artifact other than the one
+# requested — the v0.10.5 §6.3 shape-3 "silent no-op" (measured on issue #86:
+# `make lib CONTRACT_DEFINES="-D POLY1305_PROFILE_LONG=1"` over a default tree
+# answered "Nothing to be done" and shipped the Profile B archive; the same
+# command against a clean build/lib correctly ships Profile A).
+#
+# The stamp records the flattened knob string at parse time. When it changes,
+# every object and archive is invalidated — the knobs reach every TU, so every
+# object genuinely is stale — and the requested configuration is built.
+# Unchanged knobs leave the tree alone, so same-knob incremental builds stay
+# incremental. Pinned by `make verify-knob-staleness`.
+#
+# This is the c64-nist-curves CONTRACT_STAMP idiom, widened from that repo's
+# flat `$(BUILD_DIR)/*.o` to a `find` because our objects live in seven
+# per-profile and per-variant directories.
+CONTRACT_STAMP := build/.contract-defines.stamp
+CURRENT_KNOBS  := $(strip $(CONTRACT_DEFINES) @ $(EXTRA_CA65FLAGS))
+STORED_KNOBS   := $(strip $(shell cat $(CONTRACT_STAMP) 2>/dev/null))
+ifneq ($(CURRENT_KNOBS),$(STORED_KNOBS))
+$(shell mkdir -p build $(LIB_DIR); \
+        find build -name '*.o' -delete; \
+        rm -f $(LIB_DIR)/*.a; \
+        printf '%s' '$(CURRENT_KNOBS)' > $(CONTRACT_STAMP))
+endif
+
 # --- Module list -----------------------------------------------------------
 # Each source file compiles to its own .o. Order matters only for the
 # link line (ld65 resolves symbols regardless but segment packing
@@ -162,7 +191,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -561,6 +590,13 @@ LIB_SHARED_IMPORT_SYMS = ct_mul_8x8 poly_prod_lo poly_prod_hi \
 # produce archives.
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
+
+# §6.3 knob-staleness guard (contract SPEC v0.10.5, issue #86). Runs against
+# a throwaway copy of Makefile + src/, so it does not cost the caller their
+# per-profile object cache — the guard's invalidation leg deletes every
+# object under build/ by design.
+verify-knob-staleness:
+	python3 tools/verify_knob_staleness.py
 
 lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	@$(CA65) $(CA65FLAGS) src/lib/poly1305_lib.s \

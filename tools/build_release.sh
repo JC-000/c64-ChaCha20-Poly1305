@@ -67,7 +67,7 @@ git archive \
   docs/API.md docs/INTEGRATION.md docs/MEMORY_MAP.md \
   docs/AUDIT.md docs/CT_ANALYSIS.md \
   docs/precalc-tables.md docs/REPRO_CHECK.md \
-  tools/verify_zp_usage.py \
+  tools/verify_zp_usage.py tools/verify_knob_staleness.py \
   test/rfc7539_vectors.json \
   "$NOTES" \
   | gzip -n -9 > "$OUT"
@@ -109,7 +109,7 @@ done
 # dependency), and re-rolling a release from inside a release tarball is not a
 # supported operation. Only tools a consumer needs to BUILD or VERIFY the
 # library are required here.
-REQUIRED_TOOLS="tools/verify_zp_usage.py"
+REQUIRED_TOOLS="tools/verify_zp_usage.py tools/verify_knob_staleness.py"
 for t in $REQUIRED_TOOLS; do
   if [ ! -f "$ROOT_CHECK/$t" ]; then
     echo "MANIFEST ERROR: the shipped Makefile invokes '$t', which the tarball omits" >&2

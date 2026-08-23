@@ -6,6 +6,93 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **A `CONTRACT_DEFINES` change did not invalidate the object cache**
+  (issue #86; contract SPEC v0.10.5 §6.3). The knobs reach every `ca65`
+  invocation through `CA65FLAGS`, but they reach no make *prerequisite*,
+  so the cache is keyed on source mtimes alone. A re-invocation with
+  different knobs reused every stale object, answered `Nothing to be
+  done`, exited 0 — and shipped the archive built with the *previous*
+  knobs. Measured: `make lib CONTRACT_DEFINES="-D
+  POLY1305_PROFILE_LONG=1"` over a default tree left the Profile B
+  archive in place (18 `_PRECALC_` exports, not Profile A's 24), while
+  the same command against a clean `build/lib` correctly built Profile A.
+
+  This is §6.3's shape-3 "silent no-op", the least visible rung of the
+  looks-reachable ladder: every command is documented, the exit code is
+  zero, and the artifact is a perfectly *coherent* archive — just not the
+  one requested. §6.3 ¶1 reachability was never in question here; the
+  axis is genuinely define-reachable from a clean tree.
+
+  Scope was wider than the profile knob, which is only the sharpest
+  demonstration because the difference is legible in the manifest: every
+  §6.2 knob rode the same hole, including `LIB_NO_BARE_EXPORTS` — the
+  suppression contract §1 points at for the [#43]-class duplicate-symbol
+  failures — and `LIB_SHARED_SQTAB_BASE`, where the stale value is a
+  wrong *address* for the §8.1 window. The named variant targets were
+  never affected in their own axis: `lib-aead-only` and `lib-app-owned`
+  each own a separate objects dir, so their defines are part of the path.
+
+  Fix is the `c64-nist-curves` `CONTRACT_STAMP` idiom, widened from that
+  repo's flat `$(BUILD_DIR)/*.o` to a `find` because our objects live in
+  seven per-profile and per-variant directories: the flattened knob
+  string is recorded in `build/.contract-defines.stamp` at parse time,
+  and a change invalidates every object and archive — the knobs reach
+  every TU, so every object genuinely *is* stale. Unchanged knobs leave
+  the tree alone, so same-knob incremental builds stay incremental.
+
+  Build-system only: both PRGs are byte-identical across the fix
+  (`29567114…` / `6e9a989f…`, rebuilt from separate worktrees — linked
+  output is the sound comparand per §6.3's checkability note, never
+  `.o`/`.a` bytes, which carry `ca65`'s `OPT_DATETIME`).
+
+### Added
+- **`make verify-knob-staleness`** — mechanical pin for the guard above,
+  in the manner of `lib-verify-shared` and `verify-zp-usage`. Four legs,
+  all four required: a knob change rebuilds *and* the artifact flips
+  profile; the same knob again is incremental; reverting rebuilds back.
+  Legs 3 and 4 are what separate a staleness check from an
+  unconditional rebuild, which would pass the first two. Verified
+  non-vacuous — it fails on the pre-fix `Makefile` with the three
+  expected failures. Runs against a throwaway copy of `Makefile` +
+  `src/` so it does not cost the caller their per-profile object cache.
+
+### Contract conformance — span extended to SPEC v0.11.0
+The v0.9.0 record ran to **v0.10.3**. Findings for the five revisions
+since, in order:
+
+- **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
+  documented member-set axes take a §6.1 target) — no-op. Profile A/B
+  differ by assembly configuration only, not member set: `LIB_MODULES`
+  is one list, so the axis rides §6.2 defines as the clause intends and
+  needs no target of its own. The two member-set-shaped axes
+  (`aead-only`, `app-owned`) already have §6.1 targets.
+- **v0.10.5** (looks-reachable; a knob naming an axis MUST select it or
+  fail loudly) — **was not satisfied**; closed by issue #86 above. The
+  knob-naming half is vacuous here (there is no `PROFILE=`-style make
+  variable — the profile rides `CONTRACT_DEFINES` directly); the
+  staleness half was live.
+- **v0.10.6** (§8.3 provider surface enumerated; a deferral switch MUST
+  leave `.import`s behind) — already conformant, and already pinned.
+  `src/lib/poly1305_lib.s` exports all five names when it provides
+  (`ct_mul_8x8`, `smc_sum_a_imm`, `smc_diff_a_imm`, `poly_prod_lo`,
+  `poly_prod_hi`) and imports all five under `SHARED_CT_MUL_8X8`;
+  `make lib-verify-shared` checks both directions. No change.
+- **v0.10.7** (`mlkem_` registered to `c64-mlkem`) — no-op. Additive
+  registry row; no collision with this library's six registered
+  prefixes.
+- **v0.11.0** (zero-consumer carve-outs in §1 and §6.5) — **inapplicable
+  to this library, deliberately.** Both are scoped to a library with no
+  released consumers, and this one has one: `c64-wireguard` `v1.0.0`
+  pins `libs/chacha20poly1305` at `4a7f225`, which is this repo's
+  `v0.6.0` tag (verified at the ref, not from `consumers.md`). So §1's
+  `MUST also export` the deprecated bare version forms still binds —
+  they stay, gated on `LIB_NO_BARE_EXPORTS` — and the `lib_version.o` /
+  `lib_manifest.o` member basenames stay on §6.5's MAJOR path rather
+  than being born prefixed. Recorded so the next reader does not
+  re-derive it from the carve-out text alone.
+
+
 ## [0.9.0] — 2026-08-15
 
 Hardening release: a link-time guard against a silent sqtab-corruption

@@ -65,6 +65,17 @@ make lib-app-owned CONTRACT_DEFINES="-D LIB_NO_BARE_EXPORTS=1"
 
 (`EXTRA_CA65FLAGS` remains as a back-compat alias and is also appended.)
 
+**Switching knobs between builds is safe.** The knobs reach every `ca65`
+invocation but no make prerequisite, so a re-invocation with different
+defines used to reuse every stale object and exit 0 with the *previous*
+configuration's archive (issue #86 — contract §6.3's "silent no-op").
+The build now records the flattened knob string in
+`build/.contract-defines.stamp`; when it changes, every object and
+archive is invalidated and the configuration you asked for is the one
+you get. Unchanged knobs rebuild nothing, so an integration script that
+calls `make lib CONTRACT_DEFINES=...` repeatedly with the same string
+still gets an incremental build. `make verify-knob-staleness` pins this.
+
 **Use `0x` hex, never `$` hex.** `-D LIB_SHARED_SQTAB_BASE=$9000` is
 mangled before `ca65` ever sees it: the shell expands `$9` as a
 positional parameter, which is empty, leaving `-D ...=000` — **decimal
