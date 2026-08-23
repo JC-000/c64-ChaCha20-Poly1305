@@ -57,8 +57,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expected failures. Runs against a throwaway copy of `Makefile` +
   `src/` so it does not cost the caller their per-profile object cache.
 
-### Contract conformance — span extended to SPEC v0.11.0
-The v0.9.0 record ran to **v0.10.3**. Findings for the five revisions
+### Contract conformance — span extended to SPEC v0.11.1
+The v0.9.0 record ran to **v0.10.3**. Findings for the six revisions
 since, in order:
 
 - **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
@@ -91,6 +91,27 @@ since, in order:
   `lib_manifest.o` member basenames stay on §6.5's MAJOR path rather
   than being born prefixed. Recorded so the next reader does not
   re-derive it from the carve-out text alone.
+- **v0.11.1** (§6.3 states which consequence its select-or-reject rule
+  carries in which case) — **already satisfied, by the work in this same
+  release.** The clause splits on whether the target can honor the knob: a
+  value it *cannot* honor is rejected at parse time, one it *can* honor
+  must invalidate whatever it reconfigures. This library has no member-set
+  axis reachable through `CONTRACT_DEFINES` — the three variants carry
+  identical seven-object member sets and differ only by `-D` — so the
+  rejection branch is vacuous here and the invalidation branch is the
+  whole obligation. That is the `CONTRACT_STAMP` guard above, and both of
+  the clause's load-bearing guard properties are pinned by `make
+  verify-knob-staleness`: unchanged knobs must not rebuild (leg 3) and the
+  check must assert the artifact flipped rather than that something
+  rebuilt (legs 2 and 4). The clause cites this library's issue #86 as its
+  motivating measurement.
+
+  **Citing it is not yet possible at a tag.** SPEC v0.11.1 is on the
+  contract's `main` (`f21db36`) and untagged, and §12 versions are citable
+  only at tags — the contract's own README banner flags this. So this
+  record cites `main`; it should be re-pointed at `v0.11.1` once that tag
+  exists, and this library's next release notes are the natural place to
+  do it.
 
 
 ## [0.9.0] — 2026-08-15

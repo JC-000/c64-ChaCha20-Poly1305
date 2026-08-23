@@ -336,7 +336,7 @@ the REU multiply table (`SHARED_CONSUMES = $0005`).
 | §4 segment naming | library sources emit only `LIB_CHACHA20_POLY1305_CODE`/`_DATA`; cfg declares the load-bearing `align = $100` and `type = rw` attributes |
 | §5 manifest | aggregate equates in `src/lib/lib_manifest.s`, separate from `lib_version.s` |
 | §6.1–§6.4 build | `lib`, `lib-aead-only`, `lib-app-owned`; `CONTRACT_DEFINES` on every target; per-archive manifests |
-| §6.3 reachability | Profile A/B ride `CONTRACT_DEFINES` (one member list, so no target of their own); a knob change invalidates the object cache, so no build can exit 0 with the artifact the knob did not request |
+| §6.3 reachability | Profile A/B ride `CONTRACT_DEFINES` (one member list, so no target of their own); a knob change invalidates the object cache, so no build can exit 0 with the artifact the knob did not request. On v0.11.1's split this is the **invalidation** branch — the rejection branch is vacuous here, since no member-set axis is reachable through the defines |
 | §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
 | §6.6 footprint | per-archive, safe-direction, with the required `COLD_BYTES` companion |
 | §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window |
