@@ -106,12 +106,9 @@ since, in order:
   rebuilt (legs 2 and 4). The clause cites this library's issue #86 as its
   motivating measurement.
 
-  **Citing it is not yet possible at a tag.** SPEC v0.11.1 is on the
-  contract's `main` (`f21db36`) and untagged, and §12 versions are citable
-  only at tags — the contract's own README banner flags this. So this
-  record cites `main`; it should be re-pointed at `v0.11.1` once that tag
-  exists, and this library's next release notes are the natural place to
-  do it.
+  **Citable at a tag as of 2026-08-28:** the contract tagged `v0.11.1`
+  (`cc3f8a6`). This record was first written against `main` (`f21db36`)
+  while the clause was untagged; the cite now points at the tag.
 - **v0.12.0 / v0.12.1 / v0.14.0** (§13.2 error-code allocation table and
   allocate-here-first rule; §13.3 consumer MTU pin; §13.2 ip65 UDP codes
   `$46`/`$47` + translate-never-forward MUST) — **not applicable.** All
@@ -133,9 +130,11 @@ since, in order:
   the fw-3.15 caveat on adopters.md's REU rows is not read as covering
   this library.
 
-  Tag state as of 2026-08-28: the contract's tags stop at `v0.11.0`;
-  v0.11.1 through v0.14.0 are on `main` (`e76bcff`) only, so this record
-  still cites `main` for everything after v0.11.0.
+  Tag state as of 2026-08-28: all of v0.11.1 (`cc3f8a6`), v0.12.0
+  (`a6bb30a`), v0.12.1 (`42c84bd`), v0.13.0 (`c771935`) and v0.14.0
+  (`e76bcff`) are tagged on the contract's `main`, each verified to carry
+  the matching SPEC header — so every version in this record is citable
+  at its tag.
 
 
 ## [0.9.0] — 2026-08-15
