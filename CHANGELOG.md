@@ -57,8 +57,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expected failures. Runs against a throwaway copy of `Makefile` +
   `src/` so it does not cost the caller their per-profile object cache.
 
-### Contract conformance — span extended to SPEC v0.14.0
-The v0.9.0 record ran to **v0.10.3**. Findings for the ten revisions
+### Contract conformance — span extended to SPEC v0.14.1
+The v0.9.0 record ran to **v0.10.3**. Findings for the eleven revisions
 since, in order:
 
 - **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
@@ -129,6 +129,10 @@ since, in order:
   CCP build path is affected on any firmware or clock. Recorded so that
   the fw-3.15 caveat on adopters.md's REU rows is not read as covering
   this library.
+- **v0.14.1** (PATCH; §8.2 read-once rule names both capture forms,
+  `lda`/`bit $DF00`, and records that a structurally-met settle is the
+  easiest to lose) — **not applicable**, same §8.2 non-participation as
+  v0.13.0. Tagged `v0.14.1` (`62a9d78`), verified header 0.14.1.
 
   Tag state as of 2026-08-28: all of v0.11.1 (`cc3f8a6`), v0.12.0
   (`a6bb30a`), v0.12.1 (`42c84bd`), v0.13.0 (`c771935`) and v0.14.0
