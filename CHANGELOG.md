@@ -57,8 +57,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expected failures. Runs against a throwaway copy of `Makefile` +
   `src/` so it does not cost the caller their per-profile object cache.
 
-### Contract conformance — span extended to SPEC v0.11.1
-The v0.9.0 record ran to **v0.10.3**. Findings for the six revisions
+### Contract conformance — span extended to SPEC v0.14.0
+The v0.9.0 record ran to **v0.10.3**. Findings for the ten revisions
 since, in order:
 
 - **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
@@ -112,6 +112,30 @@ since, in order:
   record cites `main`; it should be re-pointed at `v0.11.1` once that tag
   exists, and this library's next release notes are the natural place to
   do it.
+- **v0.12.0 / v0.12.1 / v0.14.0** (§13.2 error-code allocation table and
+  allocate-here-first rule; §13.3 consumer MTU pin; §13.2 ip65 UDP codes
+  `$46`/`$47` + translate-never-forward MUST) — **not applicable.** All
+  three amend §13, the network backend ABI. This library exports no
+  `NET_*` symbol, ships no adapter, and is not a §13 backend or consumer.
+- **v0.13.0** (§13.4 TOD start-and-verify + `$01 NET_ERR_TIMEBASE_STOPPED`;
+  **§8.2 gains a normative post-execute REU settle**, from contract
+  [#144](https://github.com/JC-000/c64-lib-contract/issues/144): every
+  `reu_mul` execute MUST confirm `$DF00` bit 6 and observe a bracketed
+  settle before the next REU register access, measured on U64E fw 3.15 at
+  48 MHz) — **not applicable, by non-participation.** §13 as above. §8.2:
+  this library neither builds nor reads the `reu_mul` table and performs no
+  REU DMA at all — `LIB_CHACHA20_POLY1305_REU_BANKS_USED = $00` in
+  `src/lib/lib_manifest.s`, and issue #44's turbo/no-REU work measured zero
+  REU transfers. `POLY1305_REU_BANK`/`_OFFSET` are the §3 reservation
+  equates only. The clause's owner is `c64-x25519`
+  ([c64-x25519#115](https://github.com/JC-000/c64-x25519/issues/115)); no
+  CCP build path is affected on any firmware or clock. Recorded so that
+  the fw-3.15 caveat on adopters.md's REU rows is not read as covering
+  this library.
+
+  Tag state as of 2026-08-28: the contract's tags stop at `v0.11.0`;
+  v0.11.1 through v0.14.0 are on `main` (`e76bcff`) only, so this record
+  still cites `main` for everything after v0.11.0.
 
 
 ## [0.9.0] — 2026-08-15
