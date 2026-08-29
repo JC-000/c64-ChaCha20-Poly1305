@@ -7,6 +7,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`tools/test_chacha20_poly1305.py`, `tools/audit_cross_check.py` and
+  `tools/ct_mul_brute_check.py` defaulted `C64_BACKEND` to `u64`** (since
+  fa6ee51), contradicting the README's "VICE (default — no env vars
+  needed)" and aborting with `ValueError: U64 backend requires at least
+  one host` when run bare. All three now default to `vice`;
+  `C64_BACKEND=u64 U64_HOST=...` still selects hardware.
 - **A `CONTRACT_DEFINES` change did not invalidate the object cache**
   (issue #86; contract SPEC v0.10.5 §6.3). The knobs reach every `ca65`
   invocation through `CA65FLAGS`, but they reach no make *prerequisite*,
