@@ -228,6 +228,33 @@ the same test/audit/bench flows produce equivalent results on both.
 Library PRG output is unchanged — only the validation harness picks
 up the new backend support.
 
+`make test` builds each profile and runs
+`tools/test_chacha20_poly1305.py` against it; the target exits non-zero
+on the first failing profile. Both `make test` and the fuzz targets
+below use `TEST_PYTHON` (defaults to the c64-test-harness venv) and pass
+`C64_BACKEND` / `U64_HOST` through from the environment.
+
+### Differential fuzz
+
+`tools/hazmat_fuzz.py` is an adversarial differential fuzz of the whole
+stack against pyca/cryptography hazmat (`ChaCha20Poly1305`, `ChaCha20`,
+`Poly1305`) — it does not share a reference implementation with any other
+tool in this repo. The corpus is edge-driven rather than uniform: block
+counters at every carry boundary including the 32-bit wrap, Poly1305 keys
+at the clamp fixed point and accumulator states at `p-3..p+2`, an AEAD
+length grid (0..3840 plaintext x 0..255 AAD), and a tamper set (tag / ct
+/ AAD bit flips, AAD length +-1, zero tag, wrong key, wrong nonce) that
+must be rejected *and* leave the ciphertext buffer intact. The encrypt
+tag is asserted from the documented output symbol `aead_tag` as well as
+the internal `poly1305_tag`. Deterministic given `--seed`; exit status is
+non-zero on any mismatch.
+
+```
+make test-fuzz        # both profiles, --quick (~1-2 min each on VICE)
+make test-fuzz-full   # both profiles, full corpus
+python3 tools/hazmat_fuzz.py --profile a --seed 1234   # one profile, own seed
+```
+
 ## Constant-time guarantees
 
 The library is **constant-time by internal review** with respect to
