@@ -48,6 +48,7 @@
 ; 1. Derive Poly1305 OTK using ChaCha20 block with counter=0
 ; 2. Encrypt plaintext with ChaCha20 starting at counter=1
 ; 3. Compute Poly1305 tag over (AAD ‖ pad ‖ ciphertext ‖ pad ‖ lengths)
+; 4. Copy the tag to aead_tag (the documented output)
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
@@ -76,6 +77,18 @@ aead_encrypt:
 
         ; --- 3. Compute Poly1305 tag ---
         jsr aead_compute_tag
+
+        ; --- 4. Publish the tag at the documented output, aead_tag ---
+        ; aead_compute_tag leaves the tag in poly1305_tag (Poly1305's own
+        ; output buffer). The ABI (docs/API.md, data_lib.s) names aead_tag
+        ; as the encrypt output and aead_verify_tag reads it, so copy it
+        ; across. Fixed 16-iteration loop, no data-dependent branches.
+        ldx #15
+@copy_tag:
+        lda poly1305_tag,x
+        sta aead_tag,x
+        dex
+        bpl @copy_tag
         rts
 
 ; =============================================================================
