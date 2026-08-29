@@ -7,6 +7,41 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`aead_encrypt` now writes the authentication tag to `aead_tag`, as
+  documented.** `aead_compute_tag` leaves the tag in Poly1305's own
+  `poly1305_tag` buffer and `aead_encrypt` returned without copying it
+  to `aead_tag` — the output `docs/API.md` names and the one
+  `aead_verify_tag` reads on the decrypt side. A consumer following the
+  API found `aead_tag` untouched after encrypt (all-zero on a fresh
+  load, or whatever it last held). The test suite masked this by reading
+  the encrypt tag from `poly1305_tag`; it now reads `aead_tag`, and a
+  regression test poisons `aead_tag` with `$EE`×16 before encrypting the
+  RFC 8439 §2.8.2 vector and requires both `aead_tag` and
+  `poly1305_tag` to equal `1ae10b594f09e26a7e902ecbd0600691`. Red run
+  on the unfixed library: 130/156 passed, 26 failed (every encrypt-tag
+  check); green after the fix: 215/215 on Profile A and 215/215 on
+  Profile B (VICE, `--seed 7539`).
+
+  The fix is a fixed 16-iteration copy loop (no data-dependent
+  branches) at the end of `aead_encrypt`. No exported symbol changed;
+  `LIB_CHACHA20_POLY1305_ABI_VERSION` stays 3. Footprint (§6.6,
+  `od65 --dump-segsize` sum of `LIB_CHACHA20_POLY1305_CODE` +
+  `_DATA` across archive members), +11 B CODE in every configuration:
+
+  | Profile × variant     | before   | after    | delta |
+  |-----------------------|----------|----------|-------|
+  | A full                | 15 544 B | 15 555 B | +11 B |
+  | A aead-only           | 15 219 B | 15 230 B | +11 B |
+  | A app-owned           | 15 544 B | 15 555 B | +11 B |
+  | B full                | 16 838 B | 16 849 B | +11 B |
+  | B aead-only           | 16 513 B | 16 524 B | +11 B |
+  | B app-owned           | 16 582 B | 16 593 B | +11 B |
+
+  All six stay under their 256-rounded `LIB_CHACHA20_POLY1305_RESIDENT_BYTES`
+  equates (15 616 / 15 360 / 16 896 / 16 640), so no consumer-facing
+  equate moved; only the measured figures in `lib_manifest.s` were
+  refreshed. Harness PRG sizes are unchanged (Profile A 16 424 B,
+  Profile B 17 704 B — the cfg padding absorbs the 11 B).
 - **A `CONTRACT_DEFINES` change did not invalidate the object cache**
   (issue #86; contract SPEC v0.10.5 §6.3). The knobs reach every `ca65`
   invocation through `CA65FLAGS`, but they reach no make *prerequisite*,

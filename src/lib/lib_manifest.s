@@ -102,11 +102,13 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;
 ;     make lib && for o in build/lib/objs/*.o; do od65 --dump-segsize $o; done
 ;
-;   Measured (issue #69 re-measure, all four configurations):
-;     Profile A full       15 544 B  (CODE 15 249 + DATA 295) -> 15 616
-;     Profile A aead-only  15 219 B  (CODE 14 924 + DATA 295) -> 15 360
-;     Profile B full       16 838 B  (CODE 16 543 + DATA 295) -> 16 896
-;     Profile B aead-only  16 513 B  (CODE 16 218 + DATA 295) -> 16 640
+;   Measured (aead_tag output fix re-measure; +11 B CODE in every
+;   configuration over the issue #69 numbers, from the 16-byte
+;   poly1305_tag -> aead_tag copy loop at the end of aead_encrypt):
+;     Profile A full       15 555 B  (CODE 15 260 + DATA 295) -> 15 616
+;     Profile A aead-only  15 230 B  (CODE 14 935 + DATA 295) -> 15 360
+;     Profile B full       16 849 B  (CODE 16 554 + DATA 295) -> 16 896
+;     Profile B aead-only  16 524 B  (CODE 16 229 + DATA 295) -> 16 640
 ;
 ;   VARIANT-AWARE as of issue #69. Until then this equate was gated on
 ;   the profile only, so the aead-only archive shipped a manifest
@@ -147,7 +149,7 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
   ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
   ; switches remove nothing further — an app-owned Profile A build
-  ; measures the same 15 544 B as a full one.
+  ; measures the same 15 555 B as a full one.
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
   .else
@@ -159,7 +161,7 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
-      ; consumer. Measured 16 582 B. A build that is BOTH aead-only and
+      ; consumer. Measured 16 593 B. A build that is BOTH aead-only and
       ; app-owned lands in the aead-only branch above at 16 640, which
       ; over-reports it — the safe direction, and no shipped target
       ; combines them.
