@@ -6,6 +6,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`tools/hazmat_fuzz.py` — adversarial differential fuzz vs
+  pyca/cryptography hazmat**, plus `make test` / `make test-fuzz` /
+  `make test-fuzz-full`. The oracle is hazmat `ChaCha20Poly1305`,
+  `ChaCha20` and `Poly1305` throughout; the corpus targets the edges a
+  6502 port is most likely to get wrong: block counters at every carry
+  boundary including the 32-bit wrap (keystream and post-increment
+  counter both checked), adversarial Poly1305 keys (clamp fixed point,
+  r=0/1/2, s=0/all-FF/2^127) and accumulator states at `p-3..p+2`, an
+  AEAD length grid (0..3840 plaintext x 0..255 AAD), direct
+  `aead_verify_tag` calls, and a tamper set (tag/ct/AAD bit flips, AAD
+  length +-1, zero tag, wrong key, wrong nonce) that must be rejected
+  *and* leave the ciphertext buffer byte-for-byte intact. The encrypt
+  tag is asserted from the documented output symbol `aead_tag`
+  (docs/API.md) as a first-class check alongside the internal
+  `poly1305_tag`; on the tree before the `aead_tag` fix this check fails
+  on every AEAD case (the library never wrote `aead_tag`), which is the
+  reason the harness was written. Deterministic given `--seed`,
+  non-zero exit on any mismatch, `--quick` (~1-2 min per profile on
+  VICE) or full corpus. `make test` builds each profile and runs
+  `tools/test_chacha20_poly1305.py` against it, failing non-zero on the
+  first failing profile. See README "Differential fuzz".
+
 ### Fixed
 - **`aead_encrypt` now writes the authentication tag to `aead_tag`, as
   documented.** `aead_compute_tag` leaves the tag in Poly1305's own

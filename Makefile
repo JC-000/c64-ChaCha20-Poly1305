@@ -191,7 +191,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_version.o \
           $(PROFILE_BO_DIR)/lib_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -206,6 +206,15 @@ BENCH_TOOL     ?= tools/bench_granular.py
 BENCH_REPORT   ?= docs/BENCH_REPORT.md
 BENCH_BASELINE ?= docs/BENCH_REPORT.baseline.json
 BENCH_TOLERANCE ?= 1.0
+
+# --- Test configuration ----------------------------------------------------
+# Same venv as the bench; the on-target tests need c64-test-harness and
+# pyca/cryptography. C64_BACKEND / U64_HOST are read by the tools from
+# the environment (default: VICE).
+TEST_PYTHON    ?= $(BENCH_PYTHON)
+TEST_SUITE     ?= tools/test_chacha20_poly1305.py
+FUZZ_TOOL      ?= tools/hazmat_fuzz.py
+FUZZ_SEED      ?= 20260828
 
 # Default build == Profile A (POLY1305_PROFILE_LONG defined).
 all: profile-a
@@ -640,6 +649,34 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 
 $(LIB_SHARED_VERIFY_DIR):
 	mkdir -p $(LIB_SHARED_VERIFY_DIR)
+
+# --- On-target test targets --------------------------------------------------
+# test:           builds each profile in turn and runs the RFC/round-trip
+#                 suite against it. tools/test_chacha20_poly1305.py reads
+#                 build/c64_chacha20_poly1305.prg, which `profile-a` /
+#                 `profile-b` refresh, so the profiles run sequentially.
+# test-fuzz:      builds both profiles, then runs the adversarial
+#                 differential fuzz (oracle: pyca/cryptography hazmat) in
+#                 --quick mode (~1-2 min per profile on VICE) against
+#                 build/profile-a/ and build/profile-b/.
+# test-fuzz-full: same with the full corpus.
+# Every recipe line is a separate shell and make stops at the first
+# non-zero exit, so any failing tool fails the target.
+test:
+	$(MAKE) profile-a
+	C64_BACKEND=$${C64_BACKEND:-vice} $(TEST_PYTHON) $(TEST_SUITE)
+	$(MAKE) profile-b
+	C64_BACKEND=$${C64_BACKEND:-vice} $(TEST_PYTHON) $(TEST_SUITE)
+
+test-fuzz:
+	$(MAKE) profile-a profile-b
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile a --quick --seed $(FUZZ_SEED)
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile b --quick --seed $(FUZZ_SEED)
+
+test-fuzz-full:
+	$(MAKE) profile-a profile-b
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile a --seed $(FUZZ_SEED)
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile b --seed $(FUZZ_SEED)
 
 # Reproducible source tarball for a tagged release.
 # Usage: make dist VERSION=v0.5.0
