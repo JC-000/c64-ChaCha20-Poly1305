@@ -122,8 +122,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expected failures. Runs against a throwaway copy of `Makefile` +
   `src/` so it does not cost the caller their per-profile object cache.
 
-### Contract conformance — span extended to SPEC v0.14.2
-The v0.9.0 record ran to **v0.10.3**. Findings for the twelve revisions
+### Contract conformance — span extended to SPEC v0.15.0
+The v0.9.0 record ran to **v0.10.3**. Findings for the thirteen revisions
 since, in order:
 
 - **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
@@ -205,6 +205,16 @@ since, in order:
   library's `docs/INTEGRATION.md` ("Use `0x` hex, never `$` hex") and
   the `Makefile` header have shown and warned for the `0x` form since
   v0.8.0. Tagged `v0.14.2` (`bffe36b`), verified header 0.14.2.
+- **v0.15.0** (MINOR; §8.4 zero-consumer carve-out — a library with no
+  released consumers SHOULD NOT emit the bare `LIB_PRECALC_<name>_*`
+  triple, by defining `LIB_NO_BARE_EXPORTS` in its manifest TU) —
+  **inapplicable to this library, for the v0.11.0 reason**: it has a
+  released consumer (`c64-wireguard` `v1.0.0` pins `libs/chacha20poly1305`
+  at `4a7f225` = this repo's `v0.6.0`, re-verified at the ref), so the
+  bare triple stays, gated on `LIB_NO_BARE_EXPORTS` per §8.4's existing
+  mechanism. `src/precalc_table.inc` re-verified byte-identical to the
+  contract's root copy at `v0.15.0`. Tagged `v0.15.0` (`5f923db`),
+  verified header 0.15.0.
 
   Tag state as of 2026-08-28: all of v0.11.1 (`cc3f8a6`), v0.12.0
   (`a6bb30a`), v0.12.1 (`42c84bd`), v0.13.0 (`c771935`) and v0.14.0
