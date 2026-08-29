@@ -1096,7 +1096,7 @@ def main():
         extra_args=["-autostartprgmode", "1"],
     )
 
-    backend = os.environ.get("C64_BACKEND", "u64").lower()
+    backend = os.environ.get("C64_BACKEND", "vice").lower()
 
     t0 = time.time()
     with create_manager(backend=backend, vice_config=config) as mgr:

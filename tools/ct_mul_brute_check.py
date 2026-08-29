@@ -119,7 +119,7 @@ def main() -> int:
         # bypasses the IEC path and boots cleanly.
         extra_args=["-autostartprgmode", "1"],
     )
-    backend = os.environ.get("C64_BACKEND", "u64").lower()
+    backend = os.environ.get("C64_BACKEND", "vice").lower()
 
     t_start = time.time()
     with create_manager(backend=backend, vice_config=cfg) as mgr:
