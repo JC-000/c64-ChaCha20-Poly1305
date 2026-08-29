@@ -249,7 +249,9 @@ def c64_aead_encrypt(target, labels, key, nonce, aad, plaintext):
     run_subroutine(target, labels["aead_encrypt"], timeout=600.0)
 
     ct = read_bytes(transport, pt_buf, len(plaintext))
-    tag = read_bytes(transport, labels["poly1305_tag"], 16)
+    # The documented encrypt output is aead_tag (docs/API.md, data_lib.s),
+    # not the Poly1305-internal poly1305_tag.
+    tag = read_bytes(transport, labels["aead_tag"], 16)
     return ct, tag
 
 
@@ -562,6 +564,42 @@ def test_aead_encrypt(target, labels):
             if not tag_ok:
                 print(f"    tag expected: {expected_tag.hex()}")
                 print(f"    tag got:      {tag.hex()}")
+    return passed, failed
+
+
+def test_aead_tag_output(target, labels):
+    """Regression: aead_encrypt must write the tag to the documented
+    aead_tag label, not just leave it in poly1305_tag. Poison aead_tag
+    first so a stale value cannot mask a missing write."""
+    passed = failed = 0
+    transport = target.transport
+    with open(VECTORS_PATH) as f:
+        vectors = json.load(f)
+    vec = vectors["aead_encrypt"][0]  # RFC 8439 §2.8.2
+    key = bytes.fromhex(vec["key"])
+    nonce = bytes.fromhex(vec["nonce"])
+    aad = bytes.fromhex(vec["aad"])
+    plaintext = bytes.fromhex(vec["plaintext"])
+    expected_tag = bytes.fromhex(vec["tag"])
+    assert expected_tag.hex() == "1ae10b594f09e26a7e902ecbd0600691"
+
+    write_bytes(transport, labels["aead_tag"], bytes([0xEE] * 16))
+    _ct, aead_tag = c64_aead_encrypt(target, labels, key, nonce, aad,
+                                     plaintext)
+    poly_tag = read_bytes(transport, labels["poly1305_tag"], 16)
+
+    aead_ok = aead_tag == expected_tag
+    poly_ok = poly_tag == expected_tag
+    if aead_ok and poly_ok:
+        passed += 1
+        if VERBOSE:
+            print("  PASS aead_tag output matches RFC 8439 §2.8.2")
+    else:
+        failed += 1
+        print("  FAIL aead_encrypt tag output (RFC 8439 §2.8.2):")
+        print(f"    expected:     {expected_tag.hex()}")
+        print(f"    aead_tag:     {aead_tag.hex()}  {'ok' if aead_ok else 'MISMATCH'}")
+        print(f"    poly1305_tag: {poly_tag.hex()}  {'ok' if poly_ok else 'MISMATCH'}")
     return passed, failed
 
 
@@ -958,6 +996,8 @@ def run_tests(target, labels, seed):
          lambda: test_poly1305_random(target, labels, rng)),
         ("AEAD encrypt (RFC)",
          lambda: test_aead_encrypt(target, labels)),
+        ("AEAD tag output (aead_tag regression)",
+         lambda: test_aead_tag_output(target, labels)),
         ("AEAD random", lambda: test_aead_random(target, labels, rng)),
         ("AEAD decrypt", lambda: test_aead_decrypt(target, labels, rng)),
         ("ChaCha20 block vs pyca (cross-check)",
