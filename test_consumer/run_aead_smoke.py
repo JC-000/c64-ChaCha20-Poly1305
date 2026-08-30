@@ -31,9 +31,12 @@ STATUS_SCREEN_BLANK = 0x20
 MSGS = {
     0x01: "PASS",
     0x80: "FAIL: aead_encrypt ciphertext mismatch",
-    0x81: "FAIL: aead_encrypt tag mismatch",
+    0x81: "FAIL: aead_encrypt aead_tag mismatch "
+          "(documented output not published)",
     0x82: "FAIL: aead_decrypt auth-verify returned nonzero",
     0x83: "FAIL: aead_decrypt plaintext mismatch",
+    0x84: "FAIL: aead_encrypt poly1305_tag mismatch "
+          "(internal Poly1305 buffer)",
 }
 
 

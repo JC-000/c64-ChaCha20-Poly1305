@@ -19,6 +19,15 @@ Two properties beyond the total:
     address shrink the union instead of failing), so aliases are checked
     by name: bare <-> canonical §2 pairs, and cc20_keystream <-> cc20_work.
 
+    The sharing check sweeps every *occupied* address, not just each
+    slot's start address. Keying on start addresses alone made the check
+    unfailable for the case that matters: two slots that overlap at
+    different starts — a 1-byte slot moved inside cc20_work's $40..$7F
+    block, say — were never compared to each other, while the overlap
+    simultaneously shrank the union and so moved the total *away* from
+    the `declared < actual` failure. A partial overlap is the §15.2
+    defect class; an exact duplicate address is only its degenerate case.
+
   * the equate must be safe-direction (>= actual), matching §6.6's rule
     for footprint equates. Profile A omits ct_diff_raw/ct_sign_mask, so
     its real usage is 86 against the declared 88 — the declared value is
@@ -76,6 +85,23 @@ def normalise(name):
     return name.replace(CANON_PREFIX, "zp_")
 
 
+def is_intended_alias(names):
+    """True if every slot covering one address is a deliberate alias.
+
+    The whitelist, unchanged from the start-address version of this
+    check, is exactly two cases:
+
+      * bare <-> canonical §2 spellings of one slot (zp_tmp1 and
+        chacha20poly1305_zp_tmp1), which `normalise` collapses to one
+        name;
+      * cc20_keystream aliasing cc20_work, declared in zp_config.s.
+
+    Anything else sharing a byte is a collision.
+    """
+    norm = {normalise(n) for n in names}
+    return len(norm) == 1 or norm == {"cc20_work", "cc20_keystream"}
+
+
 def main():
     zp_obj = ROOT / "build" / "lib" / "objs" / "zp_config.o"
     man_obj = ROOT / "build" / "lib" / "objs" / "lib_manifest.o"
@@ -101,25 +127,36 @@ def main():
     declared = manifest[key]
 
     occupied, unmapped = set(), []
+    owners = {}          # ZP address -> names of the slots covering it
     for name, addr in slots.items():
         w = WIDTHS.get(normalise(name))
         if w is None:
             unmapped.append(name)
             continue
-        occupied |= set(range(addr, addr + w))
+        span = range(addr, addr + w)
+        occupied |= set(span)
+        for a in span:
+            owners.setdefault(a, []).append(name)
 
-    # Aliases: every address shared by >1 exported name must be intended.
-    by_addr = {}
-    for name, addr in slots.items():
-        by_addr.setdefault(addr, []).append(name)
-    unexpected = []
-    for addr, names in sorted(by_addr.items()):
+    # Aliases: every address covered by >1 exported slot must be an
+    # intended alias. Swept over occupied addresses (not slot starts), so
+    # a slot landing part-way inside a wider slot is caught too.
+    #
+    # DO NOT "optimise" this into the obvious pairwise form — sort by
+    # address, then assert addr[i] + width[i] <= addr[i+1] for adjacent
+    # pairs. That form reintroduces the bug this check was rewritten to
+    # fix, because it misses containment: cc20_work is 64 bytes wide, so
+    # two 1-byte slots landing inside it at $41 and $50 are not adjacent
+    # to *each other*, and the (i, i+2) pair is never compared. The
+    # per-address sweep is exact for every geometry, and at 24 slots over
+    # 88 bytes its cost is irrelevant.
+    unexpected = {}      # frozenset(names) -> [addresses shared]
+    for addr, names in sorted(owners.items()):
         if len(names) < 2:
             continue
-        norm = {normalise(n) for n in names}
-        if len(norm) == 1 or norm == {"cc20_work", "cc20_keystream"}:
+        if is_intended_alias(names):
             continue
-        unexpected.append((addr, sorted(names)))
+        unexpected.setdefault(frozenset(names), []).append(addr)
 
     actual = len(occupied)
     print(f"  exported slot names : {len(slots)}")
@@ -132,8 +169,14 @@ def main():
         print("        add them to WIDTHS — an unmapped slot is uncounted, "
               "which silently understates usage")
         fail = True
-    for addr, names in unexpected:
-        print(f"  FAIL: unintended alias at ${addr:02X}: {', '.join(names)}")
+    for names, addrs in sorted(unexpected.items(), key=lambda kv: min(kv[1])):
+        rng = (f"${addrs[0]:02X}" if len(addrs) == 1
+               else f"${addrs[0]:02X}-${addrs[-1]:02X} ({len(addrs)} bytes)")
+        print(f"  FAIL: overlapping ZP slots at {rng}: "
+              f"{', '.join(sorted(names))}")
+        print("        these slots share live zero page and corrupt each "
+              "other; only bare<->canonical spellings and "
+              "cc20_keystream<->cc20_work may alias")
         fail = True
     if declared < actual:
         print(f"  FAIL: equate {declared} < actual {actual} — understates usage; "
