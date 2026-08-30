@@ -2,13 +2,20 @@
 # examples/smoke_test/Makefile
 #
 # Consumer-side build for the ChaCha20-Poly1305 smoke test. Pretends we are
-# a downstream ca65 project that vendored the library under
-# third_party/c64-chacha20poly1305-v0.3.0/ and now links its own main
-# program (smoke_test.s) against the library modules.
+# a downstream ca65 project that has adopted the library and now links its
+# own main program (smoke_test.s) against the library modules.
 #
 # Deliberately does NOT reuse the library's own root Makefile — everything
-# here is consumer-written, to flex the same surface a real consumer would
-# have to flex.
+# here is consumer-written (this Makefile, smoke_test.cfg, smoke_test.s),
+# to flex the same surface a real consumer would have to flex.
+#
+# LIBRARY SOURCE: this builds against the repository's own src/ tree, i.e.
+# the CURRENT library. It used to build against a frozen snapshot under
+# third_party/c64-chacha20poly1305-v0.3.0/; that snapshot documents
+# `aead_tag` as aead_encrypt's output but never writes it, so an example
+# pinned to it could only "pass" by asserting on something other than the
+# API it claims to demonstrate. The snapshot is retained for reference (see
+# its ORIGIN.txt) but nothing here builds it.
 #
 # Targets:
 #   make                 build profile A (default)
@@ -23,9 +30,13 @@
 CA65 = ca65
 LD65 = ld65
 
-LIB_DIR     = third_party/c64-chacha20poly1305-v0.3.0
+LIB_DIR     = ../..
 LIB_SRC     = $(LIB_DIR)/src/lib
 LIB_INCLUDE = $(LIB_DIR)/src/include
+# zp_config.s is not part of src/lib: contract §6.2's consumer-assembled
+# model has the consumer supply it, so it is assembled here as one of our
+# own objects (exactly as test_consumer/Makefile does).
+LIB_ZP_SRC  = $(LIB_DIR)/src/zp_config.s
 
 # Consumer's own ca65 flags: -t c64, debug info, and include paths that
 # reach into the vendored library's lib + include directories. Note that
@@ -36,12 +47,16 @@ CFG       = smoke_test.cfg
 
 # Library modules: assembled once per profile. constants_lib.s is equate-
 # only (.include'd, no .o). Matching the upstream module list verbatim.
+# lib_version.s / lib_manifest.s are omitted: they export version and
+# footprint equates for consumers that want assemble-time fit checks, and
+# this example imports none of them.
 LIB_MODULES = word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib
 
 BUILD_A = build/profile-a
 BUILD_B = build/profile-b
 
 A_OBJS = $(BUILD_A)/smoke_test.o \
+         $(BUILD_A)/zp_config.o \
          $(BUILD_A)/word32_lib.o \
          $(BUILD_A)/chacha20_lib.o \
          $(BUILD_A)/poly1305_lib.o \
@@ -49,6 +64,7 @@ A_OBJS = $(BUILD_A)/smoke_test.o \
          $(BUILD_A)/data_lib.o
 
 B_OBJS = $(BUILD_B)/smoke_test.o \
+         $(BUILD_B)/zp_config.o \
          $(BUILD_B)/word32_lib.o \
          $(BUILD_B)/chacha20_lib.o \
          $(BUILD_B)/poly1305_lib.o \
@@ -77,6 +93,9 @@ endef
 $(BUILD_A)/smoke_test.o: smoke_test.s | $(BUILD_A)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
+$(BUILD_A)/zp_config.o: $(LIB_ZP_SRC) | $(BUILD_A)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
 $(BUILD_A)/%.o: $(LIB_SRC)/%.s | $(BUILD_A)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
@@ -90,6 +109,9 @@ $(PRG_A): $(A_OBJS) $(CFG) | $(BUILD_A)
 # Profile B: POLY1305_PROFILE_LONG undefined (portable, short messages)
 # ------------------------------------------------------------------------
 $(BUILD_B)/smoke_test.o: smoke_test.s | $(BUILD_B)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(BUILD_B)/zp_config.o: $(LIB_ZP_SRC) | $(BUILD_B)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(BUILD_B)/%.o: $(LIB_SRC)/%.s | $(BUILD_B)

@@ -168,6 +168,14 @@ $8400..$87FF either, so that whole window is consumer-available.
 
 ## 4. Consumer collision-risk summary
 
+This section covers *where* a consumer's buffers may sit. The other,
+independent restriction on the AEAD data buffer is *how far it may
+run*: `aead_data_ptr + aead_data_len <= $10000`, because the data
+walkers use unchecked 16-bit pointer arithmetic and wrap to `$0000`
+past `$FFFF`. Neither restriction is checked at runtime. See the
+"Data-buffer domain" note in `docs/INTEGRATION.md` and §0 of
+`docs/API.md`.
+
 **Addresses a consumer MUST NOT touch without overriding the
 library's `.ifndef` equates**:
 

@@ -326,6 +326,11 @@ See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`, `aead_data_ptr`,
 `aead_data_len`, `aead_tag`).
 
+`aead_data_len` is a full 16-bit count with no length cap; the caller's
+one obligation is `aead_data_ptr + aead_data_len <= $10000`, since the
+data walkers wrap unchecked past `$FFFF`. See the "Data-buffer domain"
+note in `docs/INTEGRATION.md`.
+
 ## Manifest equates (consumer fit checks)
 
 `src/lib/lib_manifest.s` exports seven integer equates per the

@@ -6,12 +6,21 @@
 ; test_consumer/Makefile. RFC 7539 §2.8.2 known answer; writes a status byte
 ; to $0400 so a Python harness can read pass/fail.
 ;
+; Tag handling: aead_tag and poly1305_tag are both poisoned with $EE before
+; aead_encrypt, so a library that fails to write either one is caught rather
+; than passing on a stale/fixture value. aead_tag — the ABI's documented
+; encrypt output — is the primary assertion; poly1305_tag is asserted
+; separately as the internal Poly1305 buffer. aead_decrypt is then called
+; with no tag reload at all, so it must consume exactly the tag aead_encrypt
+; published; the fixture is never copied into aead_tag.
+;
 ; Status protocol:
 ;   $01 PASS
 ;   $80 aead_encrypt ciphertext mismatch
-;   $81 aead_encrypt Poly1305 tag mismatch
+;   $81 aead_encrypt aead_tag mismatch (documented output not published)
 ;   $82 aead_decrypt auth-verify returned nonzero
 ;   $83 aead_decrypt plaintext mismatch
+;   $84 aead_encrypt poly1305_tag mismatch (internal Poly1305 buffer)
 ; =============================================================================
 
         .p02
@@ -75,6 +84,16 @@ smoke_main:
         lda #0
         sta aead_data_len+1
 
+        ; Poison both tag buffers so neither assertion below can pass on a
+        ; value the library never wrote.
+        lda #$ee
+        ldx #15
+@poison_tag:
+        sta aead_tag,x
+        sta poly1305_tag,x
+        dex
+        bpl @poison_tag
+
         jsr aead_encrypt
 
         ldx #0
@@ -86,21 +105,27 @@ smoke_main:
         cpx #114
         bne @cmp_ct
 
+        ; aead_tag is the ABI's documented encrypt output.
         ldx #15
 @cmp_tag:
-        lda poly1305_tag,x
+        lda aead_tag,x
         cmp rfc_expected_tag,x
         bne tag_fail
         dex
         bpl @cmp_tag
 
+        ; poly1305_tag is the internal Poly1305 output buffer — asserted
+        ; separately, not as a stand-in for aead_tag.
         ldx #15
-@load_tag:
-        lda rfc_expected_tag,x
-        sta aead_tag,x
+@cmp_poly_tag:
+        lda poly1305_tag,x
+        cmp rfc_expected_tag,x
+        bne poly_tag_fail
         dex
-        bpl @load_tag
+        bpl @cmp_poly_tag
 
+        ; No tag reload: aead_tag still holds what aead_encrypt published,
+        ; which is exactly the value aead_decrypt must verify against.
         jsr aead_decrypt
         cmp #0
         bne decrypt_auth_fail
@@ -132,6 +157,10 @@ decrypt_auth_fail:
         jmp spin
 decrypt_pt_fail:
         lda #$83
+        sta $0400
+        jmp spin
+poly_tag_fail:
+        lda #$84
         sta $0400
         jmp spin
 

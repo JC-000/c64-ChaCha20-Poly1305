@@ -15,7 +15,12 @@
 ;   aead_aad_ptr  (2 bytes)  — pointer to AAD
 ;   aead_aad_len  (1 byte)   — AAD length (0-255)
 ;   aead_data_ptr (2 bytes)  — pointer to plaintext/ciphertext
-;   aead_data_len (2 bytes)  — data length (16-bit, up to 1500)
+;   aead_data_len (2 bytes)  — data length (16-bit, full 0..$FFFF range).
+;                             Domain: the buffer must not wrap, i.e.
+;                             aead_data_ptr + aead_data_len <= $10000.
+;                             The old "up to 1500" was an MTU inherited
+;                             from the c64-wireguard origin; nothing in
+;                             this code knows it. See docs/API.md.
 ;
 ; Output:
 ;   Ciphertext written in-place at aead_data_ptr

@@ -1,6 +1,26 @@
 c64-ChaCha20-Poly1305 vendored library snapshot
 =================================================
 
+*** RETAINED FOR REFERENCE — NOT BUILT ***
+
+Nothing builds this snapshot any more. examples/smoke_test now links the
+repository's own src/ tree (the current library); see ../../Makefile and
+../../README.md.
+
+Why it was dropped as the example's build target: this snapshot documents
+`aead_tag` as aead_encrypt's output — src/lib/data_lib.s exports it, and
+src/lib/chacha20poly1305_lib.s's header lists it under "Output:" as
+"authentication tag" — but contains no `sta aead_tag` anywhere. The only
+occurrences are the `.import` at chacha20poly1305_lib.s:38, comments at
+:22 and :448, and the verify-side `eor aead_tag,x` at :459. aead_encrypt
+therefore never populates its own documented output.
+
+An example pinned here could only report PASS by asserting on something
+other than the API it claims to validate, which makes it a worked example
+of how *not* to validate a library. The library sources under src/ are
+left byte-for-byte unmodified (only this note was added) so the history
+and the vendoring layout stay readable.
+
 Upstream:  https://github.com/JC-000/c64-ChaCha20-Poly1305
 Tag:       v0.3.0 (simulated; library contents taken from current HEAD)
 Commit:    83f208f54e15c290a6ac082ed9b562c87d8748c3
@@ -25,10 +45,11 @@ Contents mirrored from the upstream repo at the listed commit:
                           this example uses its own smoke_test.cfg at
                           the parent directory)
 
-The consumer's build (see ../../Makefile) points ca65 at
-src/lib/ + src/include/ and links the library objects together with
+The consumer's build formerly (see ../../Makefile) pointed ca65 at
+src/lib/ + src/include/ and linked the library objects together with
 the consumer's own main module (../../smoke_test.s) against the
-consumer's own linker config (../../smoke_test.cfg).
+consumer's own linker config (../../smoke_test.cfg). That build line now
+points at ../../../../src instead.
 
 No edits have been made to the vendored files. A real release would
 ship these under a top-level c64-ChaCha20-Poly1305-0.3.0/ directory;

@@ -1,39 +1,92 @@
 ; =============================================================================
-; smoke_test.s — External-consumer smoke test for c64-chacha20poly1305 v0.3.0
+; smoke_test.s — External-consumer smoke test for c64-chacha20poly1305
 ;
 ; Simulates a downstream ca65 project (e.g. c64-wireguard, c64-https) that
-; vendored the library under third_party/c64-chacha20poly1305-v0.3.0/ and
-; calls its public API from its own main program.
+; has adopted the library and calls its public API from its own main
+; program. Consumer-owned end to end: this module, smoke_test.cfg and the
+; Makefile are all written from the consumer's side of the API.
 ;
 ; What it does:
-;   1. Call poly1305_lib_init       (one-time sqtab build, REU stash on Profile A)
+;   1. Call poly1305_lib_init       (one-time sqtab build on Profile B)
 ;   2. Load RFC 7539 §2.8.2 AEAD test vector into aead_* state
-;   3. Call aead_encrypt
-;   4. Byte-compare (ciphertext, tag) against RFC known answers
-;   5. Call aead_decrypt on the produced ciphertext+tag (in place)
+;   3. Poison aead_tag and poly1305_tag with $EE, then call aead_encrypt
+;   4. Byte-compare (ciphertext, aead_tag, poly1305_tag) against RFC
+;      known answers
+;   5. Call aead_decrypt on the produced ciphertext+tag (in place), with
+;      NO tag reload — aead_tag already holds what aead_encrypt published
 ;   6. Check return A == 0 (tag valid) AND decrypted plaintext matches input
 ;   7. Write a status byte to screen RAM ($0400) and spin:
 ;        $01 success
 ;        $80 aead_encrypt ciphertext mismatch
-;        $81 aead_encrypt tag mismatch
+;        $81 aead_encrypt aead_tag mismatch
 ;        $82 aead_decrypt returned nonzero (tag-verify failure)
 ;        $83 aead_decrypt plaintext mismatch
+;        $84 aead_encrypt poly1305_tag mismatch
 ;
 ; A Python harness driver (run_smoke_test.py) boots this PRG in VICE, waits
 ; for the status byte, and reports pass/fail. The status byte alone is the
 ; oracle — the program otherwise never touches BASIC, KERNAL, or the VIC-II,
 ; which keeps the consumer's view of the library deliberately thin.
+;
+; -----------------------------------------------------------------------------
+; WHICH LIBRARY THIS BUILDS AGAINST
+;
+; The repository's own src/ tree — the CURRENT library. This example
+; previously built a frozen snapshot under
+; third_party/c64-chacha20poly1305-v0.3.0/, which documents `aead_tag` as
+; aead_encrypt's output (its data_lib.s exports it; its
+; chacha20poly1305_lib.s header calls it "authentication tag" under
+; Output:) but contains no `sta aead_tag` anywhere — only the verify-side
+; `eor aead_tag,x`. An example pinned to that snapshot could only report
+; PASS by asserting on something other than the documented output, which
+; makes it a worked example of how NOT to validate a library. The snapshot
+; is kept for reference (see its ORIGIN.txt) and is no longer built.
+;
+; -----------------------------------------------------------------------------
+; TAG HANDLING
+;
+; Both tag buffers are poisoned with $EE before aead_encrypt, so neither
+; assertion can pass on a value the library never wrote. `aead_tag` — the
+; ABI's documented encrypt output — is the primary assertion; `poly1305_tag`
+; is asserted separately as the Poly1305 module's own output buffer, not as
+; a stand-in for aead_tag. aead_decrypt is then called with no tag reload,
+; so it must consume exactly the tag aead_encrypt published. The RFC
+; fixture is never copied into aead_tag: doing so would let the decrypt leg
+; pass even if aead_encrypt produced no tag at all.
 ; =============================================================================
 
         .p02
 
-; --- Pull in the library's constants (ZP equates, profile flags). The
-;     consumer's build line adds third_party/.../src/lib to the ca65 -I
-;     path so this resolves into the vendored library copy. ---
+; --- Pull in the library's constants (profile flags, and one .importzp
+;     per ZP slot). The consumer's build line adds ../../src/lib to the
+;     ca65 -I path so this resolves into the library sources; the ZP slots
+;     themselves are defined by ../../src/zp_config.s, which this example
+;     assembles as one of its own objects (contract §6.2). ---
 .include "constants_lib.s"
 
-; --- Library imports (data + entry points). These symbols are exported by
-;     the vendored modules in third_party/.../src/lib/. ---
+; --- §6.7 image guard -------------------------------------------------------
+; The library places its tables by *equate*, not by segment: sqtab at
+; LIB_SHARED_SQTAB_BASE ($8000 default, Profile B) and the Shoup
+; r_tab_lo/hi at $6000/$7000 (Profile A). MAIN spans $0900-$9FFF and so
+; contains both windows, which ld65 knows nothing about — a growing image
+; would be linked straight across a table, with no error at any stage and
+; silent corruption at runtime. src/main.s carries this guard for the
+; library's own PRG and states that consumers must mirror it against their
+; own `__<AREA>_LAST__`; this is that mirror.
+;
+; __MAIN_LAST__ must stay a hard .import: an lderror assert whose operand
+; is missing degrades to "Warning: Cannot evaluate assertion", i.e. a
+; silent no-op. The unresolved external is what keeps the guard honest.
+; It is published by `define = yes` on MAIN in smoke_test.cfg.
+.import __MAIN_LAST__
+.ifdef POLY1305_PROFILE_LONG
+    .assert __MAIN_LAST__ <= r_tab_lo, lderror, "image overruns the Profile A Shoup table window (r_tab_lo) — shrink the image"
+.else
+    .include "sqtab_base.inc"
+    .assert __MAIN_LAST__ <= LIB_SHARED_SQTAB_BASE, lderror, "image overruns the sqtab window (LIB_SHARED_SQTAB_BASE) — relocate the table with -D LIB_SHARED_SQTAB_BASE=0x<addr> or shrink the image"
+.endif
+
+; --- Library imports (data + entry points). ---
 .import poly1305_lib_init
 .import aead_encrypt, aead_decrypt
 .import aead_key, aead_nonce, aead_aad_ptr, aead_aad_len
@@ -109,6 +162,16 @@ smoke_main:
         sta aead_data_len+1
 
         ; --- 3. Encrypt ----------------------------------------------------
+        ; Poison both tag buffers so neither assertion below can pass on a
+        ; value the library never wrote.
+        lda #$ee
+        ldx #15
+@poison_tag:
+        sta poly1305_tag,x
+        sta aead_tag,x
+        dex
+        bpl @poison_tag
+
         jsr aead_encrypt
 
         ; --- 4a. Compare ciphertext (work_buf) against rfc_expected_ct ----
@@ -121,27 +184,38 @@ smoke_main:
         cpx #114
         bne @cmp_ct
 
-        ; --- 4b. Compare tag (poly1305_tag) against rfc_expected_tag ------
+        ; --- 4b. Compare aead_tag against rfc_expected_tag ----------------
+        ; aead_tag is the ABI's documented encrypt output. It was poisoned
+        ; to $EE above, so this fails if aead_encrypt did not publish it.
         ldx #15
 @cmp_tag:
-        lda poly1305_tag,x
+        lda aead_tag,x
         cmp rfc_expected_tag,x
         bne tag_fail
         dex
         bpl @cmp_tag
 
-        ; --- 5. Decrypt in place -----------------------------------------
-        ; work_buf still holds the ciphertext. Copy the expected tag into
-        ; aead_tag (the input slot that aead_decrypt compares against).
+        ; --- 4c. Compare poly1305_tag against rfc_expected_tag ------------
+        ; The Poly1305 module's own output buffer, asserted separately —
+        ; not as a stand-in for aead_tag.
         ldx #15
-@load_tag:
-        lda rfc_expected_tag,x
-        sta aead_tag,x
+@cmp_poly_tag:
+        lda poly1305_tag,x
+        cmp rfc_expected_tag,x
+        bne poly_tag_fail
         dex
-        bpl @load_tag
+        bpl @cmp_poly_tag
 
+        ; --- 5. Decrypt in place -----------------------------------------
+        ; work_buf still holds the ciphertext, and aead_tag still holds the
+        ; tag aead_encrypt published — which is exactly the value
+        ; aead_decrypt must verify against, so there is no tag reload here.
+        ; Copying rfc_expected_tag in would let this leg pass even if
+        ; aead_encrypt had produced no tag at all.
+        ;
         ; aead_data_ptr / aead_data_len / aead_key / aead_nonce / aead_aad_*
-        ; are still set from the encrypt call — no reload needed.
+        ; are still set from the encrypt call — no reload needed there
+        ; either.
         jsr aead_decrypt
         cmp #0
         bne decrypt_auth_fail
@@ -178,6 +252,11 @@ decrypt_auth_fail:
 
 decrypt_pt_fail:
         lda #$83
+        sta $0400
+        jmp spin
+
+poly_tag_fail:
+        lda #$84
         sta $0400
         jmp spin
 
@@ -249,9 +328,11 @@ rfc_expected_tag:
         .byte $7e, $90, $2e, $cb, $d0, $60, $06, $91
 
 ; =============================================================================
-; Consumer-owned scratch buffer. $C000-$C07F sits in free C64 RAM — clear of
-; BASIC ($0800), KERNAL ($E000), the library's code+data (MAIN segment,
-; $0900-$7FFF), the Shoup tables ($6000 Profile A only), and sqtab
-; ($8000-$87FF). A real consumer would similarly carve out its own buffer.
+; Consumer-owned scratch buffer. $C000-$C071 sits in free C64 RAM — clear of
+; BASIC ($0800), KERNAL ($E000), the library's code+data (MAIN area,
+; $0900-$9FFF in this cfg but only occupied up to the BSS tail), the Shoup
+; tables ($6000-$7FFF, Profile A only) and sqtab ($8000-$83FF, Profile B
+; only). A real consumer would similarly carve out its own buffer; see
+; docs/MEMORY_MAP.md §4 for the full list of addresses to avoid.
 ; =============================================================================
 work_buf        = $C000

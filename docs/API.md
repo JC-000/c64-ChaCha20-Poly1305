@@ -57,8 +57,26 @@ All live in the library's `LIB_CHACHA20_POLY1305_DATA` segment (see
 | `aead_aad_ptr`   | 2    | pointer to AAD bytes in RAM               |
 | `aead_aad_len`   | 1    | AAD length (0..255)                       |
 | `aead_data_ptr`  | 2    | pointer to plaintext/ciphertext in RAM    |
-| `aead_data_len`  | 2    | data length LE 16-bit                     |
+| `aead_data_len`  | 2    | data length LE 16-bit (see domain note)   |
 | `aead_tag`       | 16   | output tag (encrypt) or expected tag (decrypt) |
+
+**Data-buffer domain.** `aead_data_len` is exact over the whole
+`0..65535` range; there is no length cap. The one restriction is a
+relation between the two caller-supplied values:
+
+```
+aead_data_ptr + aead_data_len <= $10000
+```
+
+Both data walkers advance a 16-bit pointer with no carry-out check
+(`chacha20_lib.s`, the XOR loop's `adc cc20_data_ptr` / `adc #0`;
+`chacha20poly1305_lib.s`, the same shape on
+`chacha20poly1305_zp_ptr1`), so a buffer running past `$FFFF` wraps to
+`$0000` and the library then reads **and writes** from page zero
+upward. Nothing detects this at runtime — `aead_encrypt` has no failure
+return — so it is the caller's precondition. A separate,
+also-unchecked restriction covers *where* the buffer may sit: see
+`docs/MEMORY_MAP.md` §4, "Consumer collision-risk summary".
 
 ---
 
@@ -436,6 +454,11 @@ exposed for the test harness and for composable re-use.
   1. `poly1305_lib_init` called at least once.
   2. `aead_key`, `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`,
      `aead_data_ptr`, `aead_data_len` populated.
+  3. `aead_data_ptr + aead_data_len <= $10000` — the data walkers use
+     unchecked 16-bit pointer arithmetic, so a buffer crossing `$FFFF`
+     wraps to `$0000` and the routine reads and writes from page zero
+     upward. Unchecked at runtime (there is no failure return); the
+     caller must enforce it. See the domain note in §0.
 - **Postconditions**:
   - Ciphertext written in place at `aead_data_ptr`.
   - `aead_tag[0..15]` holds the 16-byte authentication tag.
@@ -464,8 +487,14 @@ exposed for the test harness and for composable re-use.
 - **Signature**: same input convention as `aead_encrypt`. Caller
   must populate `aead_tag` with the received tag before the call.
 - **Return**: A = 0 on tag valid, A = $ff on tag mismatch.
-- **Preconditions**: same as `aead_encrypt`, plus `aead_tag` holds
-  the received tag.
+- **Preconditions**: same as `aead_encrypt` — including
+  `aead_data_ptr + aead_data_len <= $10000`, which is unchecked here
+  too — plus `aead_tag` holds the received tag. The two legs wrap
+  differently: tag computation only *reads* through the wrapped pointer
+  (so an out-of-domain call normally just computes a wrong tag and
+  returns `A = $ff`), while the step-4 decrypt writes through it — so
+  an out-of-domain call whose tag nevertheless verifies goes on to
+  overwrite page zero upward.
 - **Postconditions**:
   - On success (A=0): plaintext written in place at `aead_data_ptr`.
   - On failure (A=$ff): `aead_data_ptr` buffer is unchanged

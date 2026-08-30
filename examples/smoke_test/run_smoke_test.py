@@ -8,9 +8,10 @@ to write a status byte to screen RAM ($0400), then reports pass/fail.
 The status byte protocol matches smoke_test.s:
     $01 -> PASS
     $80 -> FAIL: aead_encrypt ciphertext mismatch
-    $81 -> FAIL: aead_encrypt tag mismatch
+    $81 -> FAIL: aead_encrypt aead_tag mismatch
     $82 -> FAIL: aead_decrypt auth-verify failed
     $83 -> FAIL: aead_decrypt plaintext mismatch
+    $84 -> FAIL: aead_encrypt poly1305_tag mismatch
     $20 -> still running (initial screen-RAM contents after KERNAL clear)
 
 Usage:
@@ -41,9 +42,12 @@ STATUS_SCREEN_BLANK = 0x20   # KERNAL fills screen RAM with $20 (space)
 STATUS_MESSAGES = {
     0x01: "PASS: aead encrypt+decrypt matches RFC 7539 §2.8.2",
     0x80: "FAIL: aead_encrypt ciphertext mismatch",
-    0x81: "FAIL: aead_encrypt Poly1305 tag mismatch",
+    0x81: "FAIL: aead_encrypt aead_tag mismatch "
+          "(documented output not published)",
     0x82: "FAIL: aead_decrypt auth-verify returned nonzero",
     0x83: "FAIL: aead_decrypt plaintext mismatch",
+    0x84: "FAIL: aead_encrypt poly1305_tag mismatch "
+          "(internal Poly1305 buffer)",
 }
 
 
