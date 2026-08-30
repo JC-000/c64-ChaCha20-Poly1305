@@ -297,7 +297,7 @@ The library is intended for hobbyist and research use.
 Version constants (`src/lib_version.s`):
 
 - `LIB_VERSION_MAJOR` / `LIB_VERSION_MINOR` / `LIB_VERSION_PATCH` --
-  exported integer equates tracking the released semver (0.7.0).
+  exported integer equates tracking the released semver (0.9.0).
   Also exported in the collision-free `LIB_CHACHA20_POLY1305_VERSION_*`
   form (contract §1 v0.7.0); the bare names are deprecated and
   suppressible with `ca65 -D LIB_NO_BARE_EXPORTS=1`. Consumers
@@ -307,10 +307,10 @@ Version constants (`src/lib_version.s`):
   `.import`ed symbol has no value until link, so an `.if` gate does not
   assemble at all. See `docs/API.md` §8.
 - `LIB_ABI_VERSION` -- monotonic generation counter for the exported
-  symbol surface (currently **2**), deliberately not a mirror of MAJOR.
-  It increments on any breaking export change; generation 2 covers
-  v0.7.0's removed §8.x bit constants and renamed segments. See
-  `docs/API.md` §8.
+  symbol surface (currently **4**), deliberately not a mirror of MAJOR.
+  It increments on any breaking export change; generation 4 covers the
+  §14.1 AEAD calling-convention change. See `docs/API.md` §8 for the
+  full generation history.
 
 Under the aead-only archive variant (`-DLIB_VARIANT_AEAD_ONLY=1`, i.e.
 `make lib-aead-only`) the test-only exports vanish:
@@ -326,9 +326,12 @@ See `src/lib/data_lib.s` for input/output data fields (`aead_key`,
 `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`, `aead_data_ptr`,
 `aead_data_len`, `aead_tag`).
 
-`aead_data_len` is a full 16-bit count with no length cap; the caller's
-one obligation is `aead_data_ptr + aead_data_len <= $10000`, since the
-data walkers wrap unchecked past `$FFFF`. See the "Data-buffer domain"
+`aead_data_len` is a full 16-bit count with no length cap. Neither
+input buffer may run off the top of memory —
+`aead_data_ptr + aead_data_len <= $10000` and
+`aead_aad_ptr + aead_aad_len <= $10000` — and both relations are
+**enforced at the entry**: a violating call returns `A = $01` having
+written nothing (contract SPEC §14.1). See the "Input-buffer domain"
 note in `docs/INTEGRATION.md`.
 
 ## Manifest equates (consumer fit checks)
@@ -341,8 +344,8 @@ aggregate-manifest convention (five §5 aggregate equates plus the two
 
 - `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed. Always `$00`: the library issues no REU DMA in any profile (the former Profile A `POLY1305_REU` stash was removed by the issue #34 F1 slimming, PR #38).
 - `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
-- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile-aware since the issue #34 F1 slimming diverged the two footprints. Rebased in v0.7.0 onto the library's own segment sum rather than whole-PRG size: Profile A = 15616 (measured 15544), Profile B = 16896 (measured 16838), each rounded up to the next 256-byte boundary.
-- `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (16640, measured 16513).
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile- and variant-aware. Rebased in v0.7.0 onto the library's own segment sum rather than whole-PRG size, each value rounded up to the next 256-byte boundary: Profile A full = 15872 (measured 15651), Profile A aead-only = 15360 (15326), Profile B full = 17152 (16945), Profile B aead-only = 16640 (16620), Profile B app-owned = 16896 (16689). **These literals are hand-maintained and nothing checks them** — three were pushed past their declared values by the §14.1 domain guards with no build diagnostic. The previous figures here (15544 / 16838 / 16513) were accurate at `v0.9.0`, which was byte-identical to `v0.7.0`, and went stale at `20e01aa` when the `aead_tag` fix added 11 B to every configuration. Re-measure by hand after adding code to any library TU; see the note in `src/lib/lib_manifest.s`.
+- `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (Profile B 16640, measured 16620; Profile A 15360, measured 15326).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
 - `LIB_CHACHA20_POLY1305_SHARED_CONSUMES` — bitmask of shared primitives this build *uses*, whether or not it owns them (`$0005` on Profile B, `$0000` on Profile A). Paired with the ownership mask below, it distinguishes a deferring consumer — which needs exactly one owner in the link — from a non-consumer, which needs no provider at all.
 - `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` — bitmask of shared primitives this build owns (`$0005` in the default standalone build; defining `SHARED_SQTAB_INIT` or `SHARED_CT_MUL_8X8` drops the corresponding bit so composed libraries see disjoint masks, issue #21).

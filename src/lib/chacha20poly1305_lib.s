@@ -15,17 +15,32 @@
 ;   aead_aad_ptr  (2 bytes)  — pointer to AAD
 ;   aead_aad_len  (1 byte)   — AAD length (0-255)
 ;   aead_data_ptr (2 bytes)  — pointer to plaintext/ciphertext
-;   aead_data_len (2 bytes)  — data length (16-bit, full 0..$FFFF range).
-;                             Domain: the buffer must not wrap, i.e.
-;                             aead_data_ptr + aead_data_len <= $10000.
-;                             The old "up to 1500" was an MTU inherited
-;                             from the c64-wireguard origin; nothing in
-;                             this code knows it. See docs/API.md.
+;   aead_data_len (2 bytes)  — data length (16-bit, full 0..$FFFF range)
+;
+; DOMAIN (contract SPEC §14.1, entry guards below). Neither caller-supplied
+; buffer may run off the top of the address space:
+;
+;       aead_data_ptr + aead_data_len <= $10000
+;       aead_aad_ptr  + aead_aad_len  <= $10000
+;
+; There is no fixed length ceiling on either. aead_data_len is exact over
+; the whole 0..$FFFF range; the old "up to 1500" was an MTU inherited from
+; the c64-wireguard origin and nothing in this code knows it. Both pointers
+; are caller-supplied and this library owns no buffer, so each restriction
+; is a relation over two values, not a constant. See docs/API.md.
+;
+; A buffer ending exactly at $FFFF (sum == $10000) is IN domain — the
+; walkers advance the pointer past the last byte but never dereference it
+; (chacha20_lib.s:909-915 then falls out at the 16-bit remain==0 test;
+; aead_process_padded's @next_block re-tests remain before any load).
 ;
 ; Output:
 ;   Ciphertext written in-place at aead_data_ptr
 ;   aead_tag (16 bytes) — authentication tag
-;   A register: 0 = success (decrypt), nonzero = auth failure
+;   A register (BOTH entry points, see AEAD_ERR_DOMAIN below):
+;       $00 = success
+;       $01 = domain rejection — nothing was written
+;       $ff = authentication failure (aead_decrypt only)
 ; =============================================================================
 
 .include "constants_lib.s"
@@ -45,6 +60,89 @@
 
 .export aead_encrypt, aead_decrypt
 
+; -----------------------------------------------------------------------------
+; Status codes returned in A by aead_encrypt / aead_decrypt.
+;
+; CONVENTION NOTE (contract SPEC §14.1). The draft §14.1 clause says an
+; out-of-domain call must "return an error — carry set, per the
+; convention its other entry points already use". Carry is NOT the
+; convention this library uses, and never has been: aead_decrypt has
+; signalled in A since it was written (A=0 valid / A=$ff mismatch —
+; see @auth_fail below, the module header above, and docs/API.md
+; "aead_decrypt"), aead_verify_tag returns its verdict in A, and no
+; entry point in this library or in c64-polyval returns a carry-based
+; error. Reading §14.1 literally would bolt a second, contradictory
+; signalling scheme onto the same two entry points. We therefore
+; implement §14.1's *requirement* (reject out-of-domain input before
+; acting) using the convention its other entry points actually use: A.
+;
+; $01 is chosen so that the existing caller idiom
+;
+;       jsr aead_decrypt
+;       bne @fail
+;
+; keeps failing closed on a domain rejection, while `cmp #$ff` still
+; distinguishes an authentication failure from a domain rejection —
+; two different conditions that must not be conflated.
+AEAD_OK          = $00
+AEAD_ERR_DOMAIN  = $01
+AEAD_ERR_AUTH    = $ff
+
+; -----------------------------------------------------------------------------
+; AEAD_DOMAIN_GUARD <ptr>, <len_lo>, <len_hi> — SPEC §14.1 entry guard.
+;
+; Falls through iff  ptr + len <= $10000; otherwise loads AEAD_ERR_DOMAIN
+; and returns to the caller from inside the macro, so the guard is a
+; complete, self-contained early-out. A macro rather than hand-copies so
+; the four expansions (two relations x two entry points) cannot drift
+; apart; a macro rather than a subroutine so the accept path costs no
+; jsr/rts and needs no scratch.
+;
+; The sum is 17-bit: C:A:X after the second adc.
+;
+;   C=0                     -> sum <= $FFFF                  -> accept
+;   C=1, hi != 0            -> sum >= $10100                 -> reject
+;   C=1, hi == 0, lo != 0   -> $10001..$100FF                -> reject
+;   C=1, hi == 0, lo == 0   -> sum == $10000 exactly         -> accept
+;
+; The last row is why `bcc` alone is not the test. A buffer whose last
+; byte is $FFFF has ptr+len == $10000 and is perfectly legal; rejecting
+; on carry alone would exclude it, which would make the published domain
+; wrong in the other direction. Both walkers advance their pointer past
+; the final byte and then re-test the 16-bit remaining count before any
+; further load, so the wrapped $0000 pointer is never dereferenced
+; (chacha20_lib.s:909-915 / :928-930; chacha20poly1305_lib.s:@next_block).
+;
+; DO NOT "OPTIMISE" THE `bne reject` OUT OF THE AAD EXPANSION. With the
+; 8-bit aead_aad_len the high-byte add is `adc #0`, so carry out of it
+; requires ptr_hi = $FF and a carry in, which leaves A = $00 — C=1 then
+; implies hi==0 and that branch is unreachable. It costs 2 bytes and 0
+; cycles on the accept path, and it is what keeps this expansion correct
+; if aead_aad_len is ever widened to 16 bits. Sharing one body across
+; both relations is the whole point.
+;
+; Accept path: 23 cy / 24 B with a 16-bit length, 21 cy / 23 B with an
+; immediate high byte. Clobbers A, X and flags only — both registers are
+; already documented clobbered by both entry points.
+; -----------------------------------------------------------------------------
+.macro AEAD_DOMAIN_GUARD ptr, len_lo, len_hi
+.local ok
+.local reject
+        clc
+        lda ptr
+        adc len_lo
+        tax                     ; low byte of the 17-bit sum
+        lda ptr+1
+        adc len_hi
+        bcc ok                  ; sum <= $FFFF -> fits
+        bne reject              ; C set, hi != 0  -> > $10000
+        txa
+        beq ok                  ; C set, sum == $10000 exactly -> legal
+reject: lda #AEAD_ERR_DOMAIN    ; C set, hi = 0, lo != 0 -> > $10000
+        rts
+ok:
+.endmacro
+
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
@@ -55,9 +153,32 @@
 ; 3. Compute Poly1305 tag over (AAD ‖ pad ‖ ciphertext ‖ pad ‖ lengths)
 ; 4. Copy the tag to aead_tag (the documented output)
 ;
+; Returns: A = AEAD_OK ($00) on success
+;          A = AEAD_ERR_DOMAIN ($01) if either aead_data_ptr +
+;              aead_data_len or aead_aad_ptr + aead_aad_len would run
+;              past $10000 — nothing is written in that case.
 ; Clobbers: A, X, Y
 ; =============================================================================
 aead_encrypt:
+        ; --- 0. Domain guards (SPEC §14.1) ---
+        ; FIRST instructions of the entry point, ahead of every jsr, so
+        ; the reject path writes nothing at all: no ciphertext, no
+        ; aead_tag, no poly1305_tag, no aead_scratch, and none of the
+        ; cc20_*/poly_* working state. Anything later would already have
+        ; had aead_derive_otk overwrite poly_r/poly_s/cc20_state.
+        ;
+        ; Both caller-supplied buffers are checked. The AAD path only
+        ; ever READS through its pointer and aead_aad_len is 8-bit, so
+        ; its unguarded overrun was bounded at 254 bytes of page zero
+        ; folded into the tag rather than the data path's read/write
+        ; walk through $01 and I/O — milder, but the same relation, and
+        ; a published domain a reader has to check half of is worse than
+        ; either alternative.
+        ;
+        ; 44 cy total on the accept path; clobbers only A and X, both
+        ; already documented clobbered above.
+        AEAD_DOMAIN_GUARD aead_data_ptr, aead_data_len, aead_data_len+1
+        AEAD_DOMAIN_GUARD aead_aad_ptr,  aead_aad_len,  #0
         ; --- 1. Derive Poly1305 OTK ---
         ; A5 (S8): aead_derive_otk already ran chacha20_init and one
         ; chacha20_block. The block's tail increments cc20_state+48 from
@@ -94,7 +215,12 @@ aead_encrypt:
         sta aead_tag,x
         dex
         bpl @copy_tag
-        rts
+
+        lda #AEAD_OK            ; success. Before the §14.1 guard this
+        rts                     ; entry left A undefined (it fell out of
+                                ; the loop holding poly1305_tag[0]);
+                                ; giving it a failure code obliges it to
+                                ; give it a success code too.
 
 ; =============================================================================
 ; aead_decrypt - ChaCha20-Poly1305 authenticated decryption
@@ -104,10 +230,26 @@ aead_encrypt:
 ; 3. Verify tag (constant-time comparison)
 ; 4. If valid, decrypt ciphertext
 ;
-; Output: A = 0 if tag valid, nonzero if tag mismatch
+; Returns: A = AEAD_OK ($00) tag valid, plaintext written
+;          A = AEAD_ERR_AUTH ($ff) tag mismatch, buffer untouched
+;          A = AEAD_ERR_DOMAIN ($01) a pointer + length would run past
+;              $10000 — nothing is written, and NOTHING about
+;              the tag was checked. Distinct from $ff on purpose: an
+;              authentication failure is a statement about the message,
+;              a domain rejection is a statement about the call.
 ; Clobbers: A, X, Y
 ; =============================================================================
 aead_decrypt:
+        ; --- 0. Domain guards (SPEC §14.1) — see aead_encrypt ---
+        ; First instructions, ahead of aead_derive_otk, so the reject
+        ; path writes nothing: no plaintext, no poly1305_tag, no
+        ; aead_scratch, no cc20_*/poly_* state. Placing them at the
+        ; entry rather than in front of the step-4 decrypt also closes
+        ; the case where an out-of-domain tag computation happened to
+        ; verify and the decrypt then wrote through the wrapped pointer.
+        AEAD_DOMAIN_GUARD aead_data_ptr, aead_data_len, aead_data_len+1
+        AEAD_DOMAIN_GUARD aead_aad_ptr,  aead_aad_len,  #0
+
         ; --- 1. Derive Poly1305 OTK ---
         jsr aead_derive_otk
 
@@ -135,11 +277,11 @@ aead_decrypt:
         sta cc20_remain_hi
         jsr chacha20_encrypt    ; XOR = decrypt
 
-        lda #0                  ; success
+        lda #AEAD_OK            ; success
         rts
 
 @auth_fail:
-        lda #$ff               ; failure
+        lda #AEAD_ERR_AUTH      ; authentication failure
         rts
 
 ; =============================================================================

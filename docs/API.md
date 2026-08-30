@@ -60,23 +60,82 @@ All live in the library's `LIB_CHACHA20_POLY1305_DATA` segment (see
 | `aead_data_len`  | 2    | data length LE 16-bit (see domain note)   |
 | `aead_tag`       | 16   | output tag (encrypt) or expected tag (decrypt) |
 
-**Data-buffer domain.** `aead_data_len` is exact over the whole
-`0..65535` range; there is no length cap. The one restriction is a
-relation between the two caller-supplied values:
+#### Domain of the AEAD input pointers
+
+Both AEAD entry points require **both** of these:
 
 ```
 aead_data_ptr + aead_data_len <= $10000
+aead_aad_ptr  + aead_aad_len  <= $10000
 ```
 
-Both data walkers advance a 16-bit pointer with no carry-out check
-(`chacha20_lib.s`, the XOR loop's `adc cc20_data_ptr` / `adc #0`;
-`chacha20poly1305_lib.s`, the same shape on
-`chacha20poly1305_zp_ptr1`), so a buffer running past `$FFFF` wraps to
-`$0000` and the library then reads **and writes** from page zero
-upward. Nothing detects this at runtime — `aead_encrypt` has no failure
-return — so it is the caller's precondition. A separate,
-also-unchecked restriction covers *where* the buffer may sit: see
+i.e. neither caller-supplied buffer may run off the top of the 6502
+address space. Each is a **relation over two caller-supplied values, not
+a length ceiling**: the library owns no buffer and never allocates one,
+so `aead_data_len` alone has no maximum — it is exact over the whole
+`0..65535` range, and all of it is in domain for a low enough
+`aead_data_ptr`. (Numbers such as 1500, 3840 or ~6.2 KB that appear in
+this repo's harnesses and in consumer projects are *those* callers'
+buffer sizes. The 1500 in particular was an MTU inherited from the
+c64-wireguard origin; nothing in this library knows it.)
+
+A buffer ending exactly at `$FFFF` — sum `== $10000` — is **in domain**:
+the walkers advance their pointer past the last byte but re-test the
+remaining count before dereferencing it. A zero length is in domain for
+any pointer (`aead_aad_len == 0` short-circuits before the AAD pointer
+is read at all).
+
+Out-of-domain calls are **rejected at entry** (`chacha20poly1305_lib.s`,
+`AEAD_DOMAIN_GUARD`) with `A = $01`, **before anything is written** — no
+ciphertext/plaintext, no `aead_tag`, no `poly1305_tag`, no
+`aead_scratch`, and none of the `cc20_*` / `poly_*` working state. The
+guards are the first instructions of both entry points, ahead of every
+`jsr`. `aead_key` and `aead_nonce` are inputs and are never modified by
+either entry point.
+
+One status code covers both relations. A caller that violates either has
+the same bug class and the same remedy, and can evaluate both relations
+itself in a few instructions, so the ABI does not spend a second code
+point on telling them apart.
+
+**What the guards prevent.** Both data walkers advance a 16-bit pointer
+with no carry-out check — the ChaCha20 XOR loop
+(`chacha20_lib.s:909-915`, `adc cc20_data_ptr` / `adc #0`) and the
+Poly1305 block loop in `aead_process_padded`, the same shape on
+`chacha20poly1305_zp_ptr1`. Unguarded, a data buffer running past
+`$FFFF` wraps to `$0000` and the library reads **and writes** from page
+zero upward: `$01` (the banking register, re-banking RAM/ROM mid-loop),
+the stack, and I/O at `$D000-$DFFF`. The AAD path is milder in two ways
+that are worth stating precisely, because they bound it rather than
+excuse it — it only ever *reads* through the pointer (into
+`aead_scratch` and `poly1305_block`), and `aead_aad_len` is 8-bit, so
+the overrun cannot exceed 254 bytes and cannot reach past `$00FE`. Its
+consequence is a wrong tag computed partly over zero page, not memory
+corruption. Both are guarded regardless: the published domain is one
+statement, and a reader should not have to track which half is enforced.
+
+**A separate restriction, still unchecked.** Where the buffers may *sit*
+— they must not overlap the regions the library itself claims (its
+CODE/DATA/BSS, the Profile A Shoup tables, the Profile B `sqtab`, and
+the reserved zero-page slots) — is **not** runtime-checkable and is not
+checked. That one remains the caller's precondition; see
 `docs/MEMORY_MAP.md` §4, "Consumer collision-risk summary".
+
+#### AEAD status codes
+
+`aead_encrypt` and `aead_decrypt` both return a status in **A**. The
+library has no carry-based error return on any entry point.
+
+| A     | meaning | written on this path |
+|-------|---------|----------------------|
+| `$00` | success | ciphertext/plaintext + `aead_tag` (encrypt); plaintext (decrypt) |
+| `$01` | domain rejection — a pointer + length exceeds `$10000` | nothing |
+| `$ff` | authentication failure (`aead_decrypt` only) | nothing |
+
+`bne` after either call still fails closed. A caller that must tell an
+authentication failure from a domain rejection — they are different
+conditions, one about the message and one about the call — tests
+`cmp #$ff`.
 
 ---
 
@@ -454,15 +513,26 @@ exposed for the test harness and for composable re-use.
   1. `poly1305_lib_init` called at least once.
   2. `aead_key`, `aead_nonce`, `aead_aad_ptr`, `aead_aad_len`,
      `aead_data_ptr`, `aead_data_len` populated.
-  3. `aead_data_ptr + aead_data_len <= $10000` — the data walkers use
-     unchecked 16-bit pointer arithmetic, so a buffer crossing `$FFFF`
-     wraps to `$0000` and the routine reads and writes from page zero
-     upward. Unchecked at runtime (there is no failure return); the
-     caller must enforce it. See the domain note in §0.
+  3. `aead_data_ptr + aead_data_len <= $10000` **and**
+     `aead_aad_ptr + aead_aad_len <= $10000` (§0 "Domain of the AEAD
+     input pointers"). Violations are **rejected**, not undefined
+     behaviour: the walkers use 16-bit pointer arithmetic with no
+     carry-out check, so before the §14.1 guards a buffer crossing
+     `$FFFF` wrapped to `$0000` and the routine read and wrote from
+     page zero upward.
+- **Return**: A = `$00` success, A = `$01` domain rejection.
+  Before the §14.1 guards this entry point had no failure path and
+  left A undefined; `A = $00` on success is new with them.
 - **Postconditions**:
-  - Ciphertext written in place at `aead_data_ptr`.
-  - `aead_tag[0..15]` holds the 16-byte authentication tag.
-- **Clobbers**: A, X, Y, most of `cc20_*` and `poly_*` state.
+  - On success (A=0): ciphertext written in place at `aead_data_ptr`;
+    `aead_tag[0..15]` holds the 16-byte authentication tag.
+  - On domain rejection (A=$01): **nothing is written** — not the
+    buffer at `aead_data_ptr`, not `aead_tag`, not `poly1305_tag`,
+    not `aead_scratch`, and none of the `cc20_*` / `poly_*` working
+    state. The guard is the entry point's first instruction, ahead of
+    every `jsr`. `aead_key` and `aead_nonce` are unchanged.
+- **Clobbers**: A, X, Y, most of `cc20_*` and `poly_*` state (on the
+  domain-rejection path, A and X only).
 - **CT contract**: `aead_key` and plaintext are SECRET;
   `aead_nonce`, `aead_aad_*`, and lengths are PUBLIC.
   **Aggregate CT verdict: GREEN** — findings F1/F2/F3 were all
@@ -486,21 +556,30 @@ exposed for the test harness and for composable re-use.
 - **Purpose**: Full RFC 7539 §2.8 AEAD decrypt with tag verify.
 - **Signature**: same input convention as `aead_encrypt`. Caller
   must populate `aead_tag` with the received tag before the call.
-- **Return**: A = 0 on tag valid, A = $ff on tag mismatch.
-- **Preconditions**: same as `aead_encrypt` — including
-  `aead_data_ptr + aead_data_len <= $10000`, which is unchecked here
-  too — plus `aead_tag` holds the received tag. The two legs wrap
-  differently: tag computation only *reads* through the wrapped pointer
-  (so an out-of-domain call normally just computes a wrong tag and
-  returns `A = $ff`), while the step-4 decrypt writes through it — so
-  an out-of-domain call whose tag nevertheless verifies goes on to
-  overwrite page zero upward.
+- **Return**: A = `$00` tag valid, A = `$ff` tag mismatch,
+  A = `$01` domain rejection.
+- **Preconditions**: same as `aead_encrypt` (including both `$10000`
+  domain relations), plus `aead_tag` holds the received tag.
+  Historically the two legs wrapped differently, which is why the guard
+  is at the entry rather than in front of the decrypt step: tag
+  computation only *reads* through the wrapped pointer, so an
+  out-of-domain call normally just computed a wrong tag and returned
+  `A = $ff`, but one whose tag nevertheless verified went on to
+  overwrite page zero upward through the step-4 decrypt. Both legs are
+  now unreachable for out-of-domain input.
 - **Postconditions**:
   - On success (A=0): plaintext written in place at `aead_data_ptr`.
-  - On failure (A=$ff): `aead_data_ptr` buffer is unchanged
-    (decrypt step is skipped); `poly1305_tag` holds the computed
-    tag (differs from the provided `aead_tag`).
-- **Clobbers**: A, X, Y.
+  - On authentication failure (A=$ff): `aead_data_ptr` buffer is
+    unchanged (decrypt step is skipped); `poly1305_tag` holds the
+    computed tag (differs from the provided `aead_tag`).
+  - On domain rejection (A=$01): **nothing is written** — the buffer,
+    `aead_tag`, `poly1305_tag`, `aead_scratch` and the `cc20_*` /
+    `poly_*` state are all untouched, and **no tag was computed or
+    checked**. This is deliberately distinct from `$ff`: `$ff` says
+    the message failed to authenticate, `$01` says the call was never
+    made. Conflating them would report an authentication failure for
+    a caller bug.
+- **Clobbers**: A, X, Y (on the domain-rejection path, A and X only).
 - **CT contract**: the decrypt→verify→decrypt-on-success chain
   does leak whether the tag was valid (the `bne @auth_fail` at
   line 100). However, the branch input is the *output* of
@@ -514,8 +593,13 @@ exposed for the test harness and for composable re-use.
 - **Example**:
   ```ca65
   jsr aead_decrypt
-  bne @auth_fail             ; A != 0 = tag mismatch
+  bne @fail                  ; A != 0 = did not decrypt (fails closed)
   ; A == 0: plaintext in aead_data_ptr buffer
+  ...
+@fail:
+  cmp #$ff
+  beq @auth_fail             ; $ff = tag mismatch
+  ; $01 = caller bug: aead_data_ptr + aead_data_len > $10000
   ```
 
 ---
@@ -637,9 +721,9 @@ adopter-side subset assert that pins ownership ⊆ consumes.
 | Prefixed symbol (use this) | Deprecated bare alias | Value (this release) |
 |---|---|---|
 | `LIB_CHACHA20_POLY1305_VERSION_MAJOR` | `LIB_VERSION_MAJOR` | 0 |
-| `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 7 |
+| `LIB_CHACHA20_POLY1305_VERSION_MINOR` | `LIB_VERSION_MINOR` | 9 |
 | `LIB_CHACHA20_POLY1305_VERSION_PATCH` | `LIB_VERSION_PATCH` | 0 |
-| `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 2 |
+| `LIB_CHACHA20_POLY1305_ABI_VERSION`   | `LIB_ABI_VERSION`   | 4 |
 
 The bare names are identical across every adopter library, so a consumer
 linking two libraries and importing both manifests gets `ld65: Error:
@@ -693,8 +777,27 @@ exists to catch.
 |---|---|---|
 | 1 | v0.6.0 | first published ABI surface |
 | 2 | v0.7.0 | removed the exported §8.x bit constants (#57); renamed all library segments (#48) |
+| 3 | v0.8.0 | renamed the general-purpose ZP slots to `chacha20poly1305_zp_*` (#76); put the deprecated bare aliases behind `LIB_NO_BARE_EXPORTS` |
+| 4 | unreleased | **changed the AEAD calling convention** — the SPEC §14.1 domain guards give `aead_encrypt` a status in A where it previously left A undefined, and give `aead_decrypt` a third return value `$01` |
 
 Generation 2 is the correct value for v0.7.0's surface. The v0.7.0 tag
 itself still reports 1: it was cut under §1's then-current "matches the
 MAJOR bump" wording, which contract v0.7.5 repudiated. Corrected in
 issue #67; published tags are not retagged.
+
+Generation 3 is **published**: `v0.8.0` and `v0.9.0` both ship
+`ABI_VERSION = 3`. A consumer can therefore hold a build whose surface is
+"generation 3 without the domain guards", and distinguishing exactly that
+is what the counter is for — so the §14.1 change increments to 4 rather
+than extending 3.
+
+Generation 2 is not a counter-example. `v0.7.0` ships `ABI_VERSION = 1`
+and `v0.8.0` jumps straight to `3`, so the value 2 has never appeared in
+any release; issue #67 corrected the counter onto a value no consumer was
+holding, which is the opposite situation.
+
+`src/lib_version.s`'s generation history labelled generation 3
+"unreleased" and shipped that way in both `v0.8.0` and `v0.9.0`, 28 lines
+above the constant that set it to 3 (line 64 versus line 92). The label was wrong, not the
+constant; it is corrected here. Check the tag rather than the comment:
+`git show v0.8.0:src/lib_version.s | grep ABI_VERSION`.
