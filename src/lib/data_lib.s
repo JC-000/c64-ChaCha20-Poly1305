@@ -118,7 +118,25 @@ sqtab_ready:
 ; alignment is a CT invariant (see each table's header). ld65 honours it
 ; only if the cfg declares LIB_CHACHA20_POLY1305_CODE with `align = $100`
 ; — otherwise it emits a warning and links the tables misaligned, which
-; silently reintroduces the secret-dependent page-cross penalty.
+; would silently reintroduce the secret-dependent page-cross penalty.
+;
+; That warning is NOT the enforcement mechanism, because a warning still
+; produces a linked PRG. The enforcement is the deferred
+; `.assert ... lderror` placed beside each table below (issue #100):
+; ld65 evaluates it against the RESOLVED address and fails the link.
+;
+; The asserts live next to the tables, not in a central asserts file,
+; and they test the address rather than the `.align` directive — so they
+; catch every route to the failure: a consumer cfg dropping
+; `align = $100`, the `.align 256` being deleted, a field inserted
+; between the tables, or a segment reshuffle. They cannot drift away
+; from the thing they guard.
+;
+; They MUST stay `lderror` (deferred to link time). An assembly-time
+; assert sees only the segment-relative offset, not the final address,
+; and would pass on a misaligned link — the exact case that matters.
+;
+; Same pattern and rationale as c64-x25519 src/data.s:175-177.
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
@@ -140,6 +158,11 @@ chacha_nibswap_hi_tab:
             .byte (V << 4) & $FF
         .endrepeat
 
+; Deferred (link-time) enforcement of the CT invariant above. See the
+; note at the top of this segment for why this is an lderror and why it
+; lives here rather than in a central asserts file.
+.assert (chacha_nibswap_hi_tab & $00FF) = 0, lderror, "chacha_nibswap_hi_tab must be page-aligned (CT invariant): consumer cfg must declare LIB_CHACHA20_POLY1305_CODE with align = $100 - ld65 only WARNS otherwise, and X derives from secret work bytes"
+
 ; =============================================================================
 ; chacha_nibswap_lo_tab - 256-entry LUT: tab[V] = V >> 4
 ;
@@ -153,3 +176,5 @@ chacha_nibswap_lo_tab:
         .repeat 256, V
             .byte V >> 4
         .endrepeat
+
+.assert (chacha_nibswap_lo_tab & $00FF) = 0, lderror, "chacha_nibswap_lo_tab must be page-aligned - same CT invariant as chacha_nibswap_hi_tab"
