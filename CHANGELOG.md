@@ -78,7 +78,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure from a domain rejection tests `cmp #$ff`. The library
   signals in `A`, not carry: draft contract §14.1's "carry set, per the
   convention its other entry points already use" describes a convention
-  this library has never had.
+  this library has never had. That objection was raised upstream and
+  accepted — §14.1 **as merged at `v0.16.0`** names no convention and
+  defers to the one the library already uses, so no carry-based reading
+  of the clause survives.
 
   The counter increments to **4**. Generation 3 is published — `v0.8.0`
   and `v0.9.0` both ship `ABI_VERSION = 3` — so a consumer can hold a
@@ -248,8 +251,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expected failures. Runs against a throwaway copy of `Makefile` +
   `src/` so it does not cost the caller their per-profile object cache.
 
-### Contract conformance — span extended to SPEC v0.15.0
-The v0.9.0 record ran to **v0.10.3**. Findings for the thirteen revisions
+### Contract conformance — span extended to SPEC v0.17.0
+The v0.9.0 record ran to **v0.10.3**. Findings for the fifteen revisions
 since, in order:
 
 - **v0.10.4** (§6.3 posture scoped to define-reachable combinations;
@@ -341,12 +344,179 @@ since, in order:
   mechanism. `src/precalc_table.inc` re-verified byte-identical to the
   contract's root copy at `v0.15.0`. Tagged `v0.15.0` (`5f923db`),
   verified header 0.15.0.
+- **v0.16.0** (MINOR; new §14 — a public entry point MUST terminate on
+  every input of its parameter type **or** document the domain over
+  which it terminates, and SHOULD reject the out-of-domain inputs at
+  the entry, signalled the way the library already signals failure) —
+  **satisfied, in code rather than by argument.**
+
+  *Termination.* An audit of this library's public surface, run here
+  against `src/` while the clause was in draft, found **no**
+  input-dependent termination condition: 37 exported entry points, 29
+  runtime loops, of which 23 are fixed-trip (a constant iteration count no
+  input reaches), 5 are length-bounded behind a true entry guard, and one
+  is neither — `poly_ripple`, whose `inc`/`bne` exit test *is*
+  data-dependent yet which is total on its whole parameter type, because
+  an index that strictly increases meets the hard `cpx #33` ceiling at
+  `src/lib/poly1305_lib.s:664`. **These figures are measured here, and
+  §14.3 is not independent corroboration of them** — the contract's
+  normative text carries the 23-of-29 split and the fourth bound shape
+  because this audit supplied them, so citing §14.3 back would be
+  circular. Re-derive from `src/` rather than from the SPEC.
+
+  *Documented domain.* The restriction is a **relation**, not a ceiling:
+  `aead_data_ptr + aead_data_len <= $10000` and `aead_aad_ptr +
+  aead_aad_len <= $10000`. Stated in `docs/API.md:68-69`,
+  `docs/INTEGRATION.md:511-512`, `docs/MEMORY_MAP.md:173-174` and
+  `README.md:331-332`, and **enforced at both entry points on both
+  pointers** — one `AEAD_DOMAIN_GUARD` macro
+  (`src/lib/chacha20poly1305_lib.s:128`) expanded four times (`:180-181`,
+  `:250-251`) ahead of every `jsr`, so a rejected call writes nothing. The
+  test is on the 17-bit sum rather than on carry, so a buffer whose last
+  byte is `$FFFF` (sum exactly `$10000`) is accepted rather than wrongly
+  excluded — a domain that excludes legal inputs being wrongly stated in
+  the other direction. Landed in this release (`8fd0cf3`).
+
+  *§14.2 is not owed here.* Its normative text says so by name: "Where the
+  domain is a relation rather than a constant, this clause does not apply
+  and §14.1 alone discharges the obligation", and it cites this library's
+  relation as the case, having found every scalar in circulation for it
+  either vacuous (`$FFFF`) or wrong in §14.1's sense (`1500`, an MTU from
+  an unrelated consumer; `3840`, our own fuzz scratch window). No equate is
+  published, deliberately. Two statements in that tag differ on this
+  point: the normative clause (§14.2) says the relation case is discharged
+  by §14.1 alone, and the §12 changelog entry's "Fleet position at merge"
+  paragraph says this library "owes one stated ceiling for
+  `aead_data_len`". §14.2 is the clause and governs; the position recorded
+  here follows it. Reported upstream separately.
+
+  *Rejection convention.* §14.1 as merged names **no** convention and
+  defers to whatever the library already uses; this library signals in `A`
+  — `AEAD_OK $00` / `AEAD_ERR_DOMAIN $01` / `AEAD_ERR_AUTH $ff`
+  (`src/lib/chacha20poly1305_lib.s:87-89`). The draft's "carry set"
+  wording, which neither crypto adopter it cited actually uses, was
+  withdrawn before merge. Tagged `v0.16.0` (`3a91ebb`), verified header
+  0.16.0.
+- **v0.17.0** (MINOR; new §15 — a check offered as conformance evidence
+  SHOULD be accompanied by a demonstration that it fails when the property
+  it checks is false, because "a check never observed to fail is not
+  evidence that the property holds; it is evidence only that the check
+  ran") — **partly satisfied: four checks are outstanding, and are
+  recorded here as outstanding. One of them is a live gap in the default
+  build rather than a missing demonstration.**
+
+  §15.1's scoping sentence — the obligation applies **per check within an
+  aggregate gate**, not to the gate as a whole — is why this entry takes
+  the form it does. `make verify-zp-usage` and `make lib-verify-shared`
+  are each several independent checks wearing one target name, and a
+  claim about the target says nothing about the legs. The enumeration
+  below is therefore at check granularity, and it lives here rather than
+  in an audit note so that a later reader can check it against the tree
+  instead of taking it on trust.
+
+  | # | Check | Evidence for | Cited at | Demonstrated capable of failing |
+  |---|---|---|---|---|
+  | 1 | `verify_zp_usage.py:181` declared `<` actual | §5 `ZP_USAGE_BYTES`, §6.6 safe direction | `README.md:380`, "`make verify-zp-usage`" §; contract `adopters.md` row | **yes** — `42d3def` records `88->80 => FAIL` |
+  | 2 | `verify_zp_usage.py:167` exported slot with no declared width | §5, §6.6 (an uncounted slot understates usage) | same | **yes** — `42d3def` records `cc20_bogus => FAIL` |
+  | 3 | `verify_zp_usage.py:153-179` unintended-alias sweep | §2 ZP registry, §6.6 | same | **yes, since `b9bffe7`** — see note below |
+  | 4 | `verify_zp_usage.py:76` od65-dump sentinel | guards 1–3 against a vacuous pass | tool docstring `:67-73` | no — structurally capable, never exercised |
+  | 5 | `verify_knob_staleness.py`, four legs | §6.3 select-or-fail-loudly | `README.md:378`, "`make verify-knob-staleness`" § | **yes** — fails on the pre-fix `Makefile` with the three expected failures |
+  | 6 | `Makefile:633-644` §8.3 owner/deferral surface legs | §8.3 migration shape | `README.md:382`, `:422` | **yes** — 11 named errors against the pre-#47 source |
+  | 7 | `Makefile:622-632` od65-dump sentinels | guards 6 against a vacuous pass | same | **yes** — dump emptied, sentinel fires |
+  | 8 | `src/include/sqtab_base.inc:32` page-alignment `.assert` | §8.1 placement | `README.md:382` | no — structurally capable (a non-page-aligned `-D` trips it), never exercised; Profile B only |
+  | 9 | `src/lib/poly1305_lib.s:143` page-delta `.assert` | §8.1 placement | `README.md:382` | **no — cannot fail** |
+  | 10 | `src/main.s:48` `__MAIN_LAST__` image guard, **Profile B** | §6.7 reservations | `README.md:381` | **yes** — seeded link failure with a page-exact boundary sweep, `docs/RELEASE_NOTES_v0.9.0.md:73-77` |
+  | 11 | §6.7 coverage on **Profile A** | §6.7 reservations | `README.md:381` (undifferentiated by profile) | **no check exists** — see note below |
+  | 12 | `examples/smoke_test/smoke_test.s:81-87` consumer-side mirror | §6.7 consumer obligation | `README.md:513` | no — `b9bffe7`'s message says "demonstrated firing", but names no method, boundary or output, and the file carries two profile-gated legs so the claim does not identify which fired |
+  | 13 | `src/lib/lib_manifest.s:383` ownership ⊆ consumes `.assert` | §8.0 three-state semantics | `README.md:382` | **no — cannot fail** |
+  | 14 | `LIB_CHACHA20_POLY1305_RESIDENT_BYTES`, five literals | §6.6 footprint | `README.md:347`, `:380` | **no check exists** |
+  | 15 | `test_consumer/aead_smoke.s` + `examples/smoke_test/` tag assertions | §6.1/§6.4 consumer-owned build | `README.md:36`, `:513` | **yes, since `b9bffe7`** — see note below |
+  | 16 | `tools/hazmat_fuzz.py` `aead_tag` poison-then-act | `docs/API.md`'s documented output; §15.1 cites PR #93 by name as the fleet's poison-then-act reference | `CHANGELOG.md:139` (this Unreleased section) | **yes** — 26 failures on the pre-fix tree (`:173`), green after. Added in `dd9662a`; it does not exist at `v0.9.0` |
+
+  Nine demonstrated, three capable but never exercised (4, 8, 12), and
+  **four outstanding** (9, 11, 13, 14).
+
+  Rows 3 and 15 are the ones §15 was written for, and both were green
+  while unable to report the thing they name. The alias sweep keyed on
+  each slot's **start** address, so an overlap at a different start was
+  never compared — and because the occupied set is a union, an overlap
+  *shrank* the measured footprint, moving away from row 1's failure
+  rather than toward it. It is now a sweep over every occupied address
+  (`tools/verify_zp_usage.py:141-159`), which also covers containment,
+  and is mutation-tested: `poly_carry` moved `$1c` → `$41`, inside
+  `cc20_work`'s `$40-$7F`, gives "FAIL: overlapping ZP slots at `$41`",
+  exit 1, where the pre-fix tool exited 0. Note what this does to the
+  v0.9.0 record's "all three failure modes were verified by seeding
+  them": `42d3def`'s own message records a `=> FAIL` outcome for **two**
+  of the three, and the alias line is rationale with no recorded result.
+  The header claimed three; the evidence supports two. Row 15's smoke
+  tests compared the tag read from `poly1305_tag` against their own
+  fixture and then wrote that fixture's tag into `aead_tag` before
+  decrypting, so `aead_encrypt`'s documented output was never read;
+  deleting the publish loop left both reporting PASS. Both now poison
+  first and assert `aead_tag`, and deleting the publish loop turns all
+  four consumer and example runs red — the mutation re-exposes PR #93's
+  original defect rather than merely breaking the check.
+
+  **Row 11 is a live §6.7 gap in the default build, not a scoping
+  decision.** `src/main.s:45-49` gates its guard on `.ifndef
+  POLY1305_PROFILE_LONG`, so it is Profile B only — and `make` with no
+  arguments builds **Profile A** (`Makefile:220`). Profile A is not
+  free of the hazard the clause exists for: it places `r_tab_lo = $6000`
+  and `r_tab_hi = $7000` by equate (`src/lib/constants_lib.s:95-96`),
+  both inside `MAIN`'s `$0900-$9FFF` (`src/c64.cfg:13`), so ld65 can
+  place a growing segment across the Shoup tables, link clean, and
+  corrupt them at runtime with no diagnostic — the same failure mode
+  §6.7 was adopted for on the sqtab side. The comment at `src/main.s:43-44`
+  is where the gap survived review — "Profile A ... emits and consumes no
+  sqtab, so there is no window to guard" is true about the sqtab and false
+  about the profile, since Profile A has its own equate-placed window.
+  `examples/smoke_test/` already carries the leg that closes it
+  (`smoke_test.s:83`, `.assert __MAIN_LAST__ <= r_tab_lo`); `src/main.s`
+  does not. The consumer-facing example guards the default profile and
+  the library's own image does not. Recorded as outstanding alongside
+  rows 9, 13 and 14.
+
+  The other three outstanding rows:
+  - `src/lib/poly1305_lib.s:143` (row 9) is tautological. `sqtab_hi` is
+    *defined* as `sqtab_lo + $0200` on the line above (`:141-142`), so the
+    assert restates its own definition and holds for every
+    `LIB_SHARED_SQTAB_BASE`.
+  - `src/lib/lib_manifest.s:383` (row 13) is vacuous across every
+    reachable build. `_OWN_SQTAB` and `_OWN_CT_MUL` are each defined as
+    either `0` or the corresponding `_USE_*` (`:366-374`), so the subset
+    holds by construction and no combination of `POLY1305_PROFILE_LONG`,
+    `SHARED_SQTAB_INIT` and `SHARED_CT_MUL_8X8` can falsify it.
+  - `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` (row 14) is a rung below a
+    check that cannot fail: there is no check. The five literals are
+    referenced nowhere in `Makefile`, `tools/`, `test_consumer/` or
+    `examples/`; the §14.1 guards pushed three of them past their declared
+    values and no build, audit or test in this repo reported it. The
+    re-measure one-liner now recorded beside them in
+    `src/lib/lib_manifest.s` is a mitigation, not a check.
+
+  Rows 4, 8 and 12 are the middle ground and are recorded as such — each
+  can fail on a wrong input, none has been shown to. Row 8 is
+  Profile-B-only and correctly so, since Profile A emits and consumes no
+  sqtab; that is a real scoping decision, unlike row 11's.
+
+  §15 is a SHOULD, and §15.4 makes it **not retroactive** — "an adopter
+  conformant before this section landed is not out of conformance the
+  moment it does", so rows 9, 13 and 14 are a recorded position and a
+  standing work item rather than a conformance failure. **Row 11 is not
+  covered by that reasoning**: §6.7 is a long-standing clause this library
+  claims to satisfy, and the gap is in the coverage of the claim, not in
+  the evidence for it. Tagged `v0.17.0` (`2d7f40c`), verified header
+  0.17.0.
 
   Tag state as of 2026-08-28: all of v0.11.1 (`cc3f8a6`), v0.12.0
   (`a6bb30a`), v0.12.1 (`42c84bd`), v0.13.0 (`c771935`) and v0.14.0
   (`e76bcff`) are tagged on the contract's `main`, each verified to carry
   the matching SPEC header — so every version in this record is citable
-  at its tag.
+  at its tag. Re-checked 2026-08-31 for the two additions: `v0.16.0`
+  (`3a91ebb`, merge of the §14 PR) and `v0.17.0` (`2d7f40c`) are both
+  tagged and both carry their own version in the SPEC header, per §12's
+  referencing rule.
 
 
 ## [0.9.0] — 2026-08-15
