@@ -358,10 +358,14 @@ In addition, the manifest emits the [SPEC §8.4 catch-loop](https://github.com/J
 
 This library implements
 [c64-lib-contract](https://github.com/JC-000/c64-lib-contract) and is
-aligned to **SPEC v0.10.3**, audited clause-by-clause rather than
-assumed. §13 (network backend ABI) and §8.2 (`reu_mul`) do not apply —
-this is not a network backend, and the library neither owns nor consumes
-the REU multiply table (`SHARED_CONSUMES = $0005`).
+aligned to **SPEC v0.17.0**, audited clause-by-clause rather than
+assumed. The table below is the v0.10.3 clause-by-clause audit plus the
+two sections added since; every revision from v0.10.4 to v0.17.0 is
+recorded individually, with its finding, in the "Contract conformance"
+section of [`CHANGELOG.md`](CHANGELOG.md). §13 (network backend ABI) and
+§8.2 (`reu_mul`) do not apply — this is not a network backend, and the
+library neither owns nor consumes the REU multiply table
+(`SHARED_CONSUMES = $0005`).
 
 | Clause | How this library satisfies it |
 |---|---|
@@ -374,16 +378,21 @@ the REU multiply table (`SHARED_CONSUMES = $0005`).
 | §6.3 reachability | Profile A/B ride `CONTRACT_DEFINES` (one member list, so no target of their own); a knob change invalidates the object cache, so no build can exit 0 with the artifact the knob did not request. On v0.11.1's split this is the **invalidation** branch — the rejection branch is vacuous here, since no member-set axis is reachable through the defines |
 | §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
 | §6.6 footprint | per-archive, safe-direction, with the required `COLD_BYTES` companion |
-| §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window |
+| §6.7 reservations | `src/main.s` asserts the image cannot grow into the sqtab window — **Profile B only.** Profile A's equate-placed `r_tab_lo`/`r_tab_hi` (`$6000`/`$7000`, inside `MAIN`) are unguarded in the library's own image, so the default build carries no §6.7 assert; `examples/smoke_test/smoke_test.s:83` has the leg `src/main.s` lacks. Open gap — see `CHANGELOG.md` |
 | §8.0/§8.1/§8.3/§8.4 | bit constants, `LIB_SHARED_SQTAB_BASE` and `sqtab_lo`/`sqtab_hi` all unexported; deferral imports the provider rather than stubbing |
+| §14 termination + domain | no input-dependent termination condition on the public surface (37 entry points, 29 loops: 23 fixed-trip, 5 length-bounded, `poly_ripple` data-dependent but total under its `cpx #33` ceiling); the domain is the relation `ptr + len <= $10000` on both buffers, documented and rejected at both entry points with `A = AEAD_ERR_DOMAIN`. §14.2's equate does not apply to a relation, by its own text |
+| §15 evidence | **partly satisfied.** The sixteen checks this library offers as evidence for a contract clause are enumerated per check — not per gate, since `verify-zp-usage` and `lib-verify-shared` are each several independent legs — in the "Contract conformance" section of [`CHANGELOG.md`](CHANGELOG.md), with what each evidences and whether it has been demonstrated capable of failing. Nine have; three can fail but have never been exercised; four are outstanding — `poly1305_lib.s:143` and `lib_manifest.s:383` cannot fail, `RESIDENT_BYTES` has no check at all, and §6.7 has no check on Profile A (the row above). §15 is a SHOULD and is explicitly not retroactive; the §6.7 gap is not a §15 matter at all |
 
 **`make verify-zp-usage`** is the R2 audit: it derives the occupied
 zero-page set from the exported slot addresses in `zp_config.o` and
 checks it against the §5 `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` equate,
 which is otherwise a hand-maintained literal free to drift. It also
-rejects an unintended alias (two distinct slots on one address would
-*shrink* the union rather than fail) and an understated equate, per
-§6.6's safe-direction rule. Current result: 24 exported names, 88 bytes
+rejects an unintended alias and an understated equate, per §6.6's
+safe-direction rule. The alias leg sweeps every occupied address, not
+just each slot's start, so it catches an overlap at a different start
+and a slot contained inside a larger one — both of which *shrink* the
+measured union rather than tripping the equate check, and neither of
+which the earlier start-address keying could report. Current result: 24 exported names, 88 bytes
 occupied, equate 88. Not named `lib-*` — §6.1 reserves that namespace
 for targets producing archives.
 
