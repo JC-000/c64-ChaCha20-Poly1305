@@ -29,6 +29,20 @@ Case classes (every one is a hard pass/fail unless marked NOTE):
     aead_verify_tag    the constant-time compare entry called directly:
                        equal, single-bit differences at byte 0/7/15, all
                        different, zero-vs-zero.
+    wrap guard         SPEC §14.1 entry domain, BOTH input buffers:
+                       aead_data_ptr + aead_data_len <= $10000 and
+                       aead_aad_ptr + aead_aad_len <= $10000. A fixed,
+                       uncounted list of four accept cases (incl. both
+                       exact-$10000 boundaries, data $FF00+$0100 and AAD
+                       $FF01+$FF) and five reject cases, each reject case
+                       run against BOTH entry points. Accept legs are
+                       full KATs (ciphertext + tag); reject legs poison
+                       first and then assert the tag output, a 256-byte
+                       sentinel across the front of the data buffer,
+                       aead_scratch, and the key/nonce inputs are all
+                       untouched, plus the documented A=$01 status.
+                       aead_scratch is the load-bearing witness for the
+                       AAD legs, whose walker only reads.
     aead               encrypt + decrypt over the length grid pt in
                        {0..3840 edges} x aad in {0..255 edges}, with the
                        tag read from BOTH the documented output symbol
@@ -120,7 +134,7 @@ REQUIRED_LABELS = [
     "poly_r", "poly_s", "poly1305_tag",
     "aead_encrypt", "aead_decrypt", "aead_verify_tag",
     "aead_key", "aead_nonce", "aead_aad_ptr", "aead_aad_len",
-    "aead_data_ptr", "aead_data_len", "aead_tag",
+    "aead_data_ptr", "aead_data_len", "aead_tag", "aead_scratch",
     "zp_ptr1",
 ]
 
@@ -564,6 +578,417 @@ def t_verify_tag(c, rng):
     return ok, tot
 
 
+# ---------------------------------------------------------------------------
+# SPEC 14.1 domain guards: ptr + len <= $10000, for BOTH input buffers
+# ---------------------------------------------------------------------------
+# FIXED, UNCOUNTED case lists. Deliberately not part of t_aead's corpus and
+# deliberately without a QUICK_COUNTS entry: the counted generators slice
+# `cases[:n]`, so a counted edge-case list would be silently eaten in quick
+# mode. Deliberately not in tools/test_chacha20_poly1305.py either -- that
+# runner reports an empty group as OK, so a case list that silently emptied
+# would read green.
+
+AEAD_OK = 0x00
+AEAD_ERR_DOMAIN = 0x01
+AEAD_ERR_AUTH = 0xFF
+
+# --- data buffer: 16-bit length, so every shape is reachable.
+# ptr + len == $10000 is the last LEGAL value (buffer ends exactly at $FFFF).
+WRAP_ACCEPT = [(0xC100, 0x0001), (0xFF00, 0x0100)]
+# One past the boundary; a 16-bit-wrapping length; and a case whose high
+# bytes alone ($09 + $FF) do not tell you the answer.
+WRAP_REJECT = [(0xFF00, 0x0101), (0xFF00, 0xFFFF), (0x0900, 0xFFFF)]
+
+# --- AAD: aead_aad_len is ONE BYTE, which constrains the case list.
+# $0100 cannot be written to an 8-bit field, so the data path's
+# "one past the boundary" shape is spelled ($FF02, $FF) here; and no
+# low-pointer case can violate the relation at all, since ptr_hi must be
+# $FF for ptr + len to reach $10000 with len <= $FF. The reachable
+# violation set is exactly {ptr in $FF02..$FFFF}.
+WRAP_ACCEPT_AAD = [(0xC000, 0x08), (0xFF01, 0xFF)]
+WRAP_REJECT_AAD = [(0xFF02, 0xFF), (0xFFFF, 0xFF)]
+
+SENTINEL = 0xA5
+SENTINEL_LEN = 256          # window at the FRONT of the buffer: a guard
+                            # placed after the ChaCha20 loop has started
+                            # clobbers the front first.
+POISON_TAG = b"\xEE" * 16
+POISON_SCRATCH = b"\x5A" * 16
+POISON_PTAG = b"\xDB" * 16
+
+
+def _pad16(b):
+    return b"\x00" * ((-len(b)) % 16)
+
+
+def _rfc7539_tag(key, nonce, aad, ct_as_cpu_reads_it):
+    """The RFC 7539 2.8 tag, built from the same pyca oracles hz_aead uses
+    but with the Poly1305 message spelled out, so it can be evaluated over
+    bytes that differ from `hz_aead`'s own ciphertext. Needed at $FF00,
+    where the CPU reads ROM and writes RAM (see _wrap_probe_ffxx)."""
+    otk = hz_block(key, 0, nonce)[:32]
+    m = ct_as_cpu_reads_it
+    msg = (aad + _pad16(aad) + m + _pad16(m)
+           + struct.pack("<QQ", len(aad), len(m)))
+    return hz_poly(otk, msg)
+
+
+def _wrap_setup(c, key, nonce, data_ptr, data_len, aad_ptr, aad_len):
+    """Populate the AEAD inputs with EXPLICIT (ptr, len) pairs for both
+    buffers, and without touching either buffer's contents -- c.aead_setup()
+    always points at DATA_BUF/AAD_BUF and always writes the data, neither of
+    which works here."""
+    c.w(c.L["aead_key"], key)
+    c.w(c.L["aead_nonce"], nonce)
+    c.ptr("aead_aad_ptr", aad_ptr)
+    c.w(c.L["aead_aad_len"], [aad_len])
+    c.ptr("aead_data_ptr", data_ptr)
+    c.w(c.L["aead_data_len"], struct.pack("<H", data_len))
+
+
+def _wrap_probe_ffxx(c, rng):
+    """Establish what $FF00-$FFFF actually is before asserting over it.
+
+    That window is RAM underneath KERNAL ROM. With $01 = $37 (the power-on
+    value, which this library never changes) CPU *writes* land in RAM but
+    CPU *reads* come from ROM, while the harness's own reads go through the
+    monitor / DMA and normally see RAM. So `hz_aead` does NOT model an AEAD
+    call whose DATA buffer is in that window, and a sentinel written there
+    is only observable if harness reads really do see RAM. Both facts are
+    measured, not assumed.
+
+    Method: run chacha20_encrypt over the window twice with two different
+    keystreams ks1, ks2 and read back out1, out2.
+
+        CPU reads ROM (R), harness reads RAM: out1=R^ks1, out2=R^ks2
+                                              -> out1^out2 == ks1^ks2
+        CPU reads RAM:                        out2 = out1^ks2
+                                              -> out1^out2 == ks2
+        harness reads ROM:                    out1 == out2
+                                              -> out1^out2 == 0
+
+    Returns (mode, cpu_view) where mode is "cpu_rom" / "cpu_ram" /
+    "opaque" and cpu_view is the 256 bytes the CPU reads at $FF00 (only
+    meaningful for "cpu_rom")."""
+    def stream(key, nonce, ctr):
+        c.chacha_init(key, nonce, ctr)
+        c.ptr("cc20_data_ptr", 0xFF00)
+        c.w(c.L["cc20_remain"], [0x00])
+        c.w(c.L["cc20_remain_hi"], [0x01])
+        c.call("chacha20_encrypt")
+        return c.r(0xFF00, 256)
+
+    k1, n1 = rb(rng, 32), rb(rng, 12)
+    k2, n2 = rb(rng, 32), rb(rng, 12)
+    ks1 = hz_stream_wrap(k1, 1, n1, bytes(256))
+    ks2 = hz_stream_wrap(k2, 1, n2, bytes(256))
+    out1 = stream(k1, n1, 1)
+    out2 = stream(k2, n2, 1)
+    delta = bytes(a ^ b for a, b in zip(out1, out2))
+    if delta == bytes(a ^ b for a, b in zip(ks1, ks2)):
+        return "cpu_rom", bytes(a ^ b for a, b in zip(out1, ks1))
+    if delta == ks2:
+        return "cpu_ram", None
+    return "opaque", None
+
+
+def _wrap_accept_data(c, rng, ptr, length, mode, cpu_view):
+    """Accept leg for the DATA relation. Full KAT -- ciphertext AND tag,
+    every byte -- so that a guard which silently truncates the length to
+    some ceiling fails here instead of passing a status-only check."""
+    key, nonce, aad = rb(rng, 32), rb(rng, 12), rb(rng, 7)
+    label = f"accept data ptr=${ptr:04X} len=${length:04X}"
+    c.w(AAD_BUF, aad)
+
+    if ptr + length <= 0xE000 or mode == "cpu_ram":
+        # Plain RAM: the buffer the harness writes is the buffer the CPU
+        # reads, so hz_aead models the call exactly.
+        c.w(ptr, rb(rng, length))
+        pt = c.r(ptr, length)
+        exp_ct, exp_tag = hz_aead(key, nonce, aad, pt)
+    elif mode == "cpu_rom":
+        # $FF00-$FFFF: the CPU reads KERNAL ROM and writes the RAM
+        # underneath. Every ChaCha20 read and every Poly1305 read of the
+        # data buffer therefore sees `cpu_view`, including the read-back
+        # inside aead_compute_tag AFTER the ciphertext has been written.
+        # So the expected RAM contents are cpu_view ^ keystream, and the
+        # expected tag is over cpu_view -- NOT over the ciphertext. This
+        # is still a full-content KAT against pyca; it is just not
+        # expressible as a call to hz_aead().
+        exp_ct = hz_stream_wrap(key, 1, nonce, cpu_view)
+        exp_tag = _rfc7539_tag(key, nonce, aad, cpu_view)
+    else:
+        exp_ct = exp_tag = None
+
+    _wrap_setup(c, key, nonce, ptr, length, AAD_BUF, len(aad))
+    c.w(c.L["aead_tag"], POISON_TAG)
+    st = c.call("aead_encrypt")
+    got_ct = c.r(ptr, length)
+    got_tag = c.r(c.L["aead_tag"], 16)
+
+    checks = [("status", st == AEAD_OK)]
+    if exp_ct is None:
+        print(f"  NOTE {label}: $FF00 window is opaque to the harness "
+              f"(mode={mode}); content NOT verified, status only")
+        checks.append(("tag-written", got_tag != POISON_TAG))
+    else:
+        checks.append(("ciphertext", got_ct == exp_ct))
+        checks.append(("tag", got_tag == exp_tag))
+
+    # aead_decrypt must accept the same boundary. In cpu_rom mode the tag
+    # recomputes over the same ROM bytes, so a valid tag still verifies.
+    _wrap_setup(c, key, nonce, ptr, length, AAD_BUF, len(aad))
+    c.w(c.L["aead_tag"], got_tag)
+    st_d = c.call("aead_decrypt")
+    checks.append(("decrypt-status", st_d == AEAD_OK))
+
+    bad = [n for n, good in checks if not good]
+    if bad:
+        fail("wrap_guard-accept", case=label, failed=",".join(bad),
+             mode=mode, status=st, decrypt_status=st_d,
+             ours_ct=got_ct, expected_ct=exp_ct,
+             ours_tag=got_tag, expected_tag=exp_tag,
+             key=key, nonce=nonce, aad=aad)
+    return len(checks) - len(bad), len(checks), 0, 0
+
+
+def _wrap_accept_aad(c, rng, aad_ptr, aad_len, mode, cpu_view):
+    """Accept leg for the AAD relation. The data buffer stays in ordinary
+    RAM, so even at the $FF01 boundary -- where the AAD itself is read from
+    KERNAL ROM -- this is a plain hz_aead KAT: the bytes the CPU reads as
+    AAD are cpu_view[1:], which is exactly what we hand the oracle."""
+    key, nonce = rb(rng, 32), rb(rng, 12)
+    label = f"accept aad ptr=${aad_ptr:04X} len=${aad_len:02X}"
+    data_len = 96
+    c.w(DATA_BUF, rb(rng, data_len))
+    pt = c.r(DATA_BUF, data_len)
+
+    if aad_ptr + aad_len <= 0xE000 or mode == "cpu_ram":
+        c.w(aad_ptr, rb(rng, aad_len))
+        aad = c.r(aad_ptr, aad_len)
+    elif mode == "cpu_rom":
+        off = aad_ptr - 0xFF00
+        aad = cpu_view[off:off + aad_len]
+    else:
+        aad = None
+
+    _wrap_setup(c, key, nonce, DATA_BUF, data_len, aad_ptr, aad_len)
+    c.w(c.L["aead_tag"], POISON_TAG)
+    st = c.call("aead_encrypt")
+    got_ct = c.r(DATA_BUF, data_len)
+    got_tag = c.r(c.L["aead_tag"], 16)
+
+    checks = [("status", st == AEAD_OK)]
+    if aad is None:
+        print(f"  NOTE {label}: AAD window opaque to the harness "
+              f"(mode={mode}); content NOT verified, status only")
+        checks.append(("tag-written", got_tag != POISON_TAG))
+        exp_ct = exp_tag = None
+    else:
+        exp_ct, exp_tag = hz_aead(key, nonce, aad, pt)
+        checks.append(("ciphertext", got_ct == exp_ct))
+        checks.append(("tag", got_tag == exp_tag))
+
+    bad = [n for n, good in checks if not good]
+    if bad:
+        fail("wrap_guard-accept-aad", case=label, failed=",".join(bad),
+             mode=mode, status=st, ours_ct=got_ct, expected_ct=exp_ct,
+             ours_tag=got_tag, expected_tag=exp_tag, key=key, nonce=nonce,
+             aad=aad)
+    return len(checks) - len(bad), len(checks), 0, 0
+
+
+def _wrap_reject(c, rng, entry, mode, *, data=None, aad=None):
+    """Reject leg, for either relation. Poison first, then check.
+
+    ASSERTION CLASSIFICATION. Not every check here can fail, and saying so
+    matters: a passing count that silently includes unfalsifiable checks
+    reassures without carrying the information it appears to carry, which
+    is the defect this whole change is about. Each check below is tagged
+    DISCRIMINATING (it can fail if the guard is removed, on this entry
+    point) or TRIPWIRE (it cannot currently fail, and is retained only to
+    catch a future regression). Tripwires are counted and reported
+    SEPARATELY so they never inflate the headline number.
+
+      status                  DISCRIMINATING on both entries. Without the
+                              guard the call returns $00 or $ff, not $01.
+
+      aead_scratch-untouched  DISCRIMINATING on both entries.
+                              aead_compute_tag copies the AAD into
+                              aead_scratch and both entry points reach it,
+                              so it is the earliest observable evidence the
+                              call proceeded. Execution confirms it fires
+                              on all four AAD legs. On the decrypt legs it
+                              and poly1305_tag are the two memory
+                              witnesses -- the front sentinel cannot fire
+                              there (see below), so between them they are
+                              what makes those legs discriminate at all.
+
+      poly1305_tag-untouched  DISCRIMINATING on both entries. poly1305_final
+                              writes it (poly1305_lib.s:1278) and both
+                              entries reach it via aead_compute_tag. This
+                              is also the only test anywhere of the
+                              docs/API.md claim that a rejected call leaves
+                              poly1305_tag alone.
+
+      aead_tag-untouched      DISCRIMINATING on aead_encrypt only, where the
+                              publish loop writes it. aead_decrypt NEVER
+                              writes aead_tag -- it only reads it to verify
+                              -- so the check is vacuous by construction
+                              there and is NOT run on decrypt legs.
+
+      front-sentinel          DISCRIMINATING on aead_encrypt (the ChaCha20
+                              loop writes the buffer). TRIPWIRE on
+                              aead_decrypt for a structural reason: decrypt
+                              verifies BEFORE it decrypts, so an
+                              out-of-domain call without the guard computes
+                              a tag over wrapped memory, mismatches, and
+                              never reaches the write. It cannot fire there
+                              no matter what the fixture does -- and this is
+                              not fixable by a better fixture, because an
+                              out-of-domain input has no computable valid
+                              tag: the reference cannot express what the CPU
+                              would read across the wrap.
+
+      key/nonce-unchanged     TRIPWIRE on both entries. The library contains
+                              no `sta aead_key` or `sta aead_nonce` on any
+                              path, so these cannot fail today. Kept because
+                              clobbering a caller's input buffer is a real
+                              regression class and this is the natural place
+                              to notice it.
+    """
+    key, nonce = rb(rng, 32), rb(rng, 12)
+    data_ptr, data_len = data if data else (DATA_BUF, 64)
+    aad_ptr, aad_len = aad if aad else (AAD_BUF, 8)
+    which = "data" if data else "aad"
+    label = (f"reject {which} {entry} "
+             f"data=(${data_ptr:04X},${data_len:04X}) "
+             f"aad=(${aad_ptr:04X},${aad_len:02X})")
+    window_observable = data_ptr < 0xE000 or mode in ("cpu_ram", "cpu_rom")
+    encrypting = entry == "aead_encrypt"
+
+    # $0900 holds live code (lib_entry + the CODE/LIB_..._CODE alignment
+    # fill); $FF00 holds RAM under the KERNAL vectors. Save and restore
+    # either way -- the guard must not write, but a BROKEN guard would,
+    # and the next case should not inherit the damage.
+    saved = c.r(data_ptr, SENTINEL_LEN)
+    c.w(data_ptr, bytes([SENTINEL]) * SENTINEL_LEN)
+
+    _wrap_setup(c, key, nonce, data_ptr, data_len, aad_ptr, aad_len)
+    c.w(c.L["aead_tag"], POISON_TAG)
+    c.w(c.L["aead_scratch"], POISON_SCRATCH)
+    c.w(c.L["poly1305_tag"], POISON_PTAG)
+    st = c.call(entry)
+
+    got_front = c.r(data_ptr, SENTINEL_LEN)
+    got_tag = c.r(c.L["aead_tag"], 16)
+    got_scratch = c.r(c.L["aead_scratch"], 16)
+    got_ptag = c.r(c.L["poly1305_tag"], 16)
+    got_key = c.r(c.L["aead_key"], 32)
+    got_nonce = c.r(c.L["aead_nonce"], 12)
+    c.w(data_ptr, saved)
+
+    intact = bytes([SENTINEL]) * SENTINEL_LEN
+    # (name, passed, is_discriminating)
+    checks = [
+        ("status", st == AEAD_ERR_DOMAIN, True),
+        ("aead_scratch-untouched", got_scratch == POISON_SCRATCH, True),
+        ("poly1305_tag-untouched", got_ptag == POISON_PTAG, True),
+    ]
+    if encrypting:
+        # Vacuous on decrypt: that entry point never writes aead_tag.
+        checks.append(("aead_tag-untouched", got_tag == POISON_TAG, True))
+    if window_observable:
+        checks.append(("front-sentinel", got_front == intact, encrypting))
+    else:
+        print(f"  NOTE {label}: buffer window opaque to the harness "
+              f"(mode={mode}); sentinel NOT checked")
+    checks.append(("key-unchanged", got_key == key, False))
+    checks.append(("nonce-unchanged", got_nonce == nonce, False))
+
+    bad = [n for n, good, _ in checks if not good]
+    if bad:
+        fail("wrap_guard-reject", case=label, failed=",".join(bad), mode=mode,
+             status=st, expected_status=AEAD_ERR_DOMAIN, ours_tag=got_tag,
+             ours_scratch=got_scratch, ours_poly1305_tag=got_ptag,
+             front_changed=(got_front != intact),
+             front_after=got_front, key_changed=(got_key != key),
+             nonce_changed=(got_nonce != nonce))
+    disc = [(n, g) for n, g, d in checks if d]
+    trip = [(n, g) for n, g, d in checks if not d]
+    return (sum(1 for _, g in disc if g), len(disc),
+            sum(1 for _, g in trip if g), len(trip))
+
+
+def t_wrap_guard(c, rng):
+    """SPEC 14.1 entry guards: ptr + len <= $10000 for both input buffers."""
+    print("\n[wrap guard] 14.1 domain: data and AAD, ptr + len <= $10000")
+
+    # Host-side self-check of the _rfc7539_tag model used by the $FF00 data
+    # leg, against hz_aead on a case where both are valid. If this ever
+    # fails, that KAT is measuring the model, not the library.
+    _k, _n, _a, _p = rb(rng, 32), rb(rng, 12), rb(rng, 7), rb(rng, 133)
+    _ct, _tag = hz_aead(_k, _n, _a, _p)
+    if (hz_stream_wrap(_k, 1, _n, _p), _rfc7539_tag(_k, _n, _a, _ct)) != (_ct, _tag):
+        fail("wrap_guard-model", note="_rfc7539_tag does not reproduce hz_aead")
+        return {"discriminating_ok": 0, "discriminating_total": 1,
+                "tripwire_ok": 0, "tripwire_total": 0}
+
+    ok = tot = trip_ok = trip_tot = 0
+
+    def add(r):
+        nonlocal ok, tot, trip_ok, trip_tot
+        d_ok, d_tot, t_ok, t_tot = r
+        ok += d_ok; tot += d_tot; trip_ok += t_ok; trip_tot += t_tot
+
+    # 1. Ordinary in-domain calls, plain RAM. Full KATs.
+    add(_wrap_accept_data(c, rng, *WRAP_ACCEPT[0], "cpu_ram", None))
+    add(_wrap_accept_aad(c, rng, *WRAP_ACCEPT_AAD[0], "cpu_ram", None))
+
+    # 2. What is $FF00-$FFFF on this machine? Needed by 3, 4 and 5.
+    mode, cpu_view = _wrap_probe_ffxx(c, rng)
+    desc = {"cpu_rom": "CPU reads ROM / writes the RAM underneath",
+            "cpu_ram": "plain RAM",
+            "opaque": "not observable by the harness"}[mode]
+    print(f"  $FF00 window: mode={mode} ({desc})")
+
+    # 3. Reject legs, both relations, both entry points. These write
+    #    nothing, so they are safe to run before the accept legs below.
+    for ptr, length in WRAP_REJECT:
+        for entry in ("aead_encrypt", "aead_decrypt"):
+            add(_wrap_reject(c, rng, entry, mode, data=(ptr, length)))
+    for ptr, length in WRAP_REJECT_AAD:
+        for entry in ("aead_encrypt", "aead_decrypt"):
+            add(_wrap_reject(c, rng, entry, mode, aad=(ptr, length)))
+
+    # 4. The AAD boundary at $FF01 + $FF == $10000. Reads KERNAL ROM but
+    #    writes nothing there, so it is safe ahead of the data boundary.
+    add(_wrap_accept_aad(c, rng, *WRAP_ACCEPT_AAD[1], mode, cpu_view))
+
+    # 5. LAST: the data boundary at $FF00 + $0100 == $10000. This one
+    #    genuinely writes 256 bytes of RAM beneath the KERNAL vectors.
+    #    Harmless while ROM is banked in ($01 = $37, which this library
+    #    never changes) but it does not survive a reset, so it runs last
+    #    and its ciphertext is read back before anything else runs.
+    add(_wrap_accept_data(c, rng, *WRAP_ACCEPT[1], mode, cpu_view))
+
+    n_accept = len(WRAP_ACCEPT) + len(WRAP_ACCEPT_AAD)
+    n_reject = len(WRAP_REJECT) + len(WRAP_REJECT_AAD)
+    print(f"  {ok}/{tot} DISCRIMINATING assertions hold "
+          f"({n_accept} accept, {n_reject} reject x 2 entries)")
+    print(f"  {trip_ok}/{trip_tot} TRIPWIRE assertions hold — reported "
+          f"separately because they CANNOT currently fail, so they are not "
+          f"evidence the guards work:")
+    print(f"      key/nonce-unchanged: the library has no `sta aead_key` or "
+          f"`sta aead_nonce` on any path.")
+    print(f"      front-sentinel on decrypt legs: aead_decrypt verifies "
+          f"before it decrypts, so an out-of-domain call mismatches and "
+          f"never reaches the write.")
+    return {"discriminating_ok": ok, "discriminating_total": tot,
+            "tripwire_ok": trip_ok, "tripwire_total": trip_tot}
+
+
+
 def t_decrypt_fail_residue(c, rng):
     """NOTE only: what does the failure path leave behind in RAM?"""
     print("\n[aead_decrypt failure residue] (NOTE — reported, not asserted)")
@@ -698,6 +1123,7 @@ def main():
         summary["chacha20_encrypt"] = t_chacha_encrypt(c, rng, counts["enc"])
         summary["poly1305"] = t_poly(c, rng, counts["poly"])
         summary["aead_verify_tag"] = t_verify_tag(c, rng)
+        summary["wrap_guard"] = t_wrap_guard(c, rng)
         summary["aead"] = t_aead(c, rng, counts["aead"])
         summary["residue"] = t_decrypt_fail_residue(c, rng)
         mgr.release(inst)

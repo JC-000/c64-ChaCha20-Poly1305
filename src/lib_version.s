@@ -61,7 +61,7 @@
 ;               then-current "matches the MAJOR bump" wording, which
 ;               contract v0.7.5 has since repudiated; corrected here
 ;               (issue #67). The v0.7.0 tag itself still reports 1.
-;   3  unreleased — BREAKING: the general-purpose ZP slots zp_tmp1,
+;   3  v0.8.0 — BREAKING: the general-purpose ZP slots zp_tmp1,
 ;               zp_tmp2, zp_ptr1 and zp_ptr2 are renamed to
 ;               chacha20poly1305_zp_* per the SPEC §2 prefix registry
 ;               (issue #76). The library's TUs now .importzp the
@@ -78,6 +78,40 @@
 ;               from the surface such a consumer sees, which is the
 ;               second reason this generation increments.
 ;
+;               LABEL CORRECTION: this entry read "3  unreleased" from
+;               the day it was written, and shipped that way in BOTH
+;               v0.8.0 and v0.9.0 — 28 lines above the constant
+;               below setting the counter to 3. The constant was right
+;               and the label was wrong. It has already misled a reader:
+;               the first draft of generation 4 argued from this line
+;               that generation 3 was unpublished and folded the §14.1
+;               convention change into it. Verify against the tag, not
+;               against this comment:
+;                   git show v0.8.0:src/lib_version.s | grep ABI_VERSION
+;
+;   4  unreleased — BREAKING: aead_encrypt and aead_decrypt gained the
+;               SPEC §14.1 domain guards and with them a CHANGED CALLING
+;               CONVENTION. aead_encrypt now returns a status in A
+;               ($00 ok / $01 domain rejection) where it previously left
+;               A undefined, and aead_decrypt gained a third return
+;               value ($01) alongside $00/$ff. A caller that treated
+;               aead_encrypt's A as a don't-care is unaffected; a caller
+;               that must distinguish an authentication failure from a
+;               domain rejection has to `cmp #$ff` where `bne` used to
+;               be enough. See chacha20poly1305_lib.s's AEAD_ERR_DOMAIN
+;               block.
+;
+;               This INCREMENTS rather than extending generation 3.
+;               Generation 3 is published — v0.8.0 and v0.9.0 both ship
+;               ABI_VERSION = 3 — so a consumer can hold a build whose
+;               surface is "generation 3 without the domain guards", and
+;               distinguishing exactly that is what the counter is for.
+;
+;               (Generation 2 is not a precedent for folding. v0.7.0
+;               ships ABI_VERSION = 1 and v0.8.0 jumps to 3, so the
+;               value 2 has never appeared in a release at all; it was
+;               corrected onto a value no consumer was holding.)
+;
 ; TU ISOLATION (SPEC §1, contract v0.7.0): this file MUST export the
 ; version equates and NOTHING else. ld65 links whole object members, so
 ; if the deprecated bare names shared a member with anything a consumer
@@ -89,7 +123,7 @@
 LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0
 LIB_CHACHA20_POLY1305_VERSION_MINOR = 9
 LIB_CHACHA20_POLY1305_VERSION_PATCH = 0
-LIB_CHACHA20_POLY1305_ABI_VERSION   = 3
+LIB_CHACHA20_POLY1305_ABI_VERSION   = 4
 
 ; Exported `:abs` so ca65 emits them as absolute values rather than
 ; zeropage: an integer equate <= $00ff would otherwise be tagged

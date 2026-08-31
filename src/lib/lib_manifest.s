@@ -102,13 +102,66 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;
 ;     make lib && for o in build/lib/objs/*.o; do od65 --dump-segsize $o; done
 ;
-;   Measured (aead_tag output fix re-measure; +11 B CODE in every
-;   configuration over the issue #69 numbers, from the 16-byte
-;   poly1305_tag -> aead_tag copy loop at the end of aead_encrypt):
-;     Profile A full       15 555 B  (CODE 15 260 + DATA 295) -> 15 616
-;     Profile A aead-only  15 230 B  (CODE 14 935 + DATA 295) -> 15 360
-;     Profile B full       16 849 B  (CODE 16 554 + DATA 295) -> 16 896
-;     Profile B aead-only  16 524 B  (CODE 16 229 + DATA 295) -> 16 640
+;   Measured (SPEC §14.1 domain-guard re-measure; +96 B CODE in EVERY
+;   configuration over the aead_tag numbers — the two guard expansions
+;   at each of the two entry points, 47 B per entry point, plus the
+;   2-byte `lda #AEAD_OK` that gave aead_encrypt a success return):
+;     Profile A full       15 651 B  (CODE 15 356 + DATA 295) -> 15 872
+;     Profile A aead-only  15 326 B  (CODE 15 031 + DATA 295) -> 15 360
+;     Profile B full       16 945 B  (CODE 16 650 + DATA 295) -> 17 152
+;     Profile B aead-only  16 620 B  (CODE 16 325 + DATA 295) -> 16 640
+;     Profile B app-owned  16 689 B  (CODE 16 394 + DATA 295) -> 16 896
+;
+;   THREE OF THESE LITERALS WERE UNDER-REPORTING AND NOTHING CAUGHT IT.
+;   The domain guards pushed Profile A full (15 616 -> actual 15 651),
+;   Profile B full (16 896 -> 16 945) and Profile B app-owned
+;   (16 640 -> 16 689) past their declared values. Under-reporting is the
+;   DANGEROUS direction: a consumer's `.assert resident <= N` fit check
+;   under-reserves and the overrun is silent.
+;
+;   These four (now five) literals are hand-maintained with NO automated
+;   check — unlike LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES, which
+;   tools/verify_zp_usage.py pins against the built objects. Nothing in
+;   the build, in `make test`, or in any audit would have flagged the
+;   overrun above; it was found only because a footprint measurement was
+;   run by hand. A verify-resident-bytes audit on the same pattern as
+;   verify_zp_usage.py is the obvious closure and is tracked as wave 3
+;   item F. Until it exists, RE-MEASURE THESE BY HAND whenever you add
+;   code to a library TU. This one-liner sums the two segments across a
+;   variant's objects and prints the total, which should equal the
+;   "measured" figure in the table above for whichever variant you built:
+;
+;     make lib && od65 --dump-segments build/lib/objs/*.o | awk '
+;       /Index:/{n=""} /Name:/{n=$2}
+;       /Size:/ && n ~ /LIB_CHACHA20_POLY1305_(CODE|DATA)/ {s+=$2; k++}
+;       END{ if (k==0) {
+;              print "FATAL: matched 0 CODE/DATA segments." > "/dev/stderr"
+;              print "  Wrong path, an .a archive, or od65 format changed." > "/dev/stderr"
+;              exit 1 }
+;            print s }'
+;
+;   Substitute objs-aead-only / objs-app-owned (after `make lib-aead-only`
+;   / `make lib-app-owned`) or build/profile-a for the other rows. Compare
+;   the result against the literal THIS build's .ifdef selects, below.
+;
+;   THE k==0 GUARD AND THE `/Index:/{n=""}` RESET ARE LOAD-BEARING. Do not
+;   simplify them away:
+;
+;     * od65 EXITS 0 on a .a archive, printing only "(no xo65 object
+;       file)". Without the k==0 check the pipeline sums nothing, prints a
+;       blank line and succeeds — and since the basis note above says
+;       "archive's member objects", pointing this at the .a is the natural
+;       user error. tools/verify_zp_usage.py:69-81 guards the same trap
+;       for the same reason ("audit would be vacuous").
+;     * Same silent-blank outcome for a mistyped path or an empty glob.
+;     * The sum assumes `Name:` precedes `Size:` inside each segment
+;       block. That holds today (verified: 48/48 blocks), but resetting n
+;       at each `Index:` means a future od65 that reversed them would
+;       match nothing and trip the k==0 check, rather than silently
+;       attaching sizes to the wrong names.
+;
+;   An instruction that reports success when it has measured nothing is
+;   the defect this whole note exists to warn about.
 ;
 ;   VARIANT-AWARE as of issue #69. Until then this equate was gated on
 ;   the profile only, so the aead-only archive shipped a manifest
@@ -149,11 +202,12 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
   ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
   ; switches remove nothing further — an app-owned Profile A build
-  ; measures the same 15 555 B as a full one.
+  ; measures the same 15 651 B as a full one (was 15 555 before the
+  ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
   .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15616
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15872
   .endif
 .else
   .ifdef LIB_VARIANT_AEAD_ONLY
@@ -161,13 +215,28 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
-      ; consumer. Measured 16 593 B. A build that is BOTH aead-only and
-      ; app-owned lands in the aead-only branch above at 16 640, which
-      ; over-reports it — the safe direction, and no shipped target
-      ; combines them.
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
-    .else
+      ; consumer. Measured 16 689 B (was 16 593 before the §14.1 domain
+      ; guards, which pushed it past the old 16 640 literal — hence the
+      ; bump to 16 896 here).
+      ;
+      ; A build that is BOTH aead-only and app-owned lands in the
+      ; aead-only branch above at 16 640, which OVER-reports it — the
+      ; safe direction, and no shipped target combines them.
+      ;
+      ; That holds by construction, not by measurement, and the argument
+      ; is worth stating because the figure to compare against is NOT
+      ; this 16 689. Both switches are purely subtractive `.ifndef`
+      ; gates: LIB_VARIANT_AEAD_ONLY removes the test-only bodies
+      ; (chacha20_lib.s, poly1305_lib.s, word32_lib.s) and SHARED_*
+      ; removes the §8.1 init and §8.3 ct_mul bodies, replacing each
+      ; with an `.import` that emits no segment bytes. A build defining
+      ; both therefore removes the UNION and measures at most
+      ; min(aead-only, app-owned) = 16 620, which is under the 16 640 it
+      ; is declared. Comparing 16 640 against this branch's own 16 689
+      ; is the wrong comparison and makes a safe case look dangerous.
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
+    .else
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17152
     .endif
   .endif
 .endif

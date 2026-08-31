@@ -478,56 +478,80 @@ per-packet sequence is:
 1. Write 32-byte key to `aead_key`.
 2. Write 12-byte nonce to `aead_nonce`.
 3. Write 16-bit AAD pointer to `aead_aad_ptr` and 1-byte AAD length
-   to `aead_aad_len` (AAD length is 8-bit — 0..255 bytes).
+   to `aead_aad_len` (AAD length is 8-bit — 0..255 bytes), subject to
+   the domain relation below.
 4. Write 16-bit plaintext/ciphertext pointer to `aead_data_ptr` and
    16-bit length to `aead_data_len` (little-endian; the full 0..65535
    range is supported subject to the domain relation below).
 5. For decrypt: write the 16-byte expected tag to `aead_tag`.
-6. `jsr aead_encrypt` or `jsr aead_decrypt`.
-7. After encrypt: the tag is at `aead_tag` (16 bytes) — that is the
-   ABI's documented encrypt output, and the slot `aead_decrypt` reads.
-   Ciphertext was written in place at `aead_data_ptr`.
-   (`poly1305_tag` is the Poly1305 module's own output buffer and holds
-   the same 16 bytes; consumers should read `aead_tag`.)
-8. After decrypt: `A == 0` means tag valid and plaintext was written
-   in place; `A != 0` means tag mismatch and the buffer is untouched.
+6. `jsr aead_encrypt` or `jsr aead_decrypt`. **Both return a status in
+   `A`** — `aead_encrypt` too, which before the §14.1 guards had no
+   failure path and left `A` undefined.
+7. After encrypt: `A == 0` means the tag is at `aead_tag` (16 bytes) —
+   that is the ABI's documented encrypt output, and the slot
+   `aead_decrypt` reads. Ciphertext was written in place at
+   `aead_data_ptr`. (`poly1305_tag` is the Poly1305 module's own output
+   buffer and holds the same 16 bytes; consumers should read
+   `aead_tag`.) `A == $01` means the call was rejected as out of domain
+   and nothing was written.
+8. After decrypt: `A == 0` means tag valid and plaintext was written in
+   place; `A == $ff` means tag mismatch and the buffer is untouched;
+   `A == $01` means the call was rejected as out of domain — nothing was
+   written and **no tag was computed or checked**. `bne` fails closed on
+   both, and `cmp #$ff` separates them.
 
-### Data-buffer domain
+### Input-buffer domain
 
 `aead_data_len` is a full 16-bit little-endian byte count, and every
 length path in the library is exact over the whole `0..65535` range.
-The single restriction is a *relation between the two caller-supplied
-values*, not a cap on either one:
+The restriction on each buffer is a *relation between two
+caller-supplied values*, not a cap on either one:
 
 ```
 aead_data_ptr + aead_data_len <= $10000
+aead_aad_ptr  + aead_aad_len  <= $10000
 ```
 
-Both data walkers advance a 16-bit pointer with no carry-out check —
-the ChaCha20 XOR loop (`src/lib/chacha20_lib.s`, `adc cc20_data_ptr` /
-`adc #0`) and the Poly1305 block loop over the data
-(`src/lib/chacha20poly1305_lib.s`, the same shape on
-`chacha20poly1305_zp_ptr1`). A buffer that would run past `$FFFF`
-therefore wraps to `$0000`, and past the wrap the library reads **and
-writes** from page zero upward, corrupting zero page, the stack and
-whatever else lives low in RAM.
+**Both are enforced at runtime** (contract SPEC §14.1). A call
+violating either returns `A = $01` from the first instructions of the
+entry point, before anything is written — no ciphertext/plaintext, no
+`aead_tag`, no `poly1305_tag`, no `aead_scratch`, and none of the
+library's working state. One status code covers both: a caller that
+violates either has the same bug and the same fix, and can test both
+relations itself in a few instructions.
 
-Nothing in the library detects this. `aead_encrypt` has no failure
-return, so the relation is the **caller's** precondition to enforce:
-reject or split the message before the call.
+A buffer ending exactly at `$FFFF` — sum `== $10000` — is **in domain**
+and is accepted.
+
+What the guards prevent: the walkers advance a 16-bit pointer with no
+carry-out check — the ChaCha20 XOR loop (`src/lib/chacha20_lib.s`,
+`adc cc20_data_ptr` / `adc #0`) and the Poly1305 block loop
+(`src/lib/chacha20poly1305_lib.s`, the same shape on
+`chacha20poly1305_zp_ptr1`). Unguarded, a data buffer running past
+`$FFFF` wraps to `$0000` and the library reads **and writes** from page
+zero upward, corrupting zero page, the stack, and — walking on into
+`$D000-$DFFF` — I/O registers. The AAD leg is milder: it only ever
+*reads* through its pointer, and `aead_aad_len` is 8-bit, so its
+overrun could not exceed 254 bytes or reach past `$00FE`; its
+consequence was a tag computed partly over zero page rather than memory
+corruption. Both are guarded regardless, so that the published domain
+is a single statement and not one a caller has to check half of.
 
 There is no MTU-shaped size cap. Earlier revisions of this document
 said "up to ~1500"; that number was an MTU inherited from the
 c64-wireguard origin, and nothing in the library knows it.
 `tools/hazmat_fuzz.py` exercises the AEAD over 0..3840-byte messages
-against pyca/cryptography with zero crypto mismatches.
+against pyca/cryptography with zero crypto mismatches, and its
+`wrap guard` case class exercises both domain relations at and past
+their `$10000` boundaries.
 
-A second restriction governs *where* the buffer sits rather than how
-long it is: it must not overlap the regions the library itself claims
-(its CODE/DATA/BSS, the Profile A Shoup tables, the Profile B `sqtab`,
-and the reserved zero-page slots). That one is not runtime-checkable
-either — see `docs/MEMORY_MAP.md` §4, "Consumer collision-risk
-summary", for the address list.
+A second restriction governs *where* a buffer sits rather than how far
+it runs: it must not overlap the regions the library itself claims (its
+CODE/DATA/BSS, the Profile A Shoup tables, the Profile B `sqtab`, and
+the reserved zero-page slots). **That one is not runtime-checkable and
+is not checked** — it remains entirely the caller's precondition. See
+`docs/MEMORY_MAP.md` §4, "Consumer collision-risk summary", for the
+address list.
 
 Skipping `poly1305_lib_init` is technically safe — on Profile B,
 `poly1305_init` auto-builds `sqtab` on first use via the

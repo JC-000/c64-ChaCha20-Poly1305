@@ -6,6 +6,132 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- **`aead_encrypt` / `aead_decrypt` now reject out-of-domain calls
+  instead of wrapping the address space.** The data walkers advanced
+  their pointer with 16-bit arithmetic and no carry-out check
+  (`chacha20_lib.s` `@xor_loop` tail, `chacha20poly1305_lib.s`
+  `aead_process_padded`), so a call with `aead_data_ptr +
+  aead_data_len > $10000` wrapped past `$FFFF` to `$0000` and the
+  library read **and wrote** from zero page upward: `$01` (the banking
+  register, re-banking RAM/ROM mid-loop), the stack, and I/O at
+  `$D000-$DFFF`. Entry guards (contract SPEC §14.1) now enforce
+
+      aead_data_ptr + aead_data_len <= $10000
+      aead_aad_ptr  + aead_aad_len  <= $10000
+
+  as the published domain, at 44 cycles on the accept path. They are the
+  first instructions of both entry points, ahead of every `jsr`, so a
+  rejected call writes nothing at all — no ciphertext/plaintext, no
+  `aead_tag`, no `poly1305_tag`, no `aead_scratch`, and none of the
+  `cc20_*` / `poly_*` working state. A buffer ending exactly at `$FFFF`
+  (sum == `$10000`) is in domain and is accepted; there is no length
+  ceiling on either buffer, because both pointers are caller-supplied
+  and this library owns neither buffer.
+
+  The AAD relation is guarded on the same footing despite being milder:
+  that walker only ever *reads* through its pointer, and `aead_aad_len`
+  is 8-bit, so the unguarded overrun was bounded at 254 bytes of zero
+  page folded into the tag rather than memory corruption. It is guarded
+  anyway because a published domain a caller has to check half of is
+  worse than either alternative. One status code covers both relations.
+
+  Not guarded, and not runtime-checkable: whether a buffer *overlaps*
+  the regions the library claims. That remains the caller's
+  precondition — see `docs/MEMORY_MAP.md` §4.
+
+### Changed
+- **Corrected three `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` literals that
+  this change pushed past their declared values — and nothing in the
+  build would have caught it.** The §14.1 guards add 96 B of CODE to
+  every configuration, which took Profile A full from 15 555 to 15 651 B
+  (declared 15 616), Profile B full from 16 849 to 16 945 (declared
+  16 896) and Profile B app-owned from 16 593 to 16 689 (declared
+  16 640). Under-reporting is the dangerous direction: a consumer's
+  `.assert resident <= N` fit check under-reserves and overruns
+  silently. Corrected to 15 872 / 17 152 / 16 896 on the existing
+  round-up-to-256 basis; the two aead-only literals still bound their
+  builds and are unchanged.
+
+  Unlike `ZP_USAGE_BYTES`, which `tools/verify_zp_usage.py` pins against
+  the built objects, these five literals are hand-maintained with **no
+  automated check at all**. No build, audit or test in this repo flagged
+  the overrun — it was found only by measuring by hand. The measurement
+  basis and a re-measure instruction are now recorded beside the
+  literals in `src/lib/lib_manifest.s`, and `README.md`'s manifest
+  section is refreshed with the same numbers. Its previous figures
+  (15544 / 16838 / 16513) were accurate at `v0.9.0`, which was
+  byte-identical to `v0.7.0`, and went stale at `20e01aa` when the
+  `aead_tag` fix added 11 B to every configuration.
+
+  None of these figures has to be taken on trust. Each `origin/main`
+  baseline reproduces the measured total already recorded in
+  `lib_manifest.s`'s own comment, and the one-liner beside those literals
+  re-derives any of them from the built objects in one command — so a
+  reader can check the numbers rather than believe them.
+- **BREAKING (ABI generation 3 → 4): the AEAD calling convention.**
+  `aead_encrypt` now returns a status in `A` — `$00` success, `$01`
+  domain rejection — where it previously had no failure path and left
+  `A` undefined. `aead_decrypt` gains `$01` alongside its existing
+  `$00` (tag valid) and `$ff` (tag mismatch). `bne` after either call
+  still fails closed; a caller that must distinguish an authentication
+  failure from a domain rejection tests `cmp #$ff`. The library
+  signals in `A`, not carry: draft contract §14.1's "carry set, per the
+  convention its other entry points already use" describes a convention
+  this library has never had.
+
+  The counter increments to **4**. Generation 3 is published — `v0.8.0`
+  and `v0.9.0` both ship `ABI_VERSION = 3` — so a consumer can hold a
+  build whose surface is "generation 3 without the domain guards", and
+  distinguishing exactly that is what the counter exists for.
+- **Corrected a stale label in `src/lib_version.s`'s generation
+  history.** It described generation 3 as `"unreleased"`, 28 lines above
+  the constant setting the counter to 3 (line 64 versus line 92), and shipped that way in
+  both `v0.8.0` and `v0.9.0`. The constant was right and the label was
+  wrong. It had already misled a reader: the first draft of the §14.1
+  change argued from that line that generation 3 was unpublished and
+  folded the convention change into it instead of incrementing. Verify
+  against the tag, not the comment —
+  `git show v0.8.0:src/lib_version.s | grep ABI_VERSION`.
+- **`tools/hazmat_fuzz.py`'s reject legs now separate assertions that can
+  fail from ones that cannot.** Two of the original assertions were
+  vacuous: `aead_tag`-untouched cannot fail on an `aead_decrypt` leg
+  (that entry point never writes `aead_tag`, it only reads it to
+  verify), and key/nonce-unchanged cannot fail anywhere (the library has
+  no `sta aead_key` or `sta aead_nonce` on any path). A count that
+  silently includes unfalsifiable checks reassures without carrying the
+  information it appears to carry — the same defect this change is
+  about. Each check is now classified DISCRIMINATING or TRIPWIRE, the
+  two are tallied and printed separately, and the reasoning is recorded
+  per check. `aead_tag` is asserted on encrypt legs only; a new
+  `poly1305_tag`-untouched assertion discriminates on **both** entry
+  points (`poly1305_final` writes it and both reach it via
+  `aead_compute_tag`) and is the only test anywhere of the `docs/API.md`
+  claim that a rejected call leaves `poly1305_tag` alone. The
+  front-of-buffer sentinel is a tripwire on decrypt legs for a
+  structural reason: `aead_decrypt` verifies before it decrypts, so an
+  out-of-domain call mismatches and never reaches the write — not
+  fixable by a better fixture, since an out-of-domain input has no
+  computable valid tag.
+- `docs/CT_ANALYSIS.md` §3 covers the guards' 12 new branches (3 per
+  expansion x 4 expansions), all PUBLIC — the only live values are the
+  caller-supplied pointers and lengths, which §0's CT contract already
+  classifies as public, and the guards run before any secret is loaded.
+  The count moves to 2 YELLOW / 21 PUBLIC / 0 RED. The early return does
+  make a rejected call's duration differ from an accepted one's; that is
+  public by construction, being the status the API returns.
+- `tools/hazmat_fuzz.py` gains a `wrap guard` case class covering both
+  relations: a fixed, uncounted list (no `QUICK_COUNTS` entry, so
+  `--quick` cannot slice it away) of four accept cases — including both
+  exact-`$10000` boundaries, data `$FF00+$0100` and AAD `$FF01+$FF` —
+  and five reject cases, each reject case run against both entry points.
+  Accept legs are full KATs on ciphertext and tag; reject legs poison
+  first and then assert that `aead_tag`, `aead_scratch`, a 256-byte
+  sentinel across the front of the data buffer, and the `aead_key` /
+  `aead_nonce` inputs are all untouched, plus the documented status.
+  `aead_scratch` is the load-bearing witness for the AAD legs, since
+  that walker only reads and so cannot disturb the buffer sentinel.
+
 ### Added
 - **`tools/hazmat_fuzz.py` — adversarial differential fuzz vs
   pyca/cryptography hazmat**, plus `make test` / `make test-fuzz` /

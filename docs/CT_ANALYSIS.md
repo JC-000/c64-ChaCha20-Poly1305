@@ -658,7 +658,46 @@ Non-branch channel check:
 | 292  | `bcc @partial`      | aead_process_padded size   | PUBLIC | `len < 16`, public. |
 | 463  | `bpl @cmp_loop`     | `aead_verify_tag` OR-acc   | YELLOW | Canonical CT tag compare. Q6. |
 
-**chacha20poly1305_lib.s**: 2 YELLOW-canonical, 9 PUBLIC, 0 RED.
+**Line numbers above are from the v0.3.0-era audit and have drifted** —
+`bne @auth_fail` is at `:261` today, not `:100`. They are left as-is
+rather than renumbered piecemeal: the same drift affects `docs/API.md`'s
+`Module:` citations and other tables in this file, and it is tracked as a
+single repo-wide cleanup rather than fixed a row at a time here. The
+rows below are identified by macro and expansion instead, which does not
+rot.
+
+#### SPEC §14.1 domain guards (added with the entry guards)
+
+`AEAD_DOMAIN_GUARD` (`chacha20poly1305_lib.s`) is expanded four times —
+two relations (`aead_data_*`, `aead_aad_*`) x two entry points
+(`aead_encrypt`, `aead_decrypt`) — and each expansion assembles three
+conditional branches, so the guards add **12 branches**.
+
+| branch (x4 expansions) | context | class | notes |
+|------------------------|---------|--------|-------|
+| `bcc ok`   | carry out of `ptr_hi + len_hi` | PUBLIC | Operands are `aead_data_ptr`/`aead_data_len` or `aead_aad_ptr`/`aead_aad_len`. |
+| `bne reject` | high byte of the 17-bit sum != 0 | PUBLIC | Same operands. Unreachable in the AAD expansions (8-bit length; see the macro comment), reachable in the data expansions via e.g. `($FFFF,$FFFF)`. |
+| `beq ok`   | low byte of the sum == 0 | PUBLIC | Same operands. |
+
+All twelve are PUBLIC, and the argument is short: the only values
+reaching them are the two caller-supplied pointers and their lengths.
+`docs/API.md`'s CT contract already classifies the lengths as PUBLIC,
+and a pointer is an address the caller chose. No key, nonce, plaintext
+or tag byte is live at this point — the guards are the first
+instructions of each entry point, ahead of every `jsr`, so no
+secret-derived flag state exists yet to branch on.
+
+**The one objection worth stating rather than leaving for a reader to
+find**: the guards introduce an early return, so the *duration* of a
+rejected call differs from that of an accepted one, and an observer can
+tell which happened. That is public by construction — it is precisely
+the `A = $01` versus `A = $00`/`$ff` distinction the API documents and
+returns to the caller. A caller that must not reveal whether its own
+pointer arithmetic was in range has already revealed it by receiving
+the status.
+
+**chacha20poly1305_lib.s**: 2 YELLOW-canonical, 21 PUBLIC (9 pre-existing
++ 12 from the §14.1 guards), 0 RED.
 
 ---
 
