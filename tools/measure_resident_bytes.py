@@ -125,6 +125,36 @@ def measure(objdir):
     return total, aligned, charge, start_charge, seen
 
 
+def declared_from_object(objdir):
+    """Read LIB_CHACHA20_POLY1305_RESIDENT_BYTES out of the BUILT manifest.
+
+    Not passed in as an argument, deliberately. A hardcoded expectation is a
+    second copy of the number: it lets the equate be lowered while the check
+    passes (the exact regression the manifest warns about), and it lets a
+    check run against objects from one configuration while comparing to
+    another configuration's literal. Reading it from the object in the
+    directory being measured binds the check to what it measured.
+
+    Precedent: tools/verify_zp_usage.py does the same for ZP_USAGE_BYTES.
+    """
+    obj = os.path.join(objdir, "lib_manifest.o")
+    if not os.path.exists(obj):
+        sys.exit(f"FATAL: {obj} missing — cannot read the declared value, and "
+                 "a check that supplies its own expectation is not a check.")
+    out = subprocess.run(["od65", "--dump-exports", obj],
+                         capture_output=True, text=True).stdout
+    name = None
+    for line in out.split("\n"):
+        m = re.search(r'Name:\s*"([^"]*)"', line)
+        if m:
+            name = m.group(1)
+            continue
+        m = re.search(r"Value:\s+(0x[0-9A-Fa-f]+)", line)
+        if m and name == "LIB_CHACHA20_POLY1305_RESIDENT_BYTES":
+            return int(m.group(1), 16)
+    sys.exit(f"FATAL: {obj} exports no LIB_CHACHA20_POLY1305_RESIDENT_BYTES.")
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -139,7 +169,8 @@ def main():
     print(f"  bound               : {bound}")
     print(f"  declare (round 256) : {declare}")
     if "--check" in sys.argv:
-        declared = int(sys.argv[sys.argv.index("--check") + 1])
+        declared = declared_from_object(objdir)
+        print(f"  declared (from .o)  : {declared}")
         if declared < bound:
             print(f"  FAIL: declared {declared} < bound {bound} — under-reports "
                   "what a consumer can pay (§5 safe-direction)")
