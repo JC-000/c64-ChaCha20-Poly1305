@@ -216,11 +216,21 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   of that measurement: it is a bound over EVERY consumer, not a
 ;   description of yours.
 ;
-;   The bound is over CONFORMING cfgs. It covers fill forced by the
-;   alignments this library declares (§4). A consumer declaring more than
-;   is required — `align = $200`, say — forces fill beyond this charge and
-;   is choosing a cost that is not this library's footprint, any more than
-;   the gaps they leave between segments are.
+;   SCOPE LIMIT, STATED AS ONE. The bound covers fill forced by the
+;   alignments this library declares. A consumer declaring MORE —
+;   `align = $200` — forces fill beyond it and would under-reserve.
+;
+;   That is PERMITTED, not a violation: §4's obligation is on the library,
+;   and `$200` satisfies the CT invariant outright since 512-aligned
+;   implies 256-aligned. §5 says "every consumer", unqualified, so this
+;   exclusion is this library narrowing §5 by fiat — a stated scope limit,
+;   not a claim that such a consumer is out of contract.
+;
+;   It is the right limit for a measured reason: `align = $200` costs +38 B
+;   over the declared value, `$400` costs +550, and it grows without limit,
+;   so no finite bound over consumer alignment choices exists. The case
+;   only arises when a consumer deviates from the cfg line §4 tells them to
+;   copy verbatim; copy it and this term is exact.
 ;
 ;   Do NOT re-derive these literals from a measured consumer link either.
 ;   There is no single real link: a consumer that pulls part of the archive

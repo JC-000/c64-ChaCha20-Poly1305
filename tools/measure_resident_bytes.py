@@ -30,12 +30,22 @@ as a single inter-segment gap. A sibling using a per-segment charge is correct
 for a tree where each aligned segment draws from exactly one object; that is a
 property no clause requires, and it is not true here.
 
-SCOPE: the bound is over CONFORMING consumer cfgs. It covers fill forced by
-the alignments this library DECLARES. A consumer who declares more than §4
-requires — say `LIB_CHACHA20_POLY1305_CODE: align = $200` in their own cfg —
-forces fill beyond this charge, and is choosing a cost that is not this
-library's footprint, any more than the gaps they leave between segments are.
-A bound that tracked arbitrary consumer cfg choices would not be bounded.
+SCOPE: the bound covers fill forced by the alignments this library declares.
+A consumer who declares MORE — `LIB_CHACHA20_POLY1305_CODE: align = $200` —
+forces fill beyond it and will under-reserve if they budget from the equate.
+
+That is PERMITTED, not a violation, and saying otherwise would be wrong: §4
+places its obligation on the library, and `$200` satisfies the CT invariant
+outright, since 512-aligned implies 256-aligned. No clause forbids declaring
+more. §5 meanwhile says "every consumer", unqualified — so excluding this case
+is the library narrowing §5 by fiat, and it should be read as a stated scope
+limit rather than as the consumer being out of contract.
+
+The reason it is the right limit is measured, not definitional: `align = $200`
+costs +38 B over the declared value, `$400` costs +550, and it grows without
+limit. No finite bound over consumer alignment choices exists. What DOES bound
+it is that the case only arises when a consumer deviates from the cfg line §4
+tells them to copy verbatim — copy it, and this term is exact.
 
 (alignment - 1) rather than a hardcoded 255: every aligned fragment here is
 256-aligned today, but a future `.align 512` would need 511 and a constant
