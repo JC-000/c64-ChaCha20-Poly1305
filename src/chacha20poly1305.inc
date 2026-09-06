@@ -4,9 +4,15 @@
 ; Assembler: ca65/ld65 (cc65 suite).  Target: Commodore 64, no REU required.
 ;
 ; Shipped by `make lib` to build/lib/chacha20poly1305.inc alongside the
-; archive, per c64-lib-contract SPEC §6.1. The canonical source is
-; src/chacha20poly1305.inc in the library repo; the copy under build/lib/
-; is a build product — edit the source, not the copy.
+; archive. The canonical source is src/chacha20poly1305.inc in the library
+; repo; the copy under build/lib/ is a build product — edit the source,
+; not the copy.
+;
+; This header is not required by c64-lib-contract. Its §6.1 briefly did
+; require one, and the clause was withdrawn at v1.1.1 for naming neither a
+; path nor a symbol (contract#178). It exists because a consumer fetching
+; build/lib/ should get an interface rather than an archive to
+; reverse-engineer.
 ;
 ; -----------------------------------------------------------------------------
 ; USING IT

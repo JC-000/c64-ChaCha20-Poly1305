@@ -359,7 +359,7 @@ In addition, the manifest emits the [SPEC §8.4 catch-loop](https://github.com/J
 
 This library implements
 [c64-lib-contract](https://github.com/JC-000/c64-lib-contract) and is
-aligned to **SPEC v1.1.0**, audited clause-by-clause rather than
+aligned to **SPEC v1.1.1**, audited clause-by-clause rather than
 assumed.
 
 **The contract was cut to one eighth of its size at v1.0.0** (40,737
@@ -386,11 +386,11 @@ REU DMA in any profile.
 | §3 REU | claims no banks — `LIB_CHACHA20_POLY1305_REU_BANKS_USED = $0000`, and no library TU touches an REU register |
 | §4 segment naming | library sources emit only `LIB_CHACHA20_POLY1305_CODE`/`_DATA`; every default segment name is size 0 in all seven archive objects. The cfg declares the load-bearing `align = $100` and `type = rw` attributes **with the consequence of dropping each**, as the clause requires |
 | §5 manifest | six aggregate equates plus the two §8 masks, in `src/lib/lib_manifest.s`, separate from `lib_version.s`. All five `RESIDENT_BYTES` literals re-measured this release and safe-direction. **`LIB_CHACHA20_POLY1305_AAD_LEN_MAX` is new**: §5 asks a library to publish a real input bound as a referenceable symbol, and `aead_aad_len` is one byte, so 255 is a genuine ceiling. The buffer-domain restriction is deliberately **not** published — see below |
-| §6.1 targets and artifacts | `make lib` produces `build/lib/chacha20poly1305.a` **plus `chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg`**, which v1.1.0 §6.1 requires. Both are new this release; see the note below. Variants: `lib-aead-only`, `lib-app-owned`. No `ar65` member surgery anywhere |
+| §6.1 targets and artifacts | `make lib` produces `build/lib/chacha20poly1305.a`, which is all v1.1.1 §6.1 requires. It also emits `chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg` — a local choice, not an obligation; see the note below. Variants: `lib-aead-only`, `lib-app-owned`, both still provided though v1.0.0 stopped requiring them. No `ar65` member surgery anywhere |
 | §6.2 consumer defines | `CONTRACT_DEFINES` reaches every one of the 59 `ca65` invocations. There is deliberately no `CONTRACT_ZP_DEFINES`: no archive member defines a ZP slot, so the clause's split is satisfied vacuously and a slot override belongs in the consumer's own `zp_config` assembly |
 | §6.4 per-archive manifest | each variant's manifest describes that archive — verified by reading `RESIDENT_BYTES` back out of each built `lib_manifest.o` |
 | §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
-| §7 semver / ABI counter | `LIB_CHACHA20_POLY1305_ABI_VERSION = 4`. v1.1.0 §7 rules that the counter moves on what the code does, not on whether the export list changed — a widened return set is the named case, and `aead_decrypt` gained `AEAD_ERR_DOMAIN` while `aead_encrypt` gained a defined return at all. Ratified in issue #103; explicitly **not** a MAJOR, and it owes no deprecation cycle |
+| §7 semver / ABI counter | `LIB_CHACHA20_POLY1305_ABI_VERSION = 4`. §7 rules that the counter moves on what the code does, not on whether the export list changed — a widened return set is the named case, and `aead_decrypt` gained `AEAD_ERR_DOMAIN` while `aead_encrypt` gained a defined return at all. Ratified in issue #103; explicitly **not** a MAJOR, and it owes no deprecation cycle |
 | §8.0 masks | bit constants local, never exported; both masks built in the required conditional form with the ownership-subset assert. Profile B `$0005/$0005`, app-owned `$0000/$0005`, Profile A `$0000/$0000` |
 | §8.1 sqtab | `LIB_SHARED_SQTAB_BASE`, `sqtab_lo`, `sqtab_hi` all unexported; page-alignment and `$0200`-delta asserts present. The owner build exports the canonical **`mul_tables_init`** as well as the historical `sqtab_init` — it exported only the latter until issue #105, which made the ownership claim unsatisfiable. Both directions now pinned by `make lib-verify-shared` |
 | §8.3 ct_mul_8x8 | owner build exports all six names; deferral build exports none and imports the five it references |
@@ -406,17 +406,38 @@ entry points instead, returning `AEAD_ERR_DOMAIN`. There is likewise no
 ceiling on `aead_data_len`. `AAD_LEN_MAX` is published precisely because
 it is the one restriction here that *is* a constant.
 
-**§6.1's `.inc`/`.cfg` requirement is new at contract v1.0.0**, and
-arrived in a release whose own header says a library conformant at
-v0.17.1 is conformant at v1.0.0 without edits. That claim does not hold —
-for this library or for `c64-polyval`, neither of which shipped those
-artifacts, while `c64-x25519` and `c64-mlkem` already did. Raised for
-arbitration as
-[c64-lib-contract#178](https://github.com/JC-000/c64-lib-contract/issues/178),
-which also covers §4 dropping "or similar" from the example cfg's path.
-We ship both artifacts regardless of how that is resolved: the header is
-worth having on its own merits, and being conformant under either reading
-costs less than arguing the point.
+**On the `.inc` header and example cfg.** `make lib` emits
+`build/lib/chacha20poly1305.inc` and `build/lib/cfg/chacha20poly1305-example.cfg`.
+These are **not** required by the contract. §6.1 briefly did require them —
+the clause appeared in no tag before v1.0.0, arriving inside the commit
+that deleted seven eighths of the document, in a release whose header
+said a v0.17.1-conformant library needed no edits. Raised as
+[c64-lib-contract#178](https://github.com/JC-000/c64-lib-contract/issues/178)
+and **withdrawn at contract v1.1.1**, on the merits rather than merely for
+arriving unannounced: it mandated an artifact while fixing neither a name
+nor a path for it, and a library can see it ships no header from inside
+its own build, so it fails the contract's scope rule on both prongs. §4's
+"or similar" on the example cfg's path was restored in the same release,
+which is why `src/c64.cfg` needs no rename.
+
+We keep both artifacts anyway, as a local choice. A consumer who fetches
+`build/lib/` should get an interface rather than an `.a` to
+reverse-engineer, and the cfg is where §4's load-bearing attributes and
+their consequences are written down. The header is safe to `.include`
+whole: ca65 emits an import record only for a symbol the translation unit
+actually references, so including it costs nothing and cannot break a
+link against a variant archive that omits some of those names — measured,
+with a negative control.
+
+**The per-check evidence enumeration continues too.** The eighteen checks
+this library offers as evidence for a contract clause are enumerated per
+check — not per gate, since `verify-zp-usage` and `lib-verify-shared` are
+each several independent legs — in the "Contract conformance" section of
+[`CHANGELOG.md`](CHANGELOG.md), with whether each has been demonstrated
+capable of failing. Eleven have; three can fail but have never been
+exercised; four are outstanding. §15, which asked for this, is retired —
+the practice is kept because it works, not because it is required. It
+found the §8.1 alias-identity gap in this very release.
 
 **`make verify-zp-usage`** is the R2 audit: it derives the occupied
 zero-page set from the exported slot addresses in `zp_config.o` and
@@ -460,7 +481,9 @@ Two standing obligations, recorded so they are not lost between releases:
   v1.0.0.** v0.17.1 §6.1 reserved the `lib-*` make-target namespace for
   archive-producing targets and grandfathered existing `lib-verify`-style
   names "until each repo's next MAJOR". That clause was **deleted** in the
-  v1.0.0 cut; v1.1.0 §6.1 contains no make-target namespace rule at all.
+  v1.0.0 cut; v1.1.1 §6.1 contains no make-target namespace rule at all
+  (v1.1.1 restored three other §6.1 targets to un-required status without
+  restoring this reservation).
   `make lib-verify-shared` therefore keeps its name, and this repo is no
   longer committed to renaming it at the next MAJOR. Nothing to do —
   recorded because the commitment was published and someone would

@@ -6,9 +6,60 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Contract conformance — span extended to SPEC v1.1.0
-The previous record ran to **v0.17.0**. Findings for the three revisions
-since — one of which removed seven eighths of the document:
+### Fixed
+- **The §8.1 sqtab ownership claim was unsatisfiable: the library never
+  exported `mul_tables_init`.** SPEC §8.1 names that as the canonical
+  init entry and tells a deferring build to import it; `sqtab_init` is
+  the optional back-compat spelling. This library exported only the
+  optional one while `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` claimed
+  the `$0001` ownership bit in every Profile B build. A sibling that read
+  the bit, deferred its own sqtab and imported the canonical name got
+  `ld65: Error: Unresolved external 'mul_tables_init'`.
+
+  The asymmetry is the tell: this library's own `lib-app-owned` variant
+  **imports** a name its `lib` variant did not **export**. Both other
+  §8.1 owners — `c64-x25519` and `c64-mlkem` — already export it.
+
+  Same defect issue #47 fixed for §8.3 one clause over, left behind when
+  #47 landed; #47's own comment sits four lines above where the §8.1 bug
+  was, describing it. §8.3 got a checker then and §8.1 did not, which is
+  why this survived.
+
+  Owner builds now export `mul_tables_init` alongside `sqtab_init`, both
+  on the one body. Additive: **MINOR, and the ABI counter stays 4** —
+  no conforming consumer can be broken by it. (`c64-x25519` exports the
+  same name, but the two libraries already shared 13 exported names, so
+  composing two owners without a deferral switch has never linked.
+  Verified by linking rather than argued: CCP-first links byte-identically
+  before and after; x25519-first fails on the same pre-existing `mul_8x8`
+  collision either way. Against `c64-mlkem` a genuinely new duplicate
+  appears in one link order — which is the §8.0 double-ownership assert
+  doing its job, on a composition that was only ever "working" because
+  our claim was unsatisfiable.) Closes #105.
+
+### Added
+- **`make lib-verify-shared` grows §8.1 legs**, so this cannot silently
+  return: the owner build must export both names, the `SHARED_SQTAB_INIT`
+  build must export neither and import the canonical one. Each leg is
+  demonstrated capable of failing on the failure it guards. A fourth
+  mutation — adding `.export` beside the `.import` — never reaches the
+  check, because ca65 rejects it first with `Cannot import exported
+  symbol`; recorded because it is the mutation a reviewer reaches for.
+- **A link-time `.assert` that `mul_tables_init = sqtab_init`.** Found by
+  adversarial review as the mutation that survived the legs above: an
+  owner can export the canonical name as a separate `rts` stub, leave the
+  real body on `sqtab_init`, and pass every grep leg, because
+  `od65 --dump-exports` emits names without addresses. A deferring sibling
+  then links cleanly against a routine that builds no table and reads an
+  uninitialised one. The assert fires at **link**, not at `make lib` —
+  the operands are relocatable, so ca65 defers to ld65 whatever the action
+  keyword, the same property the #101 alignment asserts have. A clean
+  `make lib` is not evidence for this invariant.
+
+### Contract conformance — span extended to SPEC v1.1.1
+The previous record ran to **v0.17.0**. Findings for the four revisions
+since — one of which removed seven eighths of the document, and one of
+which withdrew two things that removal had carried in:
 
 - **v0.17.1** (PATCH; corrects the 0.16.0 entry's fleet position, which
   had said this library owed a stated §14.2 ceiling while §14.2 in the
@@ -19,46 +70,31 @@ since — one of which removed seven eighths of the document:
   retired at 1.0.0.
 
 - **v1.0.0** (the retirement cut: 40,737 words → 5,154; §9, §12, §13,
-  §14, §15 and §6.3/§6.6/§6.7 retired) — **mostly no-op, with two
-  exceptions the release did not announce.**
+  §14, §15 and §6.3/§6.6/§6.7 retired) — **a no-op for the retirements
+  themselves, and the source of two defects reported and fixed below.**
 
-  No-op for the retirements themselves. Per the contract's `RETIRED.md`,
-  a conformance record citing a retired section stays valid at the tag it
-  cites, and source comments citing one resolve at `v0.17.1`. This repo
-  therefore rewrote **no** citation to §6.3, §6.7, §14 or §15 — doing so
-  would be churn with no reader benefit. What *did* need changing was the
-  handful of statements that are now factually wrong about the current
-  document rather than merely citing an old one, and two obligations this
-  repo had published to itself on the strength of clauses that no longer
-  exist (below).
+  Per the contract's `RETIRED.md`, a conformance record citing a retired
+  section stays valid at the tag it cites, and source comments citing one
+  resolve at `v0.17.1`. This repo therefore rewrote **no** citation to
+  §6.3, §6.7, §14 or §15 — that would be churn with no reader benefit.
+  What did need changing was the smaller set of statements now factually
+  wrong about the current document, and two obligations this repo had
+  published to itself on the strength of clauses that no longer exist.
 
-  The two exceptions are **tightenings inside surviving clauses**, both
-  introduced by the cut commit and recorded nowhere in the release notes,
-  in a release whose header states that a library conformant at v0.17.1
-  is conformant at v1.0.0 without edits:
-
-  1. **§6.1 gained a MUST**: `make lib` must now produce "the
-     consumer-facing `.inc` header and an example `.cfg`" alongside the
-     archive. v0.17.1 §6.1 required archives only; the phrase appears in
-     no tag before v1.0.0. This library shipped neither, and nor does
-     `c64-polyval`; `c64-x25519` and `c64-mlkem` already did. **Closed in
-     this release** — see below.
-  2. **§4 made the example cfg's path normative** by dropping "or
-     similar" from `cfg/<libname>.cfg`. Ours is `src/c64.cfg`. Not
-     addressed by a rename, which §6.5 would make expensive for a file
-     consumers copy; we ship an additional consumer-facing example cfg at
-     the conforming path instead.
-
-  Both raised for arbitration as
+  The cut also carried **two normative tightenings inside surviving
+  clauses**, unrecorded, in a release whose header stated a
+  v0.17.1-conformant library was conformant without edits: §6.1 gained a
+  MUST that `make lib` emit a consumer-facing `.inc` header and an
+  example `.cfg`, and §4 dropped "or similar" from `cfg/<libname>.cfg`,
+  making the path normative. Reported as
   [c64-lib-contract#178](https://github.com/JC-000/c64-lib-contract/issues/178).
-  We conform either way; the issue is about the other adopters and about
-  the release's own claim.
 
-  Also from this release: `precalc_table.inc` had comment-only edits and
-  the CHANGELOG says adopters' verbatim copies "need not be refreshed".
-  Ours is refreshed anyway — it is zero-risk (proven: comment-only, and
-  the rebuilt `lib_manifest.o` is byte-identical) and it closes a stale
-  statement in the copy at the same time.
+  A third defect in the same claim, which we did **not** spot and the
+  contract found while ruling: the cut also *dropped* three §6.1 targets
+  required at v0.17.1 — `make` with no arguments, `make lib-<variant>`
+  and `make lib-app-owned`. So "no build target changed" was false in
+  both directions. No action here; this library provides all three
+  regardless, and they are now un-required rather than silently gone.
 
 - **v1.1.0** (MINOR; §7 — the ABI counter turns on what the code does,
   not on whether the export list changed) — **ratifies this repo's
@@ -69,8 +105,28 @@ since — one of which removed seven eighths of the document:
   bump was held unreleased; §7 now names a widened return set as the
   central case. **ABI 4 is correct, and the clause is explicitly scoped
   to the counter** — such a change is not thereby MAJOR and owes no
-  deprecation cycle, so the release below is a MINOR. Recorded in
-  issue #103.
+  deprecation cycle, so this release is a MINOR. Recorded in issue #103.
+
+- **v1.1.1** (PATCH; withdraws both tightenings above) — **resolves
+  #178 in this library's favour, and more broadly than asked.** §6.1
+  requires only the archive again and §4's "or similar" is restored, so
+  `src/c64.cfg` needs no rename and no artifact is owed. The `.inc`
+  clause was withdrawn **on the merits**, not merely for arriving
+  unannounced: it mandated an artifact while fixing neither a name nor a
+  path for it, and a library can see it ships no header from inside its
+  own build, so it failed the contract's scope rule on both prongs. The
+  1.0.0 preamble is corrected in `SPEC.md` and `CHANGELOG.md` both, since
+  the false sentence was published twice.
+
+  Our report undercounted the blast radius: we named this library and
+  `c64-polyval` as non-conformant, and the contract's own measurement
+  added `c64-nist-curves` — three of five adopters, including the
+  largest, not two.
+
+  **Untagged as of this release.** v1.1.1 is merged at
+  `d0c64ab` but carries no `v1.1.1` tag yet, so this record cites the
+  commit rather than a tag. Re-cite at the tag when it exists — the same
+  handling this repo gave contract v0.11.1.
 
 ### Added
 - **`LIB_CHACHA20_POLY1305_AAD_LEN_MAX` (= 255)** — §5 asks a library to
@@ -80,8 +136,13 @@ since — one of which removed seven eighths of the document:
   per §5: `ptr + len <= $10000` is a relation over two caller-supplied
   values, so no scalar expresses it and a published one would be wrong.
 - **`src/chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg`,
-  both emitted by `make lib`** into `build/lib/` — the §6.1 artifacts
-  above. The header is safe to `.include` whole: ca65 emits an import
+  both emitted by `make lib`** into `build/lib/`. These were written to
+  close the §6.1 tightening described above; that clause was **withdrawn
+  at contract v1.1.1**, so they are now a local choice and nothing is
+  owed. They stay: a consumer who fetches `build/lib/` should get an
+  interface rather than an `.a` to reverse-engineer, and the cfg is where
+  §4's load-bearing attributes and their consequences are written down.
+  The header is safe to `.include` whole: ca65 emits an import
   record only for a symbol the TU actually references, so a consumer
   including it and calling three entry points emits three imports and
   pulls no extra archive members (measured — a consumer including the
@@ -98,7 +159,7 @@ since — one of which removed seven eighths of the document:
   `c64-lib-contract/precalc_table.inc`. Comment-only; the rebuilt
   `lib_manifest.o` export and segment dumps are byte-identical.
 - **`tools/verify_knob_staleness.py` copies `cfg/` into its sandbox.** The
-  guard builds in a throwaway copy of `Makefile` + `src/`; adding the §6.1
+  guard builds in a throwaway copy of `Makefile` + `src/`; adding the
   example cfg gave `make lib` a prerequisite outside that list, so the
   sandbox build died before any knob was exercised. The guard caught it
   on the first run — which is the behaviour it exists for, applied to a
@@ -107,15 +168,17 @@ since — one of which removed seven eighths of the document:
   clauses.** v0.17.1 §6.1 reserved the `lib-*` make-target namespace and
   this repo had committed to renaming `make lib-verify-shared` at its
   next MAJOR; that clause is gone from v1.1.0, so the commitment is
-  withdrawn and the name stays. §6.6's "every release MUST state
+  withdrawn and the name stays. (v1.1.1 restored three other §6.1 targets
+  to un-required status without restoring this reservation, so the
+  withdrawal stands.) §6.6's "every release MUST state
   footprint deltas per (profile × variant)" is retired; we keep doing it
   as a local practice, because one tag here carries five such pairs, but
   it is now ours to change rather than the contract's to require.
 - **Four statements corrected that the current contract contradicts** —
   `src/lib_version.s` (×2), `src/precalc_table.inc` and `docs/API.md` all
   said the deprecated bare exports were "scheduled for removal at contract
-  v1.0" or "required through contract v0.x". v1.1.0 §1 defers their
-  removal to a future MAJOR and the MUST still binds. These are distinct
+  v1.0" or "required through contract v0.x". §1 defers their removal to a
+  future MAJOR and the MUST still binds. These are distinct
   from citations to retired sections, which are left alone on purpose.
 
 
@@ -534,8 +597,8 @@ since, in order:
   | 3 | `verify_zp_usage.py:153-179` unintended-alias sweep | §2 ZP registry, §6.6 | same | **yes, since `b9bffe7`** — see note below |
   | 4 | `verify_zp_usage.py:76` od65-dump sentinel | guards 1–3 against a vacuous pass | tool docstring `:67-73` | no — structurally capable, never exercised |
   | 5 | `verify_knob_staleness.py`, four legs | §6.3 select-or-fail-loudly | `README.md:378`, "`make verify-knob-staleness`" § | **yes** — fails on the pre-fix `Makefile` with the three expected failures |
-  | 6 | `Makefile:633-644` §8.3 owner/deferral surface legs | §8.3 migration shape | `README.md:382`, `:422` | **yes** — 11 named errors against the pre-#47 source |
-  | 7 | `Makefile:622-632` od65-dump sentinels | guards 6 against a vacuous pass | same | **yes** — dump emptied, sentinel fires |
+  | 6 | `Makefile:655-666` §8.3 owner/deferral surface legs | §8.3 migration shape | `README.md:382`, `:422` | **yes** — 11 named errors against the pre-#47 source |
+  | 7 | `Makefile:642-654` od65-dump sentinels | guards 6 and 17 against a vacuous pass | same | **yes** — dump emptied, sentinel fires; re-verified for the two new §8.1 dumps |
   | 8 | `src/include/sqtab_base.inc:32` page-alignment `.assert` | §8.1 placement | `README.md:382` | no — structurally capable (a non-page-aligned `-D` trips it), never exercised; Profile B only |
   | 9 | `src/lib/poly1305_lib.s:143` page-delta `.assert` | §8.1 placement | `README.md:382` | **no — cannot fail** |
   | 10 | `src/main.s:48` `__MAIN_LAST__` image guard, **Profile B** | §6.7 reservations | `README.md:381` | **yes** — seeded link failure with a page-exact boundary sweep, `docs/RELEASE_NOTES_v0.9.0.md:73-77` |
@@ -545,9 +608,14 @@ since, in order:
   | 14 | `LIB_CHACHA20_POLY1305_RESIDENT_BYTES`, five literals | §6.6 footprint | `README.md:347`, `:380` | **no check exists** |
   | 15 | `test_consumer/aead_smoke.s` + `examples/smoke_test/` tag assertions | §6.1/§6.4 consumer-owned build | `README.md:36`, `:513` | **yes, since `b9bffe7`** — see note below |
   | 16 | `tools/hazmat_fuzz.py` `aead_tag` poison-then-act | `docs/API.md`'s documented output; §15.1 cites PR #93 by name as the fleet's poison-then-act reference | `CHANGELOG.md:139` (this Unreleased section) | **yes** — 26 failures on the pre-fix tree (`:173`), green after. Added in `dd9662a`; it does not exist at `v0.9.0` |
+  | 17 | `Makefile:667-686` §8.1 owner/deferral surface legs (issue #105) | §8.1 provider surface — the owner must export the canonical `mul_tables_init`, the deferring build must export neither name and import it | `README.md`, "Contract conformance" §8.1 row | **yes** — three mutations, each firing on the failure it guards: owner drops the export (the #105 defect itself), deferring build ships an exported stub, deferring build stops importing. A fourth mutation, adding `.export` beside the `.import`, never reaches the check: ca65 rejects it first with `Cannot import exported symbol` |
+  | 18 | `src/lib/poly1305_lib.s` `mul_tables_init = sqtab_init` `.assert` | §8.1 — the canonical name and its back-compat alias are one body, not two | same | **yes** — an owner exporting `mul_tables_init` as a separate `rts` stub with the real body on `sqtab_init` passes all of row 17 (od65 dumps carry names, not addresses) and fails this. Fires at **link**, not at `make lib`: the operands are relocatable so ca65 defers to ld65, verified against both `make profile-b` and a consumer link |
 
-  Nine demonstrated, three capable but never exercised (4, 8, 12), and
-  **four outstanding** (9, 11, 13, 14).
+  Eleven demonstrated, three capable but never exercised (4, 8, 12), and
+  **four outstanding** (9, 11, 13, 14). Rows 17 and 18 were added with
+  issue #105; 18 exists because 17 could not close its own gap — an
+  `od65` export dump carries names, not addresses, so a decoy stub under
+  the canonical name satisfies every grep leg.
 
   Rows 3 and 15 are the ones §15 was written for, and both were green
   while unable to report the thing they name. The alias sweep keyed on

@@ -36,9 +36,10 @@ make lib-aead-only    # build/lib/chacha20poly1305-aead-only.a
 make lib-app-owned    # build/lib/chacha20poly1305-app-owned.a
 ```
 
-**`make lib` ships a header and a starter cfg beside the archive**
-(contract §6.1), so what you fetch is an interface rather than an `.a` to
-reverse-engineer.
+**`make lib` ships a header and a starter cfg beside the archive**, so
+what you fetch is an interface rather than an `.a` to reverse-engineer.
+(This is our choice, not a contract requirement — §6.1 briefly required
+it and the clause was withdrawn at contract v1.1.1.)
 
 `chacha20poly1305.inc` declares the public surface — version and ABI
 equates with the `.assert`/`lderror` guard patterns, the §5 manifest
