@@ -857,6 +857,41 @@ verify-zp-usage: lib
 verify-knob-staleness:
 	python3 tools/verify_knob_staleness.py
 
+# verify-resident-bytes — the §5 footprint ratchet (issue #113, and the
+# "wave 3 item F" the manifest has been asking for since v0.9.0).
+#
+# Until this existed the five RESIDENT_BYTES literals were hand-maintained
+# with no check at all, and all five were 512 B BELOW the bound a consumer
+# can reach — the direction §5 calls dangerous. Checks each variant's
+# declared value against `od65 sum + 255 * page-aligned sections`.
+#
+# Not named lib-*: that is a local convention for archive-producing targets.
+# NOTE: this target sets CONTRACT_DEFINES itself, once per profile, and so
+# ignores one passed on the command line. That is deliberate — its job is to
+# check EVERY shipped configuration, not the one you happened to ask for.
+# Before this, three legs were hardcoded to Profile B values while the objects
+# they measured followed whatever knob the caller passed, so
+# `make verify-resident-bytes CONTRACT_DEFINES="-D POLY1305_PROFILE_LONG=1"`
+# compared Profile A objects against Profile B literals and printed OK.
+verify-resident-bytes:
+	@set -e; \
+	for prof in "" "-D POLY1305_PROFILE_LONG=1"; do \
+	  if [ -z "$$prof" ]; then pname="Profile B"; else pname="Profile A"; fi; \
+	  for t in lib lib-aead-only lib-app-owned; do \
+	    case "$$t" in \
+	      lib)            d=$(LIB_OBJS_DIR);; \
+	      lib-aead-only)  d=$(LIB_AEAD_ONLY_OBJS_DIR);; \
+	      lib-app-owned)  d=$(LIB_APP_OWNED_OBJS_DIR);; \
+	    esac; \
+	    $(MAKE) --no-print-directory $$t CONTRACT_DEFINES="$$prof" >/dev/null; \
+	    echo "  --- $$pname $$t ---"; \
+	    python3 tools/measure_resident_bytes.py $$d --check; \
+	  done; \
+	done; \
+	$(MAKE) --no-print-directory lib >/dev/null; \
+	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles"
+
+
 # §6.1 member-isolation guard (contract SPEC v1.2.0/v1.2.1/v1.2.2, issue #108).
 #
 # Named lib-* because it consumes what `make lib*` produces: it builds the

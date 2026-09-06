@@ -83,7 +83,9 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   MEASUREMENT BASIS (rebased for v0.7.0). These numbers are now the
 ;   library's OWN segment contribution — the sum of
 ;   LIB_CHACHA20_POLY1305_CODE + LIB_CHACHA20_POLY1305_DATA across the
-;   archive's member objects, via `od65 --dump-segsize`.
+;   archive's member objects — PLUS the alignment fill a consumer pays,
+;   which the sum alone omits. See "THE BASIS" below: the sum is an INPUT
+;   to the declared value, not the declared value.
 ;
 ;   Through v0.6.0 the basis was "PRG file size minus the 2-byte
 ;   LOADADDR header", measured from build/profile-*/*.prg. That number
@@ -98,19 +100,23 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   The segment-sum basis is consumer-independent: it does not move with
 ;   anyone's cfg, padding, or entry stub, and it is exactly what SPEC §5
 ;   asks for ("code+rodata footprint that must remain CPU-resident in
-;   any consumer"). Reproduce with:
+;   any consumer"). Reproduce the SUM with:
 ;
-;     make lib && for o in build/lib/objs/*.o; do od65 --dump-segsize $o; done
+;     make lib && python3 tools/measure_resident_bytes.py build/lib/objs
+;
+;   which also prints the fill terms and the value to declare. Do NOT use
+;   a bare `od65 --dump-segsize` loop: it yields the sum only, and the sum
+;   is what issue #113 found under-reporting every literal by 768 B.
 ;
 ;   Measured (SPEC §14.1 domain-guard re-measure; +96 B CODE in EVERY
 ;   configuration over the aead_tag numbers — the two guard expansions
 ;   at each of the two entry points, 47 B per entry point, plus the
 ;   2-byte `lda #AEAD_OK` that gave aead_encrypt a success return):
-;     Profile A full       15 568 B  (CODE 15 273 + DATA 295) -> 15 872
-;     Profile A aead-only  15 243 B  (CODE 14 948 + DATA 295) -> 15 360
-;     Profile B full       16 841 B  (CODE 16 546 + DATA 295) -> 17 152
-;     Profile B aead-only  16 516 B  (CODE 16 221 + DATA 295) -> 16 640
-;     Profile B app-owned  16 544 B  (CODE 16 249 + DATA 295) -> 16 896
+;     Profile A full       15 568 B  (CODE 15 273 + DATA 295) -> 16 640
+;     Profile A aead-only  15 243 B  (CODE 14 948 + DATA 295) -> 16 384
+;     Profile B full       16 841 B  (CODE 16 546 + DATA 295) -> 17 920
+;     Profile B aead-only  16 516 B  (CODE 16 221 + DATA 295) -> 17 664
+;     Profile B app-owned  16 544 B  (CODE 16 249 + DATA 295) -> 17 664
 ;
 ;   THE MEASURED COLUMN DROPPED AT ISSUE #108 AND NO REAL BYTE MOVED.
 ;   Re-measured against v0.10.0 the five figures fell by 83, 83, 104, 104
@@ -147,8 +153,8 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   footprint: the link column is byte-identical between trees. It does
 ;   change the correct literal for two variants (A aead-only and B
 ;   aead-only, each +256) purely because the third page-aligned section
-;   moves the bound past a page boundary. The fix, the corrected values
-;   and a corrected recipe are #113; it lands before the next tag.
+;   moves the bound past a page boundary. The fix, the corrected values and the
+;   corrected recipe ARE this release (#113).
 ;
 ;   THREE OF THESE LITERALS WERE UNDER-REPORTING AND NOTHING CAUGHT IT.
 ;   The domain guards pushed Profile A full (15 616 -> actual 15 651),
@@ -157,49 +163,105 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   DANGEROUS direction: a consumer's `.assert resident <= N` fit check
 ;   under-reserves and the overrun is silent.
 ;
-;   These four (now five) literals are hand-maintained with NO automated
-;   check — unlike LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES, which
+;   These five literals were hand-maintained with NO automated check until #113 — unlike LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES, which
 ;   tools/verify_zp_usage.py pins against the built objects. Nothing in
 ;   the build, in `make test`, or in any audit would have flagged the
 ;   overrun above; it was found only because a footprint measurement was
-;   run by hand. A verify-resident-bytes audit on the same pattern as
-;   verify_zp_usage.py is the obvious closure and is tracked as wave 3
-;   item F. Until it exists, RE-MEASURE THESE BY HAND whenever you add
+;   run by hand. That audit now exists — `make verify-resident-bytes`, on the same
+;   pattern as verify_zp_usage.py, reading each variant's equate out of the
+;   object it just built. It closes what was tracked as wave 3 item F. RE-MEASURE WITH `make verify-resident-bytes` whenever you add
 ;   code to a library TU. This one-liner sums the two segments across a
 ;   variant's objects and prints the total, which should equal the
 ;   "measured" figure in the table above for whichever variant you built:
 ;
-;     make lib && od65 --dump-segments build/lib/objs/*.o | awk '
-;       /Index:/{n=""} /Name:/{n=$2}
-;       /Size:/ && n ~ /LIB_CHACHA20_POLY1305_(CODE|DATA)/ {s+=$2; k++}
-;       END{ if (k==0) {
-;              print "FATAL: matched 0 CODE/DATA segments." > "/dev/stderr"
-;              print "  Wrong path, an .a archive, or od65 format changed." > "/dev/stderr"
-;              exit 1 }
-;            print s }'
+;     make lib && python3 tools/measure_resident_bytes.py build/lib/objs
+;
+;   THE SUM ALONE IS NOT THE ANSWER, AND USING IT AS ONE IS ISSUE #113.
+;   od65 reports each OBJECT's segment sizes. It cannot report the padding
+;   ld65 inserts BETWEEN sections when it honours their alignment — and this
+;   library forces that padding to exist: LIB_CHACHA20_POLY1305_CODE must be
+;   declared `align = $100` (the CT invariant for the nibswap LUTs and
+;   poly_reduce_shl6_tab), and three sections carry `Alignment: 256`.
+;
+;   A consumer pays sum + fill. Fill before an aligned section is
+;   (-offset) mod 256, and the offset depends on which members that consumer
+;   pulls, so any residue 0..255 is reachable per aligned section. The bound
+;   §5 asks for — "resident in EVERY consumer" — is therefore
+;
+;       sum
+;     + (alignment - 1) per page-aligned FRAGMENT
+;     + (alignment - 1) for the SEGMENT START itself
+;     rounded up to 256
+;
+;   THE SEGMENT-START TERM IS THE ONE THAT WAS MISSING. §4 requires the
+;   consumer to declare LIB_CHACHA20_POLY1305_CODE with `align = $100`, so
+;   ld65 must pad from wherever the consumer's own preceding code ends to
+;   the next page. That offset is the consumer's code size, so any residue
+;   0..255 is reachable — the identical argument the fragment charge rests
+;   on, applied one level up. The library forces n+1 alignment boundaries
+;   and the first version of this fix paid for n. Caught in review with a
+;   real link: an adversarial member order put library-attributable bytes
+;   at 17856 against a then-declared 17664.
+;
+;   Measured before #113, all ten rows across two trees: sum + fill = link
+;   exactly, and all five literals were 512 B short of the bound. Rounding
+;   the sum to the next 256 adds at most 255 B, which cannot cover a fill
+;   that reaches 419 B — the old convention silently assumed ONE aligned
+;   section and there are three.
+;
+;   THIS IS AN UPPER BOUND, NOT A MEASUREMENT, AND IT OVER-RESERVES ON
+;   PURPOSE. The charge is the worst case each aligned fragment can cost;
+;   any given link pays less — measured fill has run 246-419 B against a
+;   765 B charge, so roughly 350-500 B of the declared value is slack a
+;   real link will not use. §5 requires the safe direction, so that is
+;   conformant — but it matters to a consumer sizing a tight region: if
+;   your fit check fails against this equate by a few hundred bytes, a
+;   real link may still fit, so measure your own before re-planning a
+;   memory map. What you must NOT do is lower this literal on the strength
+;   of that measurement: it is a bound over EVERY consumer, not a
+;   description of yours.
+;
+;   SCOPE LIMIT, STATED AS ONE. The bound covers fill forced by the
+;   alignments this library declares. A consumer declaring MORE —
+;   `align = $200` — forces fill beyond it and would under-reserve.
+;
+;   That is PERMITTED, not a violation: §4's obligation is on the library,
+;   and `$200` satisfies the CT invariant outright since 512-aligned
+;   implies 256-aligned. §5 says "every consumer", unqualified, so this
+;   exclusion is this library narrowing §5 by fiat — a stated scope limit,
+;   not a claim that such a consumer is out of contract.
+;
+;   It is the right limit for a measured reason: `align = $200` costs +38 B
+;   over the declared value, `$400` costs +550, and it grows without limit,
+;   so no finite bound over consumer alignment choices exists. The case
+;   only arises when a consumer deviates from the cfg line §4 tells them to
+;   copy verbatim; copy it and this term is exact.
+;
+;   Do NOT re-derive these literals from a measured consumer link either.
+;   There is no single real link: a consumer that pulls part of the archive
+;   measures BELOW the sum (test_consumer's aead-only link came in 453 B
+;   under it), and one that pulls all of it measures above. Only the bound
+;   covers both.
 ;
 ;   Substitute objs-aead-only / objs-app-owned (after `make lib-aead-only`
 ;   / `make lib-app-owned`) or build/profile-a for the other rows. Compare
 ;   the result against the literal THIS build's .ifdef selects, below.
 ;
-;   THE k==0 GUARD AND THE `/Index:/{n=""}` RESET ARE LOAD-BEARING. Do not
-;   simplify them away:
+;   THE ONE-LINER THIS PARAGRAPH DEFENDED IS GONE, AND ITS LESSON IS NOT.
+;   An earlier version of this note carried an awk pipeline with a k==0
+;   guard, because od65 EXITS 0 on a .a archive — printing only
+;   "(no xo65 object file)" — so a grep-based audit pointed at the
+;   archive sums nothing, prints a blank line and succeeds. Same silent
+;   outcome for a mistyped path or an empty glob.
 ;
-;     * od65 EXITS 0 on a .a archive, printing only "(no xo65 object
-;       file)". Without the k==0 check the pipeline sums nothing, prints a
-;       blank line and succeeds — and since the basis note above says
-;       "archive's member objects", pointing this at the .a is the natural
-;       user error. tools/verify_zp_usage.py:69-81 guards the same trap
-;       for the same reason ("audit would be vacuous").
-;     * Same silent-blank outcome for a mistyped path or an empty glob.
-;     * The sum assumes `Name:` precedes `Size:` inside each segment
-;       block. That holds today (verified: 48/48 blocks), but resetting n
-;       at each `Index:` means a future od65 that reversed them would
-;       match nothing and trip the k==0 check, rather than silently
-;       attaching sizes to the wrong names.
+;   tools/measure_resident_bytes.py now carries that guard, and two
+;   more: it exits FATAL on an object directory with no library
+;   sections, and FATAL when it finds sections but none page-aligned —
+;   which is what a parser reading od65's fields out of order produces,
+;   and which would silently make the bound equal the sum.
 ;
 ;   An instruction that reports success when it has measured nothing is
-;   the defect this whole note exists to warn about.
+;   the defect this whole note exists to warn about
 ;
 ;   VARIANT-AWARE as of issue #69. Until then this equate was gated on
 ;   the profile only, so the aead-only archive shipped a manifest
@@ -243,22 +305,22 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; measures the same 15 568 B as a full one (was 15 555 before the
   ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16384
   .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15872
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .endif
 .else
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
       ; consumer. Measured 16 544 B (was 16 593 before the §14.1 domain
-      ; guards, which pushed it past the old 16 640 literal — hence the
-      ; bump to 16 896 here).
+      ; guards, which pushed it past the old 17 664 literal — hence the
+      ; bump to 17 664 here).
       ;
       ; A build that is BOTH aead-only and app-owned lands in the
-      ; aead-only branch above at 16 640, which OVER-reports it — the
+      ; aead-only branch above at 17 664, which OVER-reports it — the
       ; safe direction, and no shipped target combines them.
       ;
       ; That holds by construction, not by measurement, and the argument
@@ -272,9 +334,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
       ; min(aead-only, app-owned) = 16 516, which is under the 16 640 it
       ; is declared. Comparing 16 640 against this branch's own 16 544
       ; is the wrong comparison and makes a safe case look dangerous.
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
     .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17152
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17920
     .endif
   .endif
 .endif
@@ -296,9 +358,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17152
 ; had to become variant-aware rather than leaving this as the only
 ; accurate figure.
 .ifdef POLY1305_PROFILE_LONG
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 15360
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 .else
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16640
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 17664
 .endif
 
 ; ---------------------------------------------------------------------------

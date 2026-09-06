@@ -209,6 +209,18 @@ def check_suppression_roster(src_root):
     known = set()
     for d in SUPPRESSIONS.values():
         known |= set(re.findall(r"-D\s+([A-Za-z0-9_]+)", d or ""))
+    # Positive control. This leg's pass condition is "no unclassified switch",
+    # which an EMPTY input satisfies — a wrong src_root, a renamed tree or a
+    # glob that matched nothing all yield seen=set() and report "all
+    # classified". Nothing would distinguish "looked and found none" from
+    # "looked at nothing". This library always has at least the two §8.x
+    # deferral switches, so zero means the input, not the property.
+    if not seen:
+        sys.exit(f"FATAL: no SHARED_*/LIB_NO_* switches found under "
+                 f"{src_root / 'src'} — this library has at least two, so the "
+                 "input is wrong (bad path, renamed tree, empty glob) and the "
+                 "roster leg would pass vacuously.")
+
     unclassified = seen - known - NON_DISPLACEMENT_KNOBS
     if unclassified:
         return [("suppression roster is stale: " + ", ".join(sorted(unclassified))
