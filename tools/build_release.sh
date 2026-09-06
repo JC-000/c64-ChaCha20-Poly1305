@@ -137,18 +137,43 @@ done
 # absent — a release cut on a machine without the toolchain gets a warning
 # rather than a false pass.
 # ---------------------------------------------------------------------------
+# EVERY target, not just `make lib`. Building only the library leaves the
+# default/profile targets uncovered, and an omission there ships green:
+# dropping src/main.s passes a lib-only leg and then dies in the consumer's
+# hands with "No rule to make target 'src/main.s'". That is the
+# sqtab_base.inc incident above, mirrored — one direction covered, the other
+# not. All five targets take about a second together, so there is no reason
+# to check a subset.
+TARBALL_TARGETS="profile-a profile-b lib lib-aead-only lib-app-owned"
+
 if command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 \
    && command -v ar65 >/dev/null 2>&1; then
-  if ! ( cd "$ROOT_CHECK" && make lib >"$CHECKDIR/build.log" 2>&1 ); then
-    echo "MANIFEST ERROR: 'make lib' fails in the extracted tarball:" >&2
+  if ! ( cd "$ROOT_CHECK" && make $TARBALL_TARGETS >"$CHECKDIR/build.log" 2>&1 ); then
+    echo "MANIFEST ERROR: the extracted tarball fails to build:" >&2
+    echo "  targets: $TARBALL_TARGETS" >&2
     tail -20 "$CHECKDIR/build.log" >&2
     missing=1
   else
-    echo "  tarball 'make lib': OK"
+    echo "  tarball build ($TARBALL_TARGETS): OK"
   fi
+  BUILD_LEG="verified"
+elif [ "${ALLOW_UNVERIFIED_TARBALL:-0}" = "1" ]; then
+  # Deliberate escape hatch, and it must be deliberate. The skip used to
+  # print to stderr while "Built ..." and the SHA256 printed to stdout — so a
+  # release cut on a toolchain-less machine produced an artifact
+  # indistinguishable from a verified one, and that SHA is what gets pasted
+  # into the release notes. Now the marker rides stdout beside the SHA.
+  echo "  WARNING: ca65/ld65/ar65 not on PATH — tarball build leg SKIPPED" >&2
+  echo "           at operator request (ALLOW_UNVERIFIED_TARBALL=1)." >&2
+  BUILD_LEG="SKIPPED (UNVERIFIED)"
 else
-  echo "  WARNING: ca65/ld65/ar65 not on PATH — tarball build leg SKIPPED." >&2
-  echo "           The manifest is unverified against a real build." >&2
+  echo "MANIFEST ERROR: ca65/ld65/ar65 are not on PATH, so the tarball cannot" >&2
+  echo "  be built and its manifest is unverified. A release tarball that has" >&2
+  echo "  never been built is the exact defect this leg exists to catch." >&2
+  echo "  Install the cc65 toolchain, or set ALLOW_UNVERIFIED_TARBALL=1 if you" >&2
+  echo "  genuinely mean to ship one that nothing has compiled." >&2
+  missing=1
+  BUILD_LEG="FAILED (toolchain absent)"
 fi
 
 if [ "$missing" -ne 0 ]; then
@@ -163,3 +188,4 @@ SHA=$(shasum -a 256 "$OUT" | cut -d' ' -f1)
 echo "Built ${OUT}"
 echo "  Size:   ${SIZE} bytes"
 echo "  SHA256: ${SHA}"
+echo "  Build leg: $BUILD_LEG"
