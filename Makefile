@@ -55,6 +55,22 @@ LIB_AEAD_ONLY_OBJS_DIR  = $(LIB_DIR)/objs-aead-only
 LIB_APP_OWNED_AR        = $(LIB_DIR)/$(LIB_NAME)-app-owned.a
 LIB_APP_OWNED_OBJS_DIR  = $(LIB_DIR)/objs-app-owned
 
+# Consumer-facing header and example cfg, emitted alongside the archive so
+# a consumer who fetches build/lib/ gets an interface and a starter linker
+# config, not just an .a to reverse-engineer. They are copied, not
+# generated: the canonical sources are src/chacha20poly1305.inc and
+# cfg/chacha20poly1305-example.cfg, which is what the repo's own docs and
+# examples reference.
+#
+# NOT contract-required. Contract v1.0.0's §6.1 briefly did require them;
+# it was withdrawn at v1.1.1 (c64-lib-contract#178) on the merits — the
+# clause mandated an artifact while naming neither a path nor a symbol for
+# it. We keep them as a local choice. If you are removing them, that is
+# permitted by the contract; docs/INTEGRATION.md and the README's
+# conformance section both describe them, so update those too.
+LIB_INC         = $(LIB_DIR)/$(LIB_NAME).inc
+LIB_EXAMPLE_CFG = $(LIB_DIR)/cfg/$(LIB_NAME)-example.cfg
+
 CA65 = ca65
 LD65 = ld65
 
@@ -473,7 +489,16 @@ $(LIB_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_
 
 # ar65 r appends; rebuild from a clean archive every time so we don't
 # accumulate stale modules from a previous invocation.
-lib: $(LIB_FULL_AR)
+lib: $(LIB_FULL_AR) $(LIB_INC) $(LIB_EXAMPLE_CFG)
+
+$(LIB_INC): src/chacha20poly1305.inc | $(LIB_DIR)
+	cp $< $@
+
+$(LIB_EXAMPLE_CFG): cfg/$(LIB_NAME)-example.cfg | $(LIB_DIR)/cfg
+	cp $< $@
+
+$(LIB_DIR)/cfg:
+	mkdir -p $@
 
 $(LIB_FULL_AR): $(LIB_OBJS) | $(LIB_DIR)
 	rm -f $@ $(LIB_FULL_AR_DEPRECATED)
@@ -609,13 +634,18 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 
 # R2 audit: the §5 ZP_USAGE_BYTES equate is hand-maintained, so nothing
 # tied it to the actual .exportzp surface until this check. Deliberately
-# NOT named lib-* — contract §6.1 reserves that namespace for targets that
-# produce archives.
+# NOT named lib-*: v0.17.1 §6.1 reserved that namespace for targets that
+# produce archives. That sentence was DELETED from §6.1 at contract v1.0.0
+# — deleted from a surviving section, so it is not in RETIRED.md, which
+# lists only wholly retired sections. This is now a local naming
+# convention rather than an obligation — kept because
+# it still tells a reader which targets emit artifacts and which only
+# check them.
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
 
 # §6.3 knob-staleness guard (contract SPEC v0.10.5, issue #86). Runs against
-# a throwaway copy of Makefile + src/, so it does not cost the caller their
+# a throwaway copy of Makefile + src/ + cfg/, so it does not cost the caller their
 # per-profile object cache — the guard's invalidation leg deletes every
 # object under build/ by design.
 verify-knob-staleness:

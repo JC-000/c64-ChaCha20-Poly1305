@@ -30,9 +30,49 @@ In the library repo (or your vendored copy of it):
 
 ```
 make lib              # build/lib/chacha20poly1305.a
+                      #   + build/lib/chacha20poly1305.inc
+                      #   + build/lib/cfg/chacha20poly1305-example.cfg
 make lib-aead-only    # build/lib/chacha20poly1305-aead-only.a
 make lib-app-owned    # build/lib/chacha20poly1305-app-owned.a
 ```
+
+**`make lib` ships a header and a starter cfg beside the archive**, so
+what you fetch is an interface rather than an `.a` to reverse-engineer.
+(This is our choice, not a contract requirement — §6.1 briefly required
+it and the clause was withdrawn at contract v1.1.1.)
+
+`chacha20poly1305.inc` declares the public surface — version and ABI
+equates with the `.assert`/`lderror` guard patterns, the §5 manifest
+equates, the AEAD entry points with all three return codes, and the
+ChaCha20 / Poly1305 subsets:
+
+```asm
+.include "chacha20poly1305.inc"
+```
+
+**Including it whole is safe and free.** ca65 emits an import record only
+for a symbol the translation unit actually *references*, so including the
+header and calling three entry points emits three imports and pulls no
+extra archive members — measured, not assumed. It also cannot break a
+link against a variant archive that omits some of those names, for the
+same reason. Import selectively if you prefer; there is no size argument
+either way.
+
+Two things it deliberately does **not** declare. **ZP slots**, because
+this library uses the §6.2 consumer-assembled-source model — you assemble
+your own `src/zp_config.s` and override there, and importing the slots in
+a header would defeat that. **The §8 shared-primitive names**
+(`mul_tables_init`, `ct_mul_8x8` and friends), because which of them
+exist depends on which archive you linked: the full and aead-only
+archives own and export them, `lib-app-owned` defers and imports them,
+and Profile A has neither. They are listed in the header as commented-out
+imports with that explanation.
+
+`cfg/chacha20poly1305-example.cfg` is a starter linker config. Its two
+`LIB_CHACHA20_POLY1305_*` segment lines carry attributes that are
+load-bearing for correctness and constant-time behaviour, each commented
+with the consequence of dropping it — copy those two lines verbatim. The
+library's own standalone build still uses `src/c64.cfg`.
 
 **Archive basenames changed.** Contract v0.9.0 §6.1 fixes the basename
 as `<shortname>[-<variant>].a`, where `<shortname>` is the §1 library

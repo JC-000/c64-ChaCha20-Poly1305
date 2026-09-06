@@ -273,6 +273,37 @@ LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16640
 LIB_CHACHA20_POLY1305_COLD_BYTES       = 0
 
 ; ---------------------------------------------------------------------------
+; LIB_CHACHA20_POLY1305_AAD_LEN_MAX
+;   Maximum AAD length in bytes, published per c64-lib-contract SPEC §5:
+;   "Where a library's real input restriction is a bound a consumer must
+;   respect — a maximum length, a ceiling — it SHOULD publish that bound
+;   here as a symbol the consumer can reference."
+;
+;   This one is real and structural rather than a policy choice:
+;   `aead_aad_len` is a single byte (`src/lib/data_lib.s`), so 255 is the
+;   largest AAD this ABI can express. A consumer with more AAD than this
+;   has no way to pass it and must be told at assemble time, not by
+;   discovering that byte 256 wrapped.
+;
+;   Consumers SHOULD reference this symbol rather than re-derive 255 from
+;   the field width, which is exactly the re-derivation §5 asks them not
+;   to do:
+;
+;     .import LIB_CHACHA20_POLY1305_AAD_LEN_MAX
+;     .assert MY_AAD_LEN <= LIB_CHACHA20_POLY1305_AAD_LEN_MAX, error, "AAD too long for this library"
+;
+;   NOT published, deliberately: the buffer-domain restriction
+;   `ptr + len <= $10000` on the data and AAD buffers. That is a RELATION
+;   over two caller-supplied values, not a constant — a 65 535-byte buffer
+;   is legal at $0000 and illegal at $0001 — so no scalar expresses it and
+;   §5 says to publish nothing rather than something vacuous. It is
+;   enforced at both entry points instead, returning AEAD_ERR_DOMAIN.
+;   There is likewise no ceiling on `aead_data_len`: it is a full 16-bit
+;   count and the library owns neither buffer.
+; ---------------------------------------------------------------------------
+LIB_CHACHA20_POLY1305_AAD_LEN_MAX      = 255
+
+; ---------------------------------------------------------------------------
 ; LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES
 ;   Bitmask of shared primitives (c64-lib-contract SPEC v0.2.0 §5
 ;   addendum + §8.0 bit allocation) that this library claims ownership
@@ -403,6 +434,7 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 .export LIB_CHACHA20_POLY1305_RESIDENT_BYTES:abs
 .export LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES:abs
 .export LIB_CHACHA20_POLY1305_COLD_BYTES:abs
+.export LIB_CHACHA20_POLY1305_AAD_LEN_MAX:abs
 ; SPEC §8.0 / §8.1 manifest equates exported with `:abs` so ca65 emits
 ; them as absolute-address values rather than `zeropage`; integer-equate
 ; values up to $00ff would otherwise be tagged zeropage and trigger a
