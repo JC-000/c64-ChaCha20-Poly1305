@@ -63,6 +63,63 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second. The declared literals are unchanged and still over-report, which
   is the safe direction.
 
+## [0.11.0] - 2026-09-06
+
+Conformance and correctness release. Makes the archive members conformant
+to contract §6.1 member isolation, and corrects five published footprint
+equates that under-reported what a consumer pays.
+
+**No code changed** — four profile PRGs byte-identical to v0.10.0, every
+symbol at the same address. `LIB_CHACHA20_POLY1305_ABI_VERSION` stays **4**.
+
+**Consumer-visible:** `RESIDENT_BYTES` rises 768 B in every configuration
+(A full 16640, A aead-only 16384, B full 17920, B aead-only 17664, B
+app-owned 17664). The old values were wrong in the dangerous direction. If
+you assert against them and the assert now fails, the failure predates this
+release and was merely invisible. Full detail in
+[`docs/RELEASE_NOTES_v0.11.0.md`](docs/RELEASE_NOTES_v0.11.0.md).
+
+### Fixed
+- **§6.1 member isolation** (#108). `lib_manifest.o` mixed 9 bare
+  `LIB_PRECALC_*` names with 8 equates a consumer imports — a live
+  library-versus-library collision, since four libraries in this fleet emit
+  the same bare `sqtab` triple. `poly1305_lib.o` mixed 8 `APP_OWNED` names
+  with 9 Poly1305 entry points. Split into `precalc_manifest.s` and seven
+  Poly1305 TUs grouped by which switch drops each name. A consumer
+  supplying its own §8.1/§8.3 bodies can now link the **default** archive;
+  before, that was `Duplicate external identifier: 'sqtab_init'`.
+- **All five `RESIDENT_BYTES` literals under-reported by 768 B** (#113).
+  The basis summed each object's segments, which cannot see the padding
+  ld65 inserts between them — padding this library forces to exist via the
+  `align = $100` CT invariant. Measured, all ten rows: `sum + fill = link`
+  exactly. The declared value is now a bound: sum + (alignment-1) per
+  aligned fragment + (alignment-1) for the segment start, rounded up.
+- **`r_tab_lo`/`r_tab_hi` page-alignment asserts.** Fifth alignment
+  mechanism in the library — absolute literals, secret-indexed by `X` from
+  `poly_h`, previously with no check at all.
+
+### Added
+- **`make verify-resident-bytes`** — six checks, both profiles × three
+  variants, each reading the equate from the object it just built. The
+  "wave 3 item F" the manifest had asked for since v0.9.0; its absence is
+  why five wrong literals shipped through four releases.
+- **`make lib-verify-isolation`** — measures the displaceable set by
+  differencing builds rather than listing names; reconciles
+  `bare + prefixed + other == exports` per member; checks its own
+  suppression roster against the switches present in `src/`.
+- **`tools/measure_resident_bytes.py`**, shipped in the release tarball.
+- `make dist` runs the verify targets inside the extracted tarball, not
+  just the build targets.
+
+### Contract conformance — span extended to SPEC v1.2.2
+The contract is frozen at **v1.2.2**. §6.1 member isolation was the only
+outstanding clause and is now met. v1.2.0 introduced it; v1.2.1 added the
+prefixed-counterpart carve-out that resolved this library's third
+apparently-non-conformant member without work; v1.2.2 corrected the
+clause's rationale to name both collision directions. This library's report
+of two unannounced tightenings in the v1.0.0 text cut led to both being
+withdrawn at v1.1.1.
+
 ## [0.10.0] - 2026-09-06
 
 Security and hardening release. Two real defects fixed — one
