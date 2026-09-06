@@ -18,7 +18,9 @@ at all. A copy of it would pass on a tree that still had `ct_mul_8x8` sitting
 beside `poly1305_final`, which is contract #179's shape and this repo's
 actual defect. This is the general test instead.
 
-NOTHING IS HARDCODED — BOTH SIDES ARE DERIVED FROM BUILT OBJECTS.
+THE SYMBOL NAMES ARE DERIVED FROM BUILT OBJECTS. The set of suppression
+MECHANISMS is not — it is the one hand-written list here, and
+check_suppression_roster() fails if a switch in src/ is missing from it.
 The displaceable set is MEASURED, by building the same sources three ways in
 a throwaway tree and differencing the export tables:
 
@@ -157,15 +159,81 @@ def counterparts(bare, exports):
             if e != bare and e.startswith("LIB") and e.endswith(suffix)}
 
 
-def measure_displaceable(tree):
+# Both profiles are shipped consumer configurations (Makefile:115 documents
+# Profile A via CONTRACT_DEFINES, and verify_knob_staleness.py already builds
+# it). They have DIFFERENT export surfaces: Profile A's precalc_manifest.o
+# enumerates r_tab_lo/r_tab_hi where Profile B enumerates sqtab, so the bare
+# names LIB_PRECALC_r_tab_*_{SIZE,REGION,SHARED} exist ONLY under Profile A.
+#
+# Checking one profile therefore cannot see a regression confined to the other.
+# Measured: moving the Profile-A-gated LIB_PRECALC_TABLE invocations back into
+# lib_manifest.s — re-creating the exact defect #108 was filed for — passed a
+# Profile-B-only run with exit 0. Six builds instead of three; ~1.6 s.
+PROFILES = {
+    "profile-B (default)": None,
+    "profile-A": "-D POLY1305_PROFILE_LONG=1",
+}
+
+
+# Knobs that gate an EXPORT (and so make a name displaceable) versus knobs
+# that select a build shape. SUPPRESSIONS below enumerates the first kind by
+# hand, which is the one thing in this tool that is not derived — so this leg
+# fails loudly the moment a switch appears in src/ that is not classified.
+# Without it, a name made displaceable by a third switch is invisible to every
+# other leg: measured, `reu_mul_stub` exported under `.ifndef SHARED_REU_MUL`
+# beside 21 importable names reported "none displaceable, OK, exit 0".
+NON_DISPLACEMENT_KNOBS = {
+    "POLY1305_PROFILE_LONG",     # selects a profile, not an export surface
+    "LIB_VARIANT_AEAD_ONLY",     # selects a variant's member set
+    "CHACHA20_USE_WORD32",       # codegen choice
+    "POLY1305_MULTIPLY_ROLLED",  # codegen choice
+    "POLY1305_MULTIPLY_ROLLED_OUTER",
+    "POLY1305_REU",
+}
+
+
+def check_suppression_roster(src_root):
+    """Every SHARED_*/LIB_NO_* switch tested in src/ must be classified here.
+
+    The symbol NAMES are derived by differencing, but the set of MECHANISMS is
+    hand-written. That is the tool's one hardcoded list, so it gets a check of
+    its own rather than a promise.
+    """
+    seen = set()
+    for f in (src_root / "src").rglob("*"):
+        if f.suffix not in (".s", ".inc") or not f.is_file():
+            continue
+        for m in re.finditer(r"\.(?:ifdef|ifndef)\s+(SHARED_[A-Z0-9_]+|LIB_NO_[A-Z0-9_]+)",
+                             f.read_text(errors="replace")):
+            seen.add(m.group(1))
+    known = set()
+    for d in SUPPRESSIONS.values():
+        known |= set(re.findall(r"-D\s+([A-Za-z0-9_]+)", d or ""))
+    unclassified = seen - known - NON_DISPLACEMENT_KNOBS
+    if unclassified:
+        return [("suppression roster is stale: " + ", ".join(sorted(unclassified))
+                 + " gate an export in src/ but appear in neither SUPPRESSIONS "
+                   "nor NON_DISPLACEMENT_KNOBS, so any name they displace is "
+                   "invisible to every leg of this check")]
+    print(f"  suppression roster: {len(seen)} gating switches in src/, all classified")
+    return []
+
+
+def join_defines(*parts):
+    """Combine ca65 define strings; None-safe. Profile knob rides alongside."""
+    kept = [p for p in parts if p]
+    return " ".join(kept) if kept else None
+
+
+def measure_displaceable(tree, profile_defines=None):
     """Build three ways in `tree`; return (displaceable set, per-knob detail)."""
-    build_tree(tree, "lib", None)
+    build_tree(tree, "lib", profile_defines)
     base, _ = members(tree / VARIANTS["lib"])
     base_names = flat(base)
     detail = {}
     displaceable = set()
     for label, defines in SUPPRESSIONS.items():
-        build_tree(tree, "lib", defines)
+        build_tree(tree, "lib", join_defines(profile_defines, defines))
         supp, _ = members(tree / VARIANTS["lib"])
         gone = base_names - flat(supp)
         detail[label] = gone
@@ -236,19 +304,24 @@ def main():
         shutil.copytree(src_root / "cfg", tree / "cfg")
         shutil.copy2(src_root / "Makefile", tree / "Makefile")
 
-        displaceable, detail = measure_displaceable(tree)
-        for label, gone in detail.items():
-            print(f"  measured displaceable under {label:<20} "
-                  f"{len(gone):>3}: {', '.join(sorted(gone)) or '(none)'}")
-        # Leg 2: non-vacuity.
-        if not displaceable:
-            failures.append("no displaceable names measured at all — the "
-                            "suppression knobs did not reach the build, so "
-                            "leg 1 would pass vacuously")
+        failures += check_suppression_roster(src_root)
 
-        for target, objdir in VARIANTS.items():
-            build_tree(tree, target, None)
-            failures += check_variant(target, tree / objdir, displaceable)
+        for pname, pdefines in PROFILES.items():
+            print(f"\n  --- {pname} ---")
+            displaceable, detail = measure_displaceable(tree, pdefines)
+            for label, gone in detail.items():
+                print(f"  measured displaceable under {label:<20} "
+                      f"{len(gone):>3}: {', '.join(sorted(gone)) or '(none)'}")
+            # Leg 2: non-vacuity, per profile.
+            if not displaceable:
+                failures.append(f"{pname}: no displaceable names measured at "
+                                "all — the suppression knobs did not reach the "
+                                "build, so leg 1 would pass vacuously")
+
+            for target, objdir in VARIANTS.items():
+                build_tree(tree, target, pdefines)
+                failures += [f"{pname}: {f}" for f in
+                             check_variant(target, tree / objdir, displaceable)]
 
     if failures:
         print()
