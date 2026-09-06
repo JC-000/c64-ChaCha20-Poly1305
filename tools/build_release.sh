@@ -75,6 +75,7 @@ git archive \
   docs/AUDIT.md docs/CT_ANALYSIS.md \
   docs/precalc-tables.md docs/REPRO_CHECK.md \
   tools/verify_zp_usage.py tools/verify_knob_staleness.py \
+  tools/verify_member_isolation.py \
   test/rfc7539_vectors.json \
   "$NOTES" \
   | gzip -n -9 > "$OUT"
@@ -116,7 +117,7 @@ done
 # dependency), and re-rolling a release from inside a release tarball is not a
 # supported operation. Only tools a consumer needs to BUILD or VERIFY the
 # library are required here.
-REQUIRED_TOOLS="tools/verify_zp_usage.py tools/verify_knob_staleness.py"
+REQUIRED_TOOLS="tools/verify_zp_usage.py tools/verify_knob_staleness.py tools/verify_member_isolation.py"
 for t in $REQUIRED_TOOLS; do
   if [ ! -f "$ROOT_CHECK/$t" ]; then
     echo "MANIFEST ERROR: the shipped Makefile invokes '$t', which the tarball omits" >&2
@@ -147,17 +148,23 @@ done
 # sqtab_base.inc incident above, mirrored — one direction covered, the other
 # not. All five targets take about a second together, so there is no reason
 # to check a subset.
+# Build targets AND the verify targets. Building only proved the sources
+# ship; it did not prove the TOOLS ship. `verify_member_isolation.py` was
+# omitted from both lists above and every leg stayed green, because no leg
+# ran the target that needs it — the same omission class as the two source
+# files this leg was added to catch, one layer up.
 TARBALL_TARGETS="profile-a profile-b lib lib-aead-only lib-app-owned"
+TARBALL_VERIFY="lib-verify-isolation lib-verify-shared verify-zp-usage"
 
 if command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 \
    && command -v ar65 >/dev/null 2>&1; then
-  if ! ( cd "$ROOT_CHECK" && make $TARBALL_TARGETS >"$CHECKDIR/build.log" 2>&1 ); then
+  if ! ( cd "$ROOT_CHECK" && make $TARBALL_TARGETS $TARBALL_VERIFY >"$CHECKDIR/build.log" 2>&1 ); then
     echo "MANIFEST ERROR: the extracted tarball fails to build:" >&2
-    echo "  targets: $TARBALL_TARGETS" >&2
+    echo "  targets: $TARBALL_TARGETS $TARBALL_VERIFY" >&2
     tail -20 "$CHECKDIR/build.log" >&2
     missing=1
   else
-    echo "  tarball build ($TARBALL_TARGETS): OK"
+    echo "  tarball build + verify ($TARBALL_TARGETS $TARBALL_VERIFY): OK"
   fi
   BUILD_LEG="verified"
 elif [ "${ALLOW_UNVERIFIED_TARBALL:-0}" = "1" ]; then

@@ -226,6 +226,9 @@ library's `.ifndef` equates**:
 
 No symbol in the current export surface lacks a calling-convention
 comment header. All `.export`ed entries in `word32_lib.s`,
-`chacha20_lib.s`, `poly1305_lib.s`, and `chacha20poly1305_lib.s`
+`chacha20_lib.s`, `chacha20poly1305_lib.s` and the Poly1305 group —
+`poly1305_lib.s` plus the six translation units split from it at #108
+(`poly1305_core.s`, `poly1305_ripple.s`, `shared_sqtab_init.s`,
+`shared_ct_mul.s`, `shared_prod_scratch.s`, `mul_8x8_legacy.s`) —
 have `; =====`-framed headers above them. See `API.md` for the
 per-symbol calling conventions.

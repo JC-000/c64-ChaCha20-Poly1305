@@ -54,11 +54,18 @@ THREE LEGS, AND THE THIRD IS ABOUT THE INSTRUMENT.
                    exactly that bug hid two bare `LIB_PRECALC_sqtab_*` names
                    and made a count of 9 read as 7.
 
-PARSER NOTE — DO NOT "TIDY" THE REGEX. `od65` pads `Name:` to a fixed column,
-and a name of exactly 24 characters computes to zero padding, so the row
-comes out as `Name:"LIB_PRECALC_sqtab_SHARED"` with NO space. `awk '{print
-$2}'` and `Name:\s+"` both drop those rows silently. The `\s*` below (and the
-equivalent `sed -n 's/.*Name: *"...` spelling in the docs) is load-bearing.
+PARSER NOTE — DO NOT "TIDY" THE REGEX. `od65` emits |24 - len(name)| spaces
+after `Name:` — the signature of printf("Name:%*s\"%s\"", 24 - Len, "", Name),
+where a negative %*s width left-justifies rather than truncating. A name of
+exactly 24 characters therefore gets ZERO spaces, and the row comes out as
+`Name:"LIB_PRECALC_sqtab_SHARED"` with NO space. `awk '{print $2}'` and
+`Name:\s+"` both drop such rows silently. The `\s*` below (and the equivalent
+`sed -n 's/.*Name: *"...` spelling in the docs) is load-bearing.
+
+It is NOT a fixed column — the quote position moves with every name (11 to 45
+across this library's objects), so a fixed-offset extraction is wrong for
+almost every name rather than just at 24. Verified across four repositories,
+lengths 4 to 58.
 
 Usage:  python3 tools/verify_member_isolation.py [--tree DIR]
 Exit:   0 conformant, 1 violation or broken instrument.

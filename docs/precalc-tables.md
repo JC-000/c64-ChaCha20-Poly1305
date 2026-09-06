@@ -57,9 +57,11 @@ so they are intentionally NOT enumerated via `LIB_PRECALC_TABLE`:
 
 ## Profile gating
 
-Profile A (`POLY1305_PROFILE_LONG=1` build) emits all five rows:
-`sqtab` + the two `chacha_nibswap_*` tables + the two `r_tab_*` tables.
-Profile B emits three rows: `sqtab` + the two `chacha_nibswap_*` tables.
+Profile A (`POLY1305_PROFILE_LONG=1` build) emits **four** rows: the two
+`chacha_nibswap_*` tables + the two `r_tab_*` tables. It does **not** emit
+`sqtab` — issue #51 profile-gated that table, and Profile A neither emits
+nor consumes it.
+Profile B emits **three** rows: `sqtab` + the two `chacha_nibswap_*` tables.
 The two `r_tab_*` rows are gated behind `.ifdef POLY1305_PROFILE_LONG`
 because Profile B does not allocate the Shoup r-tables (it falls back
 to sqtab via `ct_mul_8x8`).
@@ -83,11 +85,20 @@ plus the two `r_tab_*`) and Profile B three (the two nibswap LUTs plus
 enumerates no `sqtab` row.
 
 **Extracting names, not counting them: do NOT use `awk '{print $2}'` or a
-`Name:\s+"` regex.** `od65` pads `Name:` to a fixed column, and a name of
-exactly 24 characters computes to ZERO padding — `LIB_PRECALC_sqtab_SHARED`
-and `LIB_PRECALC_sqtab_REGION` both emit as `Name:"..."` with no space, and
-both extractions silently drop them. That turned a true count of 9 bare
-names into a reported 7 during this issue's audit. Use:
+`Name:\s+"` regex.** `od65` emits `|24 - len(name)|` spaces after `Name:` —
+the signature of `printf("Name:%*s\"%s\"", 24 - Len, "", Name)`, where a
+*negative* `%*s` width left-justifies instead of truncating. So a name of
+exactly 24 characters gets **zero** spaces: `LIB_PRECALC_sqtab_SHARED` and
+`LIB_PRECALC_sqtab_REGION` both emit as `Name:"..."` with no space, and both
+extractions silently drop them. That turned a true count of 9 bare names
+into a reported 7 during this issue's audit.
+
+It is **not** a fixed column, and believing that leads somewhere worse: the
+quote position moves with every name — measured from 11 to 45 across this
+library's objects — so a `cut -c` or fixed-offset extraction fails on almost
+everything, not just at 24. Confirmed independently across four repositories,
+name lengths 4 to 58. Only length 24 breaks field-splitting; every other
+length has at least one space. Use:
 
 ```
 od65 --dump-exports build/lib/objs/precalc_manifest.o \

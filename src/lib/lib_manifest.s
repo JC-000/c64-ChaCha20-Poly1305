@@ -128,12 +128,27 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   the same 104 B, in the same place in the image, uncounted. Same bytes,
 ;   same addresses, different bucket.
 ;
-;   The declared literals below are UNCHANGED and remain correct: the
-;   measurement fell, so each rounded-up literal now over-reports by more,
-;   which is the safe direction for a consumer's `.assert resident <= N`.
-;   Do not "correct" a literal downward on the strength of this: a consumer
-;   linking the archive still pays the inter-section pad, so the literals
-;   describe the real link more honestly than the measured column now does.
+;   The declared literals below are UNCHANGED by this split. Do NOT
+;   "correct" one downward on the strength of the measured column falling:
+;   a consumer linking the archive still pays the inter-section pad, which
+;   the od65 basis does not count.
+;
+;   AND THE LITERALS ARE THEMSELVES WRONG, IN THE DANGEROUS DIRECTION —
+;   see issue #113. Do not read the widened gap above as safety margin.
+;   Against the bound a consumer can actually reach (od65 sum plus the
+;   worst-case alignment fill, 255 B per page-aligned section), ALL FIVE
+;   literals are short by 512 B, on `main` as well as here. Measured, all
+;   ten rows: `od65 + fill = link` exactly. Rounding the od65 figure up to
+;   the next 256 adds at most 255 B of cushion while the fill runs
+;   246-419 B, so the round-up never reliably covered the omission — the
+;   convention assumed one page-aligned section and there are now three.
+;
+;   This split does not cause that and does not worsen a consumer's real
+;   footprint: the link column is byte-identical between trees. It does
+;   change the correct literal for two variants (A aead-only and B
+;   aead-only, each +256) purely because the third page-aligned section
+;   moves the bound past a page boundary. The fix, the corrected values
+;   and a corrected recipe are #113; it lands before the next tag.
 ;
 ;   THREE OF THESE LITERALS WERE UNDER-REPORTING AND NOTHING CAUGHT IT.
 ;   The domain guards pushed Profile A full (15 616 -> actual 15 651),
@@ -225,7 +240,7 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
   ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
   ; switches remove nothing further — an app-owned Profile A build
-  ; measures the same 15 651 B as a full one (was 15 555 before the
+  ; measures the same 15 568 B as a full one (was 15 555 before the
   ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
@@ -238,7 +253,7 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
-      ; consumer. Measured 16 689 B (was 16 593 before the §14.1 domain
+      ; consumer. Measured 16 544 B (was 16 593 before the §14.1 domain
       ; guards, which pushed it past the old 16 640 literal — hence the
       ; bump to 16 896 here).
       ;
@@ -254,8 +269,8 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
       ; removes the §8.1 init and §8.3 ct_mul bodies, replacing each
       ; with an `.import` that emits no segment bytes. A build defining
       ; both therefore removes the UNION and measures at most
-      ; min(aead-only, app-owned) = 16 620, which is under the 16 640 it
-      ; is declared. Comparing 16 640 against this branch's own 16 689
+      ; min(aead-only, app-owned) = 16 516, which is under the 16 640 it
+      ; is declared. Comparing 16 640 against this branch's own 16 544
       ; is the wrong comparison and makes a safe case look dangerous.
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
     .else

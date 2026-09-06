@@ -1,5 +1,28 @@
 # CT_ANALYSIS — Constant-Time Audit (v0.3.0)
 
+> **Line numbers in this section predate the #108 member-isolation split, and
+> `poly1305_lib.s` was divided into seven translation units. Twenty-six of the
+> thirty-five `poly1305_lib.s:<line>` citations across this file and
+> `CT_ANALYSIS.md` now point past its end. The SYMBOL NAME is authoritative;
+> the line number is not.** They are deliberately not re-derived — a line
+> number in prose drifts at every edit, and this set had already drifted once
+> before anyone noticed. Where a routine now lives:
+>
+> | symbol | file |
+> |---|---|
+> | `poly1305_init` `poly1305_lib_init` `poly1305_clamp` | `src/lib/poly1305_lib.s` |
+> | `poly1305_multiply` `poly1305_reduce` `poly1305_block` `poly1305_update` `poly1305_final` | `src/lib/poly1305_core.s` |
+> | `poly_ripple` | `src/lib/poly1305_ripple.s` |
+> | `mul_tables_init` `sqtab_init` | `src/lib/shared_sqtab_init.s` |
+> | `ct_mul_8x8` `smc_sum_a_imm` `smc_diff_a_imm` | `src/lib/shared_ct_mul.s` |
+> | `poly_prod_lo` `poly_prod_hi` | `src/lib/shared_prod_scratch.s` |
+> | `mul_8x8` (legacy) | `src/lib/mul_8x8_legacy.s` |
+> | `poly_reduce_shl6_tab` | `src/lib/poly1305_core.s` |
+>
+> `git grep -n '^<symbol>:' src/lib/` resolves any of them exactly.
+
+
+
 Static audit of the merged-main library tree. Auditor: task #11
 (audit-reader, original static sweep). Follow-up fix: task #17
 (ct-fixer). Scope: every conditional branch in `src/main.s`,
