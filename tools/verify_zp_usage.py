@@ -36,8 +36,11 @@ Two properties beyond the total:
 Usage:  python3 tools/verify_zp_usage.py
 Exit:   0 conformant, 1 drift detected.
 
-Not named `lib-*`: contract §6.1 reserves that make-target namespace for
-targets producing archives.
+Not named `lib-*`: v0.17.1 §6.1 reserved that make-target namespace for
+targets producing archives. That sentence was DELETED from §6.1 at contract
+v1.0.0 and no replacement exists, so this is now a local naming convention
+rather than an obligation — kept because it still tells a reader which
+targets emit artifacts and which only check them.
 """
 
 import re
@@ -180,7 +183,7 @@ def main():
         fail = True
     if declared < actual:
         print(f"  FAIL: equate {declared} < actual {actual} — understates usage; "
-              "§6.6 requires safe-direction (>= actual)")
+              "§5 requires safe-direction (>= actual)")
         fail = True
     elif declared != actual:
         print(f"  note: equate {declared} > actual {actual} (safe direction; "
