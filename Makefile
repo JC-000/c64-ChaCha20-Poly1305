@@ -870,13 +870,13 @@ verify-resident-bytes:
 	@set -e; \
 	$(MAKE) --no-print-directory lib >/dev/null; \
 	echo "  --- Profile B full ---"; \
-	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check 17664; \
+	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check 17920; \
 	$(MAKE) --no-print-directory lib-aead-only >/dev/null; \
 	echo "  --- Profile B aead-only ---"; \
-	python3 tools/measure_resident_bytes.py $(LIB_AEAD_ONLY_OBJS_DIR) --check 17408; \
+	python3 tools/measure_resident_bytes.py $(LIB_AEAD_ONLY_OBJS_DIR) --check 17664; \
 	$(MAKE) --no-print-directory lib-app-owned >/dev/null; \
 	echo "  --- Profile B app-owned ---"; \
-	python3 tools/measure_resident_bytes.py $(LIB_APP_OWNED_OBJS_DIR) --check 17408; \
+	python3 tools/measure_resident_bytes.py $(LIB_APP_OWNED_OBJS_DIR) --check 17664; \
 	echo "  verify-resident-bytes: OK — every declared literal covers its bound"
 
 # §6.1 member-isolation guard (contract SPEC v1.2.0/v1.2.1/v1.2.2, issue #108).

@@ -10,7 +10,18 @@ the bound — the direction §5 calls dangerous.
 THE BASIS, STATED (issue #113). Declared value =
     sum of each object's LIB_CHACHA20_POLY1305_* section sizes
   + sum of (alignment - 1) over every page-aligned fragment
+  + (segment alignment - 1) for the SEGMENT START itself
   rounded up to the next 256.
+
+THE SEGMENT-START TERM IS NOT OPTIONAL, and omitting it was a real defect in
+this tool's first version. The library requires its consumer to declare
+LIB_CHACHA20_POLY1305_CODE with `align = $100` (§4, the CT invariant), so
+ld65 must pad from wherever the consumer's preceding code ends up to the next
+page. That offset is the consumer's own code size, so any residue 0..255 is
+reachable — the identical argument the fragment charge rests on, applied one
+level up. The library forces n+1 alignment boundaries and the first version
+paid for n. Demonstrated with a real link: an adversarial member order put
+library-attributable bytes at 17856 against a declared 17664.
 
 The charge is per ALIGNED FRAGMENT, not per segment, because this library's
 LIB_CHACHA20_POLY1305_CODE takes contributions from eight objects and three of
@@ -59,6 +70,7 @@ def measure(objdir):
     total = 0
     aligned = 0
     charge = 0          # sum of (alignment - 1) over aligned fragments
+    seg_align = {}      # per segment: the alignment its start must satisfy
     seen = 0
     for obj in sorted(os.listdir(objdir)):
         if not obj.endswith(".o"):
@@ -86,6 +98,7 @@ def measure(objdir):
                     if a > 1:
                         aligned += 1
                         charge += a - 1     # worst-case pad before this fragment
+                        seg_align[name] = max(seg_align.get(name, 1), a)
                 name = size = None
     if seen == 0:
         sys.exit(f"FATAL: no LIB_CHACHA20_POLY1305_* sections in {objdir} — "
@@ -96,19 +109,23 @@ def measure(objdir):
                  "This library's CT invariant requires aligned sections, so this "
                  "is a broken parser rather than a real measurement (see the "
                  "PARSER NOTE in this file).")
-    return total, aligned, charge, seen
+    # One more boundary per aligned SEGMENT: its start must be padded to
+    # alignment from wherever the consumer's preceding code ends.
+    start_charge = sum(a - 1 for a in seg_align.values())
+    return total, aligned, charge, start_charge, seen
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     objdir = sys.argv[1]
-    total, aligned, charge, seen = measure(objdir)
-    bound = total + charge
+    total, aligned, charge, start_charge, seen = measure(objdir)
+    bound = total + charge + start_charge
     declare = (bound + 255) // 256 * 256
     print(f"  sections            : {seen} ({aligned} page-aligned)")
     print(f"  od65 segment sum    : {total}")
-    print(f"  worst-case fill     : {charge} (sum of alignment-1 per aligned fragment)")
+    print(f"  fragment fill       : {charge} (sum of alignment-1 per aligned fragment)")
+    print(f"  segment-start fill  : {start_charge} (alignment-1 per aligned segment start)")
     print(f"  bound               : {bound}")
     print(f"  declare (round 256) : {declare}")
     if "--check" in sys.argv:

@@ -183,7 +183,20 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   pulls, so any residue 0..255 is reachable per aligned section. The bound
 ;   §5 asks for — "resident in EVERY consumer" — is therefore
 ;
-;       sum + 255 * (number of page-aligned sections), rounded up to 256
+;       sum
+;     + (alignment - 1) per page-aligned FRAGMENT
+;     + (alignment - 1) for the SEGMENT START itself
+;     rounded up to 256
+;
+;   THE SEGMENT-START TERM IS THE ONE THAT WAS MISSING. §4 requires the
+;   consumer to declare LIB_CHACHA20_POLY1305_CODE with `align = $100`, so
+;   ld65 must pad from wherever the consumer's own preceding code ends to
+;   the next page. That offset is the consumer's code size, so any residue
+;   0..255 is reachable — the identical argument the fragment charge rests
+;   on, applied one level up. The library forces n+1 alignment boundaries
+;   and the first version of this fix paid for n. Caught in review with a
+;   real link: an adversarial member order put library-attributable bytes
+;   at 17856 against a then-declared 17664.
 ;
 ;   Measured before #113, all ten rows across two trees: sum + fill = link
 ;   exactly, and all five literals were 512 B short of the bound. Rounding
@@ -280,13 +293,13 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; measures the same 15 568 B as a full one (was 15 555 before the
   ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16128
-  .else
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16384
+  .else
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .endif
 .else
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17408
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
@@ -309,9 +322,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17408
       ; min(aead-only, app-owned) = 16 516, which is under the 16 640 it
       ; is declared. Comparing 16 640 against this branch's own 16 544
       ; is the wrong comparison and makes a safe case look dangerous.
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17408
-    .else
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
+    .else
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17920
     .endif
   .endif
 .endif
@@ -333,9 +346,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
 ; had to become variant-aware rather than leaving this as the only
 ; accurate figure.
 .ifdef POLY1305_PROFILE_LONG
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16128
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 .else
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 17408
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 17664
 .endif
 
 ; ---------------------------------------------------------------------------
