@@ -132,11 +132,27 @@ sqtab_ready:
 ; between the tables, or a segment reshuffle. They cannot drift away
 ; from the thing they guard.
 ;
-; They MUST stay `lderror` (deferred to link time). An assembly-time
-; assert sees only the segment-relative offset, not the final address,
-; and would pass on a misaligned link — the exact case that matters.
+; The load-bearing choice is the SEVERITY, not the `ld` prefix.
+; Measured on ca65/ld65 V2.18, contradicting the rationale this comment
+; carried when the asserts first landed: ca65 evaluates an `.assert`
+; expression at assembly time only when it is constant then. These
+; expressions are not — the operand is a relocatable label — so ca65
+; defers to ld65 *keeping the severity it was given*. `error` and
+; `lderror` therefore produce the identical link error here, and it is
+; `warning` / `ldwarning` that would be the silent failure: both link a
+; misaligned PRG and exit 0.
 ;
-; Same pattern and rationale as c64-x25519 src/data.s:175-177.
+; `lderror` is kept anyway, because it states the intent that makes the
+; check correct — evaluate at link, against the resolved address — and
+; it defers unconditionally rather than depending on the operand
+; happening to be relocatable. If these tables were ever equate-placed
+; (as the §8.1 sqtab is), the expression would become constant and
+; `error` would start firing in the assembler; `lderror` would not
+; change behaviour.
+;
+; Same pattern as c64-x25519 src/data.s:175-177 (`mul_dma_lo` /
+; `mul_dma_hi` / `mul_dma_carry`), which uses `lderror` for the same
+; invariant.
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
