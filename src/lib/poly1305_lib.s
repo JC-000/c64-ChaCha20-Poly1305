@@ -313,6 +313,14 @@ shoup_j_loop:
         ; max hi = $FE, so `adc #0` for hi can never carry out).
         iny                     ; Y = 1
         clc
+; The two `r_tab_*-1, y` loads below have a base low byte of $FF, so they
+; cross a page on EVERY iteration — deliberately, and harmlessly. Y here is
+; the public loop counter k = 1..255, not a secret: the page cross is
+; unconditional rather than data-dependent, so it costs a fixed extra cycle
+; per iteration and leaks nothing. This is the one indexed access in the
+; library whose base is not page-aligned, and it is safe for a different
+; reason than the aligned tables are — recorded so it reads as a decision
+; rather than an oversight the CT audit missed.
 shoup_k_loop:
         SMC shoup_ld_lo,  { lda r_tab_lo-1, y } ; SMC high byte — prev_lo = T_j[k-1]
         SMC shoup_rj_val, { adc #$00 }          ; SMC immediate = r[j]
