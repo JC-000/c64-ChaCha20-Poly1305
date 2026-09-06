@@ -169,14 +169,33 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   variant's objects and prints the total, which should equal the
 ;   "measured" figure in the table above for whichever variant you built:
 ;
-;     make lib && od65 --dump-segments build/lib/objs/*.o | awk '
-;       /Index:/{n=""} /Name:/{n=$2}
-;       /Size:/ && n ~ /LIB_CHACHA20_POLY1305_(CODE|DATA)/ {s+=$2; k++}
-;       END{ if (k==0) {
-;              print "FATAL: matched 0 CODE/DATA segments." > "/dev/stderr"
-;              print "  Wrong path, an .a archive, or od65 format changed." > "/dev/stderr"
-;              exit 1 }
-;            print s }'
+;     make lib && python3 tools/measure_resident_bytes.py build/lib/objs
+;
+;   THE SUM ALONE IS NOT THE ANSWER, AND USING IT AS ONE IS ISSUE #113.
+;   od65 reports each OBJECT's segment sizes. It cannot report the padding
+;   ld65 inserts BETWEEN sections when it honours their alignment — and this
+;   library forces that padding to exist: LIB_CHACHA20_POLY1305_CODE must be
+;   declared `align = $100` (the CT invariant for the nibswap LUTs and
+;   poly_reduce_shl6_tab), and three sections carry `Alignment: 256`.
+;
+;   A consumer pays sum + fill. Fill before an aligned section is
+;   (-offset) mod 256, and the offset depends on which members that consumer
+;   pulls, so any residue 0..255 is reachable per aligned section. The bound
+;   §5 asks for — "resident in EVERY consumer" — is therefore
+;
+;       sum + 255 * (number of page-aligned sections), rounded up to 256
+;
+;   Measured before #113, all ten rows across two trees: sum + fill = link
+;   exactly, and all five literals were 512 B short of the bound. Rounding
+;   the sum to the next 256 adds at most 255 B, which cannot cover a fill
+;   that reaches 419 B — the old convention silently assumed ONE aligned
+;   section and there are three.
+;
+;   Do NOT re-derive these literals from a measured consumer link either.
+;   There is no single real link: a consumer that pulls part of the archive
+;   measures BELOW the sum (test_consumer's aead-only link came in 453 B
+;   under it), and one that pulls all of it measures above. Only the bound
+;   covers both.
 ;
 ;   Substitute objs-aead-only / objs-app-owned (after `make lib-aead-only`
 ;   / `make lib-app-owned`) or build/profile-a for the other rows. Compare
@@ -243,13 +262,13 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; measures the same 15 568 B as a full one (was 15 555 before the
   ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16128
   .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15872
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16384
   .endif
 .else
   .ifdef LIB_VARIANT_AEAD_ONLY
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17408
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
@@ -272,9 +291,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
       ; min(aead-only, app-owned) = 16 516, which is under the 16 640 it
       ; is declared. Comparing 16 640 against this branch's own 16 544
       ; is the wrong comparison and makes a safe case look dangerous.
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17408
     .else
-LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17152
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
     .endif
   .endif
 .endif
@@ -296,9 +315,9 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17152
 ; had to become variant-aware rather than leaving this as the only
 ; accurate figure.
 .ifdef POLY1305_PROFILE_LONG
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 15360
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16128
 .else
-LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16640
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 17408
 .endif
 
 ; ---------------------------------------------------------------------------
