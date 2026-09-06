@@ -118,7 +118,49 @@ sqtab_ready:
 ; alignment is a CT invariant (see each table's header). ld65 honours it
 ; only if the cfg declares LIB_CHACHA20_POLY1305_CODE with `align = $100`
 ; — otherwise it emits a warning and links the tables misaligned, which
-; silently reintroduces the secret-dependent page-cross penalty.
+; would silently reintroduce the secret-dependent page-cross penalty.
+;
+; That warning is NOT the enforcement mechanism, because a warning still
+; produces a linked PRG. The enforcement is the deferred
+; `.assert ... lderror` placed beside each table below (issue #100):
+; ld65 evaluates it against the RESOLVED address and fails the link.
+;
+; The asserts live next to the tables, not in a central asserts file,
+; and they test the address rather than the `.align` directive — so they
+; catch every route that actually ENDS IN A MISALIGNED TABLE, whatever
+; it was: a consumer cfg dropping `align = $100`, a `.align 256` being
+; deleted, a field inserted between the tables, or a segment reshuffle.
+; They cannot drift away from the thing they guard.
+;
+; Note the converse, which is the point of testing the address: deleting
+; a `.align 256` on its own does not necessarily fire, because the table
+; can still land on a page boundary by accident of whatever precedes it
+; in the segment. That is correct behaviour, not a gap — there is no
+; violation to report when the resolved address is aligned. It does mean
+; a reviewer probing these asserts has to perturb the segment as well as
+; delete the directive.
+;
+; The load-bearing choice is the SEVERITY, not the `ld` prefix.
+; Measured on ca65/ld65 V2.18, contradicting the rationale this comment
+; carried when the asserts first landed: ca65 evaluates an `.assert`
+; expression at assembly time only when it is constant then. These
+; expressions are not — the operand is a relocatable label — so ca65
+; defers to ld65 *keeping the severity it was given*. `error` and
+; `lderror` therefore produce the identical link error here, and it is
+; `warning` / `ldwarning` that would be the silent failure: both link a
+; misaligned PRG and exit 0.
+;
+; `lderror` is kept anyway, because it states the intent that makes the
+; check correct — evaluate at link, against the resolved address — and
+; it defers unconditionally rather than depending on the operand
+; happening to be relocatable. If these tables were ever equate-placed
+; (as the §8.1 sqtab is), the expression would become constant and
+; `error` would start firing in the assembler; `lderror` would not
+; change behaviour.
+;
+; Same pattern as c64-x25519 src/data.s:168-177 — rationale at :168-174,
+; the three `mul_dma_lo` / `mul_dma_hi` / `mul_dma_carry` asserts at
+; :175-177 — which uses `lderror` for the same invariant.
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
@@ -140,6 +182,11 @@ chacha_nibswap_hi_tab:
             .byte (V << 4) & $FF
         .endrepeat
 
+; Deferred (link-time) enforcement of the CT invariant above. See the
+; note at the top of this segment for why this is an lderror and why it
+; lives here rather than in a central asserts file.
+.assert (chacha_nibswap_hi_tab & $00FF) = 0, lderror, "chacha_nibswap_hi_tab must be page-aligned (CT invariant): consumer cfg must declare LIB_CHACHA20_POLY1305_CODE with align = $100 - ld65 only WARNS otherwise, and X derives from secret work bytes"
+
 ; =============================================================================
 ; chacha_nibswap_lo_tab - 256-entry LUT: tab[V] = V >> 4
 ;
@@ -153,3 +200,5 @@ chacha_nibswap_lo_tab:
         .repeat 256, V
             .byte V >> 4
         .endrepeat
+
+.assert (chacha_nibswap_lo_tab & $00FF) = 0, lderror, "chacha_nibswap_lo_tab must be page-aligned - same CT invariant as chacha_nibswap_hi_tab"
