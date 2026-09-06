@@ -95,6 +95,31 @@
     r_tab_lo = $6000
     r_tab_hi = $7000
 
+; PAGE-ALIGNMENT IS A CONSTANT-TIME INVARIANT HERE, AND UNTIL NOW NOTHING
+; CHECKED IT. poly1305_core.s indexes these tables `lda r_tab_lo + (ja*256), x`
+; with X loaded from `poly_h` — a secret byte spanning 0..255. `lda abs,x`
+; costs 4 cy with no page cross and 5 with one, so a base whose low byte is
+; not $00 makes the cycle count a function of the secret index. That is the
+; same class of leak the two nibswap LUTs (data_lib.s, issue #100) and
+; poly_reduce_shl6_tab (poly1305_core.s) are guarded against.
+;
+; Those three are placed by `.align 256` and guarded with `lderror` asserts,
+; because their addresses are relocatable and ca65 can only defer the test to
+; ld65. These two are different in BOTH respects: they are absolute literals,
+; so no `.align` applies and nothing about the link can move them — and the
+; assert operands are assemble-time constants, so `error` is the right action
+; and ca65 evaluates it immediately. (With relocatable operands ca65 defers to
+; ld65 regardless of the keyword; here it does not, and `make lib` catches a
+; bad literal without needing a link.)
+;
+; The mechanism this guards is the fifth and last one in this library: issues
+; #100 and #102 covered `.align`-placed tables, and a sibling adopter has
+; since measured an 83 342-cycle spread from a table that had been page-aligned
+; only by accident of the block ahead of it. A literal is the one placement a
+; refactor cannot move — but it is also the one a careless edit can, silently.
+    .assert (r_tab_lo & $00FF) = 0, error, "r_tab_lo must be page-aligned (CT invariant): X derives from poly_h"
+    .assert (r_tab_hi & $00FF) = 0, error, "r_tab_hi must be page-aligned (CT invariant): X derives from poly_h"
+
 ; --- POLY1305_REU on Profile A: no library-side allocation ---
 ;
 ; Up through v0.5.x, Profile A + POLY1305_REU built a 1 KB sqtab

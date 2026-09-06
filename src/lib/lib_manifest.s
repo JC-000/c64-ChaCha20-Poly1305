@@ -106,11 +106,49 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   configuration over the aead_tag numbers — the two guard expansions
 ;   at each of the two entry points, 47 B per entry point, plus the
 ;   2-byte `lda #AEAD_OK` that gave aead_encrypt a success return):
-;     Profile A full       15 651 B  (CODE 15 356 + DATA 295) -> 15 872
-;     Profile A aead-only  15 326 B  (CODE 15 031 + DATA 295) -> 15 360
-;     Profile B full       16 945 B  (CODE 16 650 + DATA 295) -> 17 152
-;     Profile B aead-only  16 620 B  (CODE 16 325 + DATA 295) -> 16 640
-;     Profile B app-owned  16 689 B  (CODE 16 394 + DATA 295) -> 16 896
+;     Profile A full       15 568 B  (CODE 15 273 + DATA 295) -> 15 872
+;     Profile A aead-only  15 243 B  (CODE 14 948 + DATA 295) -> 15 360
+;     Profile B full       16 841 B  (CODE 16 546 + DATA 295) -> 17 152
+;     Profile B aead-only  16 516 B  (CODE 16 221 + DATA 295) -> 16 640
+;     Profile B app-owned  16 544 B  (CODE 16 249 + DATA 295) -> 16 896
+;
+;   THE MEASURED COLUMN DROPPED AT ISSUE #108 AND NO REAL BYTE MOVED.
+;   Re-measured against v0.10.0 the five figures fell by 83, 83, 104, 104
+;   and 145 B respectively, while all four profile PRGs stayed BYTE-IDENTICAL
+;   to the release. Both facts are true because of what this basis does and
+;   does not count.
+;
+;   `od65 --dump-segments` reports each OBJECT's segment size. That includes
+;   `.align` fill emitted INSIDE a section and excludes the fill ld65 inserts
+;   BETWEEN sections. #108 split poly1305_lib.s into seven TUs, which moved
+;   the page-alignment pad for poly_reduce_shl6_tab from the first bucket to
+;   the second: on Profile B, poly_ripple used to end at $1C98 inside
+;   poly1305_lib.o's section with 104 B of counted `.align` fill following it,
+;   and now ends at $1C98 with poly1305_core.o's section starting at $1D00 —
+;   the same 104 B, in the same place in the image, uncounted. Same bytes,
+;   same addresses, different bucket.
+;
+;   The declared literals below are UNCHANGED by this split. Do NOT
+;   "correct" one downward on the strength of the measured column falling:
+;   a consumer linking the archive still pays the inter-section pad, which
+;   the od65 basis does not count.
+;
+;   AND THE LITERALS ARE THEMSELVES WRONG, IN THE DANGEROUS DIRECTION —
+;   see issue #113. Do not read the widened gap above as safety margin.
+;   Against the bound a consumer can actually reach (od65 sum plus the
+;   worst-case alignment fill, 255 B per page-aligned section), ALL FIVE
+;   literals are short by 512 B, on `main` as well as here. Measured, all
+;   ten rows: `od65 + fill = link` exactly. Rounding the od65 figure up to
+;   the next 256 adds at most 255 B of cushion while the fill runs
+;   246-419 B, so the round-up never reliably covered the omission — the
+;   convention assumed one page-aligned section and there are now three.
+;
+;   This split does not cause that and does not worsen a consumer's real
+;   footprint: the link column is byte-identical between trees. It does
+;   change the correct literal for two variants (A aead-only and B
+;   aead-only, each +256) purely because the third page-aligned section
+;   moves the bound past a page boundary. The fix, the corrected values
+;   and a corrected recipe are #113; it lands before the next tag.
 ;
 ;   THREE OF THESE LITERALS WERE UNDER-REPORTING AND NOTHING CAUGHT IT.
 ;   The domain guards pushed Profile A full (15 616 -> actual 15 651),
@@ -202,7 +240,7 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
   ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
   ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
   ; switches remove nothing further — an app-owned Profile A build
-  ; measures the same 15 651 B as a full one (was 15 555 before the
+  ; measures the same 15 568 B as a full one (was 15 555 before the
   ; §14.1 domain guards; see the table above).
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 15360
@@ -215,7 +253,7 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .else
     .ifdef SHARED_CT_MUL_8X8
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
-      ; consumer. Measured 16 689 B (was 16 593 before the §14.1 domain
+      ; consumer. Measured 16 544 B (was 16 593 before the §14.1 domain
       ; guards, which pushed it past the old 16 640 literal — hence the
       ; bump to 16 896 here).
       ;
@@ -231,8 +269,8 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
       ; removes the §8.1 init and §8.3 ct_mul bodies, replacing each
       ; with an `.import` that emits no segment bytes. A build defining
       ; both therefore removes the UNION and measures at most
-      ; min(aead-only, app-owned) = 16 620, which is under the 16 640 it
-      ; is declared. Comparing 16 640 against this branch's own 16 689
+      ; min(aead-only, app-owned) = 16 516, which is under the 16 640 it
+      ; is declared. Comparing 16 640 against this branch's own 16 544
       ; is the wrong comparison and makes a safe case look dangerous.
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16896
     .else
@@ -460,58 +498,18 @@ LIB_CHACHA20_POLY1305_SHARED_CONSUMES   = _USE_SQTAB | _USE_CT_MUL
 .export LIB_CHACHA20_POLY1305_SHARED_CONSUMES:abs
 
 ; ---------------------------------------------------------------------------
-; §8.4 catch-loop precalc-table enumeration. Per c64-lib-contract SPEC
-; v0.3.1 §8.0; canonical macro source in src/precalc_table.inc (copied
-; verbatim from the contract repo at b039ab9; do not edit local copy).
+; §8.4 catch-loop precalc-table enumeration — MOVED, deliberately.
 ;
-; Lists every precomputed table in this library that clears the §8.0
-; floor (>= 256 B AND one of: REU-resident, hot-loop-read, page-aligned
-; for fetch alignment). Each invocation emits three exported equates:
-; LIB_PRECALC_<name>_{SIZE,REGION,SHARED}. Consumer-side audits grep
-; on these to detect bit-identical precalc shapes across sibling libs
-; that should be promoted to a §8.x shared-primitive clause.
-;
-; Below-the-floor items intentionally NOT enumerated here (see
-; docs/precalc-tables.md for the full exempt list and rationale):
-;   - ChaCha20 quarter-round constants ("expand 32-byte k", 16 B)
-;   - sqtab_ready / cc20_work / scratch buffers (small or non-table)
+; The LIB_PRECALC_TABLE invocations and the `.include "precalc_table.inc"`
+; that used to close this file now live in src/lib/precalc_manifest.s.
+; Do not move them back: each invocation emits a DEPRECATED bare
+; LIB_PRECALC_<name>_* triple, which is displaceable under
+; `-D LIB_NO_BARE_EXPORTS=1` and is the exact spelling a sibling adopter's
+; own §8.4 enumeration exports. c64-lib-contract SPEC §6.1 member isolation
+; (v1.2.0; carve-out v1.2.1; both collision directions spelled out at
+; v1.2.2) therefore forbids it from sharing a member with the §5 aggregates
+; and §8.0 masks above — those are counterparts of nothing displaceable, so
+; they are "something else a consumer may import" and their co-residency
+; kept the bare triples un-droppable in any composed link. Issue #108 item 1;
+; ruled in contract #186, and c64-x25519 v0.14.0 made the same split.
 ; ---------------------------------------------------------------------------
-.include "precalc_table.inc"
-
-; sqtab — combined sqtab_lo + sqtab_hi at LIB_SHARED_SQTAB_BASE
-; (sqtab_lo + $0200 = sqtab_hi; 512 B + 512 B = 1024 B contiguous).
-; Shared via §8.1 (LIB_SHARED_PRIMITIVES_SQTAB bit, $0001 above).
-;
-; Profile-gated as of issue #51. This row was previously emitted
-; unconditionally, on the reasoning that the §8.1 canonical-name
-; back-link stays normative when any sibling in a composed build ships
-; sqtab — which was coherent while the ownership mask also claimed the
-; SQTAB bit unconditionally. Under the v0.5.0 three-state semantics that
-; is no longer true: Profile A is a non-consumer of sqtab (#34 F1), so it
-; must enumerate no sqtab row, exactly as it already omits the Shoup
-; r_tab_* rows on Profile B. The enumeration now tracks the CONSUMES
-; mask, which is the honest signal for the §8.4 catch-loop audit.
-.ifndef POLY1305_PROFILE_LONG
-LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES, "CHACHA20_POLY1305"
-.endif
-
-; chacha_nibswap_hi_tab / chacha_nibswap_lo_tab — C4 branchless
-; rotl-4 LUTs (commit d0b1d40). 256 B each, page-aligned in the CODE
-; segment, hot-loop-read with secret-index `lda abs,x` (8 inlined
-; call sites per double-round in chacha20_block). Library-specific:
-; bit shape is generic (V<<4&$FF, V>>4) but no other adopter ships a
-; rotl-4 fast path today; promote to §8.x only after a second sibling
-; converges on bit-identical bytes.
-LIB_PRECALC_TABLE "chacha_nibswap_hi_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
-LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
-
-; r_tab_lo / r_tab_hi — Profile A Shoup per-r tables at $6000..$7FFF
-; (4096 B each, page-aligned per limb). Library-private: the content
-; T_j[x] = x * r[j] is keyed off the per-message random Poly1305 `r`
-; value, so no sibling lib can converge on the same bytes — there is
-; no candidate §8.x shared-primitive promotion path. Profile B does
-; not allocate these tables (uses sqtab via ct_mul_8x8 instead).
-.ifdef POLY1305_PROFILE_LONG
-LIB_PRECALC_TABLE "r_tab_lo", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
-LIB_PRECALC_TABLE "r_tab_hi", 4096, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
-.endif

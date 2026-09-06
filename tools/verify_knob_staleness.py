@@ -17,9 +17,12 @@ pass the first two and is not the fix:
   3. the SAME knob again is incremental (nothing rebuilds)
   4. reverting the knob rebuilds back to Profile B
 
-The observable is the `_PRECALC_` export count on the archive's manifest
-member: Profile B enumerates three §8.4 tables and Profile A four, six
-exports each, so 18 vs 24. Per §6.3's checkability note this is an od65
+The observable is the `_PRECALC_` export count on the archive's §8.4
+enumeration member: Profile B enumerates three §8.4 tables and Profile A
+four, six exports each, so 18 vs 24. That enumeration lived in
+`lib_manifest.o` until issue #108, which moved it to its own
+`precalc_manifest.o` for contract §6.1 member isolation — the counts and
+every leg below are unchanged, only the object the audit dumps. Per §6.3's checkability note this is an od65
 structural dump, never an archive-bytes diff — ca65 stamps OPT_DATETIME into
 every object, so raw bytes differ on every knob, no-op or not.
 
@@ -47,7 +50,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 PROFILE_A_DEFINE = "-D POLY1305_PROFILE_LONG=1"
-MANIFEST_OBJ = "build/lib/objs/lib_manifest.o"
+MANIFEST_OBJ = "build/lib/objs/precalc_manifest.o"
 
 # §8.4 rows per profile x six exports each (prefixed triple + bare triple).
 # Profile A gates out the sqtab row (issue #51), so it enumerates four tables
@@ -74,6 +77,11 @@ def run_make(tree, knobs):
 
 def precalc_exports(tree):
     obj = tree / MANIFEST_OBJ
+    if not obj.exists():
+        print(f"  FAIL: {obj} does not exist — the §8.4 enumeration moved "
+              "member (issue #108) and MANIFEST_OBJ was not followed, so "
+              "every count below would be vacuously 0")
+        sys.exit(1)
     p = subprocess.run(["od65", "--dump-exports", str(obj)],
                        capture_output=True, text=True)
     if p.returncode != 0 or not p.stdout.strip():

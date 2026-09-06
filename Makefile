@@ -143,7 +143,7 @@ endif
 # zp_config is a standalone .s module that owns the .exportzp slot
 # allocation; consumers can override addresses by pre-defining symbols
 # before zp_config.s is assembled, or by swapping the file outright.
-MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version lib_manifest
+MODULES = main zp_config word32_lib chacha20_lib poly1305_lib shared_sqtab_init shared_prod_scratch mul_8x8_legacy shared_ct_mul poly1305_ripple poly1305_core chacha20poly1305_lib data_lib lib_version lib_manifest precalc_manifest
 
 # Modules that go into the consumer-facing .a archive. `main.o` ships
 # the standalone-PRG entry stub (`lib_entry: rts`) which a consumer
@@ -154,7 +154,7 @@ MODULES = main zp_config word32_lib chacha20_lib poly1305_lib chacha20poly1305_l
 # slots, or (b) cause duplicate-symbol errors if they assemble their
 # own zp_config.s. Everything else (the actual library code, data,
 # version/manifest equates) is included.
-LIB_MODULES = word32_lib chacha20_lib poly1305_lib chacha20poly1305_lib data_lib lib_version lib_manifest
+LIB_MODULES = word32_lib chacha20_lib poly1305_lib shared_sqtab_init shared_prod_scratch mul_8x8_legacy shared_ct_mul poly1305_ripple poly1305_core chacha20poly1305_lib data_lib lib_version lib_manifest precalc_manifest
 
 SRCS_MAIN     = src/main.s
 SRCS_LIB      = $(wildcard src/lib/*.s)
@@ -166,20 +166,34 @@ A_OBJS = $(PROFILE_A_DIR)/main.o \
          $(PROFILE_A_DIR)/word32_lib.o \
          $(PROFILE_A_DIR)/chacha20_lib.o \
          $(PROFILE_A_DIR)/poly1305_lib.o \
+         $(PROFILE_A_DIR)/shared_sqtab_init.o \
+         $(PROFILE_A_DIR)/shared_prod_scratch.o \
+         $(PROFILE_A_DIR)/mul_8x8_legacy.o \
+         $(PROFILE_A_DIR)/shared_ct_mul.o \
+         $(PROFILE_A_DIR)/poly1305_ripple.o \
+         $(PROFILE_A_DIR)/poly1305_core.o \
          $(PROFILE_A_DIR)/chacha20poly1305_lib.o \
          $(PROFILE_A_DIR)/data_lib.o \
          $(PROFILE_A_DIR)/lib_version.o \
-         $(PROFILE_A_DIR)/lib_manifest.o
+         $(PROFILE_A_DIR)/lib_manifest.o \
+         $(PROFILE_A_DIR)/precalc_manifest.o
 
 B_OBJS = $(PROFILE_B_DIR)/main.o \
          $(PROFILE_B_DIR)/zp_config.o \
          $(PROFILE_B_DIR)/word32_lib.o \
          $(PROFILE_B_DIR)/chacha20_lib.o \
          $(PROFILE_B_DIR)/poly1305_lib.o \
+         $(PROFILE_B_DIR)/shared_sqtab_init.o \
+         $(PROFILE_B_DIR)/shared_prod_scratch.o \
+         $(PROFILE_B_DIR)/mul_8x8_legacy.o \
+         $(PROFILE_B_DIR)/shared_ct_mul.o \
+         $(PROFILE_B_DIR)/poly1305_ripple.o \
+         $(PROFILE_B_DIR)/poly1305_core.o \
          $(PROFILE_B_DIR)/chacha20poly1305_lib.o \
          $(PROFILE_B_DIR)/data_lib.o \
          $(PROFILE_B_DIR)/lib_version.o \
-         $(PROFILE_B_DIR)/lib_manifest.o
+         $(PROFILE_B_DIR)/lib_manifest.o \
+         $(PROFILE_B_DIR)/precalc_manifest.o
 
 # Profile B + rolled poly1305_multiply (issue #34 alternative 2).
 # Identical to Profile B except poly1305_lib.o is built with
@@ -192,22 +206,36 @@ BR_OBJS = $(PROFILE_BR_DIR)/main.o \
           $(PROFILE_BR_DIR)/word32_lib.o \
           $(PROFILE_BR_DIR)/chacha20_lib.o \
           $(PROFILE_BR_DIR)/poly1305_lib.o \
+          $(PROFILE_BR_DIR)/shared_sqtab_init.o \
+          $(PROFILE_BR_DIR)/shared_prod_scratch.o \
+          $(PROFILE_BR_DIR)/mul_8x8_legacy.o \
+          $(PROFILE_BR_DIR)/shared_ct_mul.o \
+          $(PROFILE_BR_DIR)/poly1305_ripple.o \
+          $(PROFILE_BR_DIR)/poly1305_core.o \
           $(PROFILE_BR_DIR)/chacha20poly1305_lib.o \
           $(PROFILE_BR_DIR)/data_lib.o \
           $(PROFILE_BR_DIR)/lib_version.o \
-          $(PROFILE_BR_DIR)/lib_manifest.o
+          $(PROFILE_BR_DIR)/lib_manifest.o \
+          $(PROFILE_BR_DIR)/precalc_manifest.o
 
 BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/zp_config.o \
           $(PROFILE_BO_DIR)/word32_lib.o \
           $(PROFILE_BO_DIR)/chacha20_lib.o \
           $(PROFILE_BO_DIR)/poly1305_lib.o \
+          $(PROFILE_BO_DIR)/shared_sqtab_init.o \
+          $(PROFILE_BO_DIR)/shared_prod_scratch.o \
+          $(PROFILE_BO_DIR)/mul_8x8_legacy.o \
+          $(PROFILE_BO_DIR)/shared_ct_mul.o \
+          $(PROFILE_BO_DIR)/poly1305_ripple.o \
+          $(PROFILE_BO_DIR)/poly1305_core.o \
           $(PROFILE_BO_DIR)/chacha20poly1305_lib.o \
           $(PROFILE_BO_DIR)/data_lib.o \
           $(PROFILE_BO_DIR)/lib_version.o \
-          $(PROFILE_BO_DIR)/lib_manifest.o
+          $(PROFILE_BO_DIR)/lib_manifest.o \
+          $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness test test-fuzz test-fuzz-full
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness lib-verify-isolation test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -257,6 +285,24 @@ $(PROFILE_A_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PRO
 $(PROFILE_A_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
+$(PROFILE_A_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
 $(PROFILE_A_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
@@ -267,6 +313,9 @@ $(PROFILE_A_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
 $(PROFILE_A_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_A_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
+
+$(PROFILE_A_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(PROFILE_A_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_PROFILE_LONG=1 $< -o $@
 
 profile-a: $(A_OBJS) $(CFG) | build
@@ -292,6 +341,24 @@ $(PROFILE_B_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PRO
 $(PROFILE_B_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
+$(PROFILE_B_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
 $(PROFILE_B_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
@@ -302,6 +369,9 @@ $(PROFILE_B_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_B_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_B_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_B_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(PROFILE_B_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 profile-b: $(B_OBJS) $(CFG) | build
@@ -342,6 +412,24 @@ $(PROFILE_BR_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PR
 $(PROFILE_BR_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
 
+$(PROFILE_BR_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
+$(PROFILE_BR_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED=1 $< -o $@
+
 $(PROFILE_BR_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
@@ -352,6 +440,9 @@ $(PROFILE_BR_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_BR_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_BR_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_BR_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BR_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(PROFILE_BR_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 profile-b-rolled: $(BR_OBJS) $(CFG) | build
@@ -383,6 +474,24 @@ $(PROFILE_BO_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(PR
 $(PROFILE_BO_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
 	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
 
+$(PROFILE_BO_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
+$(PROFILE_BO_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) -DPOLY1305_MULTIPLY_ROLLED_OUTER=1 $< -o $@
+
 $(PROFILE_BO_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
@@ -393,6 +502,9 @@ $(PROFILE_BO_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_BO_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(PROFILE_BO_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(PROFILE_BO_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(PROFILE_BO_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(PROFILE_BO_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 profile-b-rolled-outer: $(BO_OBJS) $(CFG) | build
@@ -444,26 +556,47 @@ clean:
 LIB_OBJS = $(LIB_OBJS_DIR)/word32_lib.o \
            $(LIB_OBJS_DIR)/chacha20_lib.o \
            $(LIB_OBJS_DIR)/poly1305_lib.o \
+           $(LIB_OBJS_DIR)/shared_sqtab_init.o \
+           $(LIB_OBJS_DIR)/shared_prod_scratch.o \
+           $(LIB_OBJS_DIR)/mul_8x8_legacy.o \
+           $(LIB_OBJS_DIR)/shared_ct_mul.o \
+           $(LIB_OBJS_DIR)/poly1305_ripple.o \
+           $(LIB_OBJS_DIR)/poly1305_core.o \
            $(LIB_OBJS_DIR)/chacha20poly1305_lib.o \
            $(LIB_OBJS_DIR)/data_lib.o \
            $(LIB_OBJS_DIR)/lib_version.o \
-           $(LIB_OBJS_DIR)/lib_manifest.o
+           $(LIB_OBJS_DIR)/lib_manifest.o \
+           $(LIB_OBJS_DIR)/precalc_manifest.o
 
 LIB_AEAD_ONLY_OBJS = $(LIB_AEAD_ONLY_OBJS_DIR)/word32_lib.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/chacha20_lib.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_lib.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/shared_sqtab_init.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/shared_prod_scratch.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/mul_8x8_legacy.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/shared_ct_mul.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_ripple.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_core.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/chacha20poly1305_lib.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/data_lib.o \
                      $(LIB_AEAD_ONLY_OBJS_DIR)/lib_version.o \
-                     $(LIB_AEAD_ONLY_OBJS_DIR)/lib_manifest.o
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/lib_manifest.o \
+                     $(LIB_AEAD_ONLY_OBJS_DIR)/precalc_manifest.o
 
 LIB_APP_OWNED_OBJS = $(LIB_APP_OWNED_OBJS_DIR)/word32_lib.o \
                      $(LIB_APP_OWNED_OBJS_DIR)/chacha20_lib.o \
                      $(LIB_APP_OWNED_OBJS_DIR)/poly1305_lib.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/shared_sqtab_init.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/shared_prod_scratch.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/mul_8x8_legacy.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/shared_ct_mul.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/poly1305_ripple.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/poly1305_core.o \
                      $(LIB_APP_OWNED_OBJS_DIR)/chacha20poly1305_lib.o \
                      $(LIB_APP_OWNED_OBJS_DIR)/data_lib.o \
                      $(LIB_APP_OWNED_OBJS_DIR)/lib_version.o \
-                     $(LIB_APP_OWNED_OBJS_DIR)/lib_manifest.o
+                     $(LIB_APP_OWNED_OBJS_DIR)/lib_manifest.o \
+                     $(LIB_APP_OWNED_OBJS_DIR)/precalc_manifest.o
 
 # --- Full archive (Profile B, every export) --------------------------------
 $(LIB_OBJS_DIR)/word32_lib.o: src/lib/word32_lib.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
@@ -473,6 +606,24 @@ $(LIB_OBJS_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES) | $(LIB_
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(LIB_OBJS_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(LIB_OBJS_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
@@ -485,6 +636,9 @@ $(LIB_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 $(LIB_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(LIB_OBJS_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(LIB_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $< -o $@
 
 # ar65 r appends; rebuild from a clean archive every time so we don't
@@ -517,6 +671,24 @@ $(LIB_AEAD_ONLY_OBJS_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES
 $(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
 
+$(LIB_AEAD_ONLY_OBJS_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
 $(LIB_AEAD_ONLY_OBJS_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
 
@@ -527,6 +699,9 @@ $(LIB_AEAD_ONLY_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_AEAD_ONLY_OBJ
 	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
 
 $(LIB_AEAD_ONLY_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_AEAD_ONLY_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
+
+$(LIB_AEAD_ONLY_OBJS_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(LIB_AEAD_ONLY_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_AEAD_ONLY_DEFINE) $< -o $@
 
 lib-aead-only: $(LIB_AEAD_ONLY_AR)
@@ -552,6 +727,24 @@ $(LIB_APP_OWNED_OBJS_DIR)/chacha20_lib.o: src/lib/chacha20_lib.s $(SRCS_INCLUDES
 $(LIB_APP_OWNED_OBJS_DIR)/poly1305_lib.o: src/lib/poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
 
+$(LIB_APP_OWNED_OBJS_DIR)/shared_sqtab_init.o: src/lib/shared_sqtab_init.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/shared_prod_scratch.o: src/lib/shared_prod_scratch.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/mul_8x8_legacy.o: src/lib/mul_8x8_legacy.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/shared_ct_mul.o: src/lib/shared_ct_mul.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/poly1305_ripple.o: src/lib/poly1305_ripple.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/poly1305_core.o: src/lib/poly1305_core.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
 $(LIB_APP_OWNED_OBJS_DIR)/chacha20poly1305_lib.o: src/lib/chacha20poly1305_lib.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
 
@@ -559,6 +752,9 @@ $(LIB_APP_OWNED_OBJS_DIR)/data_lib.o: src/lib/data_lib.s $(SRCS_INCLUDES) | $(LI
 	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
 
 $(LIB_APP_OWNED_OBJS_DIR)/lib_manifest.o: src/lib/lib_manifest.s $(SRCS_INCLUDES) | $(LIB_APP_OWNED_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
+
+$(LIB_APP_OWNED_OBJS_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(LIB_APP_OWNED_OBJS_DIR)
 	$(CA65) $(CA65FLAGS) $(LIB_APP_OWNED_DEFINE) $< -o $@
 
 $(LIB_APP_OWNED_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_APP_OWNED_OBJS_DIR)
@@ -610,11 +806,21 @@ $(LIB_AEAD_ONLY_OBJS_DIR):
 # ===========================================================================
 LIB_SHARED_VERIFY_DIR = $(LIB_DIR)/verify-shared
 
+# The §8.3 surface now lives in three TUs rather than inside poly1305_lib.s
+# (issue #108 member isolation). This target must FOLLOW THE SYMBOLS: point
+# it at poly1305_lib.s alone and every "must NOT export" leg below passes
+# vacuously against a file that no longer exports them, which is how
+# c64-x25519 discovered its own equivalent target had only ever passed
+# because of the defect it was meant to catch.
+LIB_SHARED_SRCS = src/lib/shared_ct_mul.s src/lib/shared_prod_scratch.s \
+                  src/lib/mul_8x8_legacy.s
 # Names the owner build must publish (mul_8x8 is the legacy test-only
 # alias body; it collides with the sibling's export just the same).
 LIB_SHARED_OWNED_SYMS  = ct_mul_8x8 mul_8x8 poly_prod_lo poly_prod_hi \
                          smc_sum_a_imm smc_diff_a_imm
-# Names the deferral build must resolve from the designated owner.
+# Names the deferral build must resolve from the designated owner — and,
+# since #108, that the OWNER build must import too: they live in another TU
+# either way, and poly1305_core.s is the TU that references them.
 LIB_SHARED_IMPORT_SYMS = ct_mul_8x8 poly_prod_lo poly_prod_hi \
                          smc_sum_a_imm smc_diff_a_imm
 
@@ -651,34 +857,85 @@ verify-zp-usage: lib
 verify-knob-staleness:
 	python3 tools/verify_knob_staleness.py
 
+# §6.1 member-isolation guard (contract SPEC v1.2.0/v1.2.1/v1.2.2, issue #108).
+#
+# Named lib-* because it consumes what `make lib*` produces: it builds the
+# three shipped variants in a throwaway tree and inspects every archive
+# member's export table.
+#
+# The displaceable set is MEASURED, never listed: the tool builds the same
+# sources with and without each §6.1 suppression knob and differences the
+# export tables, so a name is displaceable iff suppressing it actually
+# removes it. It also reconciles per-member category counts against the
+# member's total export count, which is what catches an od65 dump being
+# mis-parsed rather than a category genuinely being empty.
+#
+# Prove it can fail before trusting it green:
+#   python3 tools/verify_member_isolation.py --tree <a tree at v0.10.0>
+# reports lib_manifest.o and poly1305_lib.o in all three variants.
+lib-verify-isolation:
+	python3 tools/verify_member_isolation.py
+
 lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
-	@$(CA65) $(CA65FLAGS) src/lib/poly1305_lib.s \
-	    -o $(LIB_SHARED_VERIFY_DIR)/owner.o
-	@$(CA65) $(CA65FLAGS) -D SHARED_CT_MUL_8X8=1 src/lib/poly1305_lib.s \
-	    -o $(LIB_SHARED_VERIFY_DIR)/defer.o
+	@rm -f $(LIB_SHARED_VERIFY_DIR)/*.o $(LIB_SHARED_VERIFY_DIR)/*.exports \
+	       $(LIB_SHARED_VERIFY_DIR)/*.imports
+	@for f in $(LIB_SHARED_SRCS); do \
+	    b=$$(basename $$f .s); \
+	    $(CA65) $(CA65FLAGS) $$f -o $(LIB_SHARED_VERIFY_DIR)/$$b.owner.o || exit 1; \
+	    $(CA65) $(CA65FLAGS) -D SHARED_CT_MUL_8X8=1 $$f \
+	        -o $(LIB_SHARED_VERIFY_DIR)/$$b.defer.o || exit 1; \
+	    od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/$$b.owner.o \
+	        >> $(LIB_SHARED_VERIFY_DIR)/owner.exports; \
+	    od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/$$b.defer.o \
+	        >> $(LIB_SHARED_VERIFY_DIR)/defer.exports; \
+	done
+	@$(CA65) $(CA65FLAGS) -D SHARED_CT_MUL_8X8=1 src/lib/poly1305_core.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/core_defer.o
+	@$(CA65) $(CA65FLAGS) src/lib/poly1305_core.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/core_owner.o
+	@$(CA65) $(CA65FLAGS) src/lib/shared_sqtab_init.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/sq_owner.o
+	@$(CA65) $(CA65FLAGS) -D SHARED_SQTAB_INIT=1 src/lib/shared_sqtab_init.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/sq_defer.o
 	@$(CA65) $(CA65FLAGS) -D SHARED_SQTAB_INIT=1 src/lib/poly1305_lib.s \
-	    -o $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o
-	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/owner.o \
-	    > $(LIB_SHARED_VERIFY_DIR)/owner.exports
-	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/defer.o \
-	    > $(LIB_SHARED_VERIFY_DIR)/defer.exports
-	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer.o \
-	    > $(LIB_SHARED_VERIFY_DIR)/defer.imports
-	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o \
-	    > $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.exports
-	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o \
-	    > $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.imports
+	    -o $(LIB_SHARED_VERIFY_DIR)/lib_defer_sq.o
+	@$(CA65) $(CA65FLAGS) src/lib/poly1305_lib.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/lib_owner.o
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/core_defer.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/core_defer.imports
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/core_owner.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/core_owner.imports
+	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/sq_owner.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/sq_owner.exports
+	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/sq_defer.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/sq_defer.exports
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/lib_defer_sq.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/lib_defer_sq.imports
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/lib_owner.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/lib_owner.imports
 	@fail=0; \
-	for pair in "owner.exports:poly1305_multiply" \
-	            "defer.exports:poly1305_multiply" \
-	            "defer.imports:poly_product" \
-	            "defer_sqtab.exports:poly1305_multiply" \
-	            "defer_sqtab.imports:poly_product"; do \
+	for pair in "owner.exports:ct_mul_8x8" \
+	            "sq_owner.exports:mul_tables_init" \
+	            "core_defer.imports:poly_product" \
+	            "core_owner.imports:poly_product" \
+	            "lib_defer_sq.imports:sqtab_ready" \
+	            "lib_owner.imports:sqtab_ready"; do \
 	    f=$${pair%%:*}; sentinel=$${pair##*:}; \
 	    grep -q "\"$$sentinel\"" $(LIB_SHARED_VERIFY_DIR)/$$f || { \
 	        echo "FAIL: $$f lacks sentinel '$$sentinel' — od65 dump is empty or"; \
-	        echo "      unreadable, so every negative check below would pass"; \
+	        echo "      unreadable, so every check that reads it would pass"; \
 	        echo "      vacuously (SPEC v0.7.2)"; \
+	        fail=1; \
+	    }; \
+	done; \
+	for f in defer.exports sq_defer.exports; do \
+	    grep -q "Count:" $(LIB_SHARED_VERIFY_DIR)/$$f || { \
+	        echo "FAIL: $$f has no od65 'Count:' row — the deferral object was"; \
+	        echo "      not assembled or od65 could not read it. This dump is"; \
+	        echo "      EMPTY BY DESIGN (a deferring TU exports nothing), so a"; \
+	        echo "      name sentinel is impossible and this structural one is"; \
+	        echo "      the only thing standing between the must-NOT-export"; \
+	        echo "      legs below and a vacuous pass (issue #108)."; \
 	        fail=1; \
 	    }; \
 	done; \
@@ -691,17 +948,24 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	    fi; \
 	done; \
 	for s in $(LIB_SHARED_IMPORT_SYMS); do \
-	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer.imports || { \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/core_defer.imports || { \
 	        echo "FAIL: SHARED_CT_MUL_8X8 build does not import $$s"; fail=1; }; \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/core_owner.imports || { \
+	        echo "FAIL: owner build does not import $$s from its own §8.3 TU —"; \
+	        echo "      after the issue #108 member split poly1305_core.s must"; \
+	        echo "      import the §8.3 surface in EVERY build. That import is"; \
+	        echo "      what lets an APP_OWNED consumer's own definition win"; \
+	        echo "      against the default archive (SPEC §6.1)"; \
+	        fail=1; }; \
 	done; \
 	for s in $(LIB_SQTAB_OWNED_SYMS); do \
-	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/owner.exports || { \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/sq_owner.exports || { \
 	        echo "FAIL: owner build does not export $$s — the §5 manifest claims"; \
 	        echo "      the \$$0001 sqtab ownership bit, so a deferring sibling"; \
 	        echo "      importing the canonical name gets an unresolved external"; \
 	        echo "      (issue #105)"; \
 	        fail=1; }; \
-	    if grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.exports; then \
+	    if grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/sq_defer.exports; then \
 	        echo "FAIL: SHARED_SQTAB_INIT build still exports $$s — two providers"; \
 	        echo "      of a canonical name is a duplicate external in any"; \
 	        echo "      composed link"; \
@@ -709,15 +973,22 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	    fi; \
 	done; \
 	for s in $(LIB_SQTAB_IMPORT_SYMS); do \
-	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.imports || { \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/lib_defer_sq.imports || { \
 	        echo "FAIL: SHARED_SQTAB_INIT build does not import $$s (§8.1"; \
 	        echo "      import-never-stub rule)"; fail=1; }; \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/lib_owner.imports || { \
+	        echo "FAIL: owner build does not import $$s — poly1305_lib.s must"; \
+	        echo "      call the §8.1 primitive by its CANONICAL name in every"; \
+	        echo "      build, so an APP_OWNED consumer's mul_tables_init"; \
+	        echo "      satisfies it and our member is never pulled beside it"; \
+	        fail=1; }; \
 	done; \
 	if [ $$fail -ne 0 ]; then \
 	    echo "lib-verify-shared: FAILED"; exit 1; \
 	fi; \
 	echo "lib-verify-shared: OK — §8.1 and §8.3 surfaces owned in default build,"; \
-	echo "                   each fully deferred under its own switch"
+	echo "                   each fully deferred under its own switch, and the"; \
+	echo "                   canonical names imported in BOTH builds"
 
 $(LIB_SHARED_VERIFY_DIR):
 	mkdir -p $(LIB_SHARED_VERIFY_DIR)
