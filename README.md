@@ -579,8 +579,10 @@ the source:
   v0.5.0 release notes.
 - [`docs/RELEASE_NOTES_v0.6.0.md`](docs/RELEASE_NOTES_v0.6.0.md) —
   v0.6.0 release notes.
+- [`docs/RELEASE_NOTES_v0.10.0.md`](docs/RELEASE_NOTES_v0.10.0.md) —
+  v0.10.0 release notes (created in this release pass).
 - [`docs/RELEASE_NOTES_v0.7.0.md`](docs/RELEASE_NOTES_v0.7.0.md) —
-  v0.7.0 release notes (created in this release pass).
+  v0.7.0 release notes.
 - [`docs/design/ct_mul_8x8.md`](docs/design/ct_mul_8x8.md) —
   branchless 8×8 multiply design memo (Profile B F3 fix).
 - [`docs/OPTIMIZATION_PLAN.md`](docs/OPTIMIZATION_PLAN.md) — the
@@ -594,13 +596,26 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.9.0** (tagged 2026-08-15;
-`src/lib_version.s` declares 0.9.0, `LIB_ABI_VERSION` **3**): a
-hardening release — the §6.7 image guard against silent sqtab
+The current release is **v0.10.0** (tagged 2026-09-06;
+`src/lib_version.s` declares 0.10.0, `LIB_ABI_VERSION` **4**): a security
+and hardening release, and the first since v0.6.0 whose PRGs are not
+byte-identical to the previous tag. It fixes an AEAD pointer wrap that
+read and wrote through zero page, the banking register and I/O; fixes
+`aead_encrypt` writing its tag to a different label than the
+documentation promised; turns three documented-but-unenforced
+constant-time alignment invariants into link errors; and makes a §8.1
+shared-primitive ownership claim true that the code could not honour.
+
+**Migration is required if you call `aead_decrypt` and distinguish
+failure modes** — it gained a third return value, `$01`, so `bne` is no
+longer enough to mean "authentication failed". See
+[`docs/RELEASE_NOTES_v0.10.0.md`](docs/RELEASE_NOTES_v0.10.0.md).
+
+The prior release, **v0.9.0** (2026-08-15; `LIB_ABI_VERSION` **3**), was
+a hardening release — the §6.7 image guard against silent sqtab
 corruption, the `make verify-zp-usage` drift ratchet, and a
 clause-by-clause conformance record against c64-lib-contract v0.10.3.
-**No migration required**: both PRGs and the exported symbol surface are
-byte-identical to v0.8.0, so it is a drop-in. See
+Its PRGs and exported surface were byte-identical to v0.8.0. See
 [`docs/RELEASE_NOTES_v0.9.0.md`](docs/RELEASE_NOTES_v0.9.0.md).
 
 The prior release, **v0.8.0** (2026-08-15;

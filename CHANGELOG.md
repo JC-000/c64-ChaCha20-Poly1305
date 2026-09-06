@@ -4,7 +4,24 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-06
+
+Security and hardening release. Two real defects fixed — one
+memory-safety, one output-correctness — three documented-but-unenforced
+constant-time invariants turned into link errors, and a shared-primitive
+ownership claim this library could not honour made true. Conformance
+brought to `c64-lib-contract` v1.1.1.
+
+`LIB_CHACHA20_POLY1305_ABI_VERSION` moves **3 → 4**; semver **MINOR**,
+not MAJOR, per contract §7's scoping of the counter. Full notes in
+[`docs/RELEASE_NOTES_v0.10.0.md`](docs/RELEASE_NOTES_v0.10.0.md).
+
+**Known gap:** contract v1.2.0's §6.1 member-isolation clause, tagged
+during this release's preparation, is **not** met — three archive members
+mix displaceable and consumer-importable symbols. Audited and tracked as
+[issue #108](https://github.com/JC-000/c64-ChaCha20-Poly1305/issues/108)
+rather than fixed hours after the clause appeared.
+
 
 ### Fixed
 - **The §8.1 sqtab ownership claim was unsatisfiable: the library never

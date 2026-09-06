@@ -101,7 +101,7 @@
 ;               against this comment:
 ;                   git show v0.8.0:src/lib_version.s | grep ABI_VERSION
 ;
-;   4  unreleased — BREAKING: aead_encrypt and aead_decrypt gained the
+;   4  v0.10.0 — BREAKING: aead_encrypt and aead_decrypt gained the
 ;               SPEC §14.1 domain guards and with them a CHANGED CALLING
 ;               CONVENTION. aead_encrypt now returns a status in A
 ;               ($00 ok / $01 domain rejection) where it previously left
@@ -133,7 +133,7 @@
 ; src/lib/lib_manifest.s. Do not add exports here.
 
 LIB_CHACHA20_POLY1305_VERSION_MAJOR = 0
-LIB_CHACHA20_POLY1305_VERSION_MINOR = 9
+LIB_CHACHA20_POLY1305_VERSION_MINOR = 10
 LIB_CHACHA20_POLY1305_VERSION_PATCH = 0
 LIB_CHACHA20_POLY1305_ABI_VERSION   = 4
 
