@@ -6,6 +6,119 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Contract conformance — span extended to SPEC v1.1.0
+The previous record ran to **v0.17.0**. Findings for the three revisions
+since — one of which removed seven eighths of the document:
+
+- **v0.17.1** (PATCH; corrects the 0.16.0 entry's fleet position, which
+  had said this library owed a stated §14.2 ceiling while §14.2 in the
+  same tag carved it out) — **no-op, and in our favour.** The correction
+  matches what this repo had already concluded and recorded: the AEAD
+  domain is a relation over two caller-supplied values, so no ceiling
+  exists to state. This tag is also the permanent home of everything
+  retired at 1.0.0.
+
+- **v1.0.0** (the retirement cut: 40,737 words → 5,154; §9, §12, §13,
+  §14, §15 and §6.3/§6.6/§6.7 retired) — **mostly no-op, with two
+  exceptions the release did not announce.**
+
+  No-op for the retirements themselves. Per the contract's `RETIRED.md`,
+  a conformance record citing a retired section stays valid at the tag it
+  cites, and source comments citing one resolve at `v0.17.1`. This repo
+  therefore rewrote **no** citation to §6.3, §6.7, §14 or §15 — doing so
+  would be churn with no reader benefit. What *did* need changing was the
+  handful of statements that are now factually wrong about the current
+  document rather than merely citing an old one, and two obligations this
+  repo had published to itself on the strength of clauses that no longer
+  exist (below).
+
+  The two exceptions are **tightenings inside surviving clauses**, both
+  introduced by the cut commit and recorded nowhere in the release notes,
+  in a release whose header states that a library conformant at v0.17.1
+  is conformant at v1.0.0 without edits:
+
+  1. **§6.1 gained a MUST**: `make lib` must now produce "the
+     consumer-facing `.inc` header and an example `.cfg`" alongside the
+     archive. v0.17.1 §6.1 required archives only; the phrase appears in
+     no tag before v1.0.0. This library shipped neither, and nor does
+     `c64-polyval`; `c64-x25519` and `c64-mlkem` already did. **Closed in
+     this release** — see below.
+  2. **§4 made the example cfg's path normative** by dropping "or
+     similar" from `cfg/<libname>.cfg`. Ours is `src/c64.cfg`. Not
+     addressed by a rename, which §6.5 would make expensive for a file
+     consumers copy; we ship an additional consumer-facing example cfg at
+     the conforming path instead.
+
+  Both raised for arbitration as
+  [c64-lib-contract#178](https://github.com/JC-000/c64-lib-contract/issues/178).
+  We conform either way; the issue is about the other adopters and about
+  the release's own claim.
+
+  Also from this release: `precalc_table.inc` had comment-only edits and
+  the CHANGELOG says adopters' verbatim copies "need not be refreshed".
+  Ours is refreshed anyway — it is zero-risk (proven: comment-only, and
+  the rebuilt `lib_manifest.o` is byte-identical) and it closes a stale
+  statement in the copy at the same time.
+
+- **v1.1.0** (MINOR; §7 — the ABI counter turns on what the code does,
+  not on whether the export list changed) — **ratifies this repo's
+  unreleased ABI 3 → 4 bump.** The bump came from PR #98, where
+  `aead_decrypt` gained `AEAD_ERR_DOMAIN` and so returns a value it
+  previously could not, while the export list stayed byte-for-byte
+  identical. The shipped contract decided neither way, which is why the
+  bump was held unreleased; §7 now names a widened return set as the
+  central case. **ABI 4 is correct, and the clause is explicitly scoped
+  to the counter** — such a change is not thereby MAJOR and owes no
+  deprecation cycle, so the release below is a MINOR. Recorded in
+  issue #103.
+
+### Added
+- **`LIB_CHACHA20_POLY1305_AAD_LEN_MAX` (= 255)** — §5 asks a library to
+  publish a real input bound as a symbol a consumer can reference rather
+  than re-derive. `aead_aad_len` is one byte, so this is structural, not
+  a policy choice. The buffer-domain restriction stays unpublished, also
+  per §5: `ptr + len <= $10000` is a relation over two caller-supplied
+  values, so no scalar expresses it and a published one would be wrong.
+- **`src/chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg`,
+  both emitted by `make lib`** into `build/lib/` — the §6.1 artifacts
+  above. The header is safe to `.include` whole: ca65 emits an import
+  record only for a symbol the TU actually references, so a consumer
+  including it and calling three entry points emits three imports and
+  pulls no extra archive members (measured — a consumer including the
+  full header emitted 4 import records for the 4 names it used). It
+  deliberately declares no ZP slots, since this library uses the §6.2
+  consumer-assembled-source model, and no §8 shared-primitive names,
+  since which of those exist depends on the archive linked. The example
+  cfg carries the §4 load-bearing attributes with the consequence of
+  dropping each, and is verified to link a real consumer with all three
+  CT tables page-aligned.
+
+### Changed
+- **`src/precalc_table.inc` re-synced** to the canonical
+  `c64-lib-contract/precalc_table.inc`. Comment-only; the rebuilt
+  `lib_manifest.o` export and segment dumps are byte-identical.
+- **`tools/verify_knob_staleness.py` copies `cfg/` into its sandbox.** The
+  guard builds in a throwaway copy of `Makefile` + `src/`; adding the §6.1
+  example cfg gave `make lib` a prerequisite outside that list, so the
+  sandbox build died before any knob was exercised. The guard caught it
+  on the first run — which is the behaviour it exists for, applied to a
+  change to the build rather than to a knob.
+- **Two published obligations withdrawn, both resting on deleted
+  clauses.** v0.17.1 §6.1 reserved the `lib-*` make-target namespace and
+  this repo had committed to renaming `make lib-verify-shared` at its
+  next MAJOR; that clause is gone from v1.1.0, so the commitment is
+  withdrawn and the name stays. §6.6's "every release MUST state
+  footprint deltas per (profile × variant)" is retired; we keep doing it
+  as a local practice, because one tag here carries five such pairs, but
+  it is now ours to change rather than the contract's to require.
+- **Four statements corrected that the current contract contradicts** —
+  `src/lib_version.s` (×2), `src/precalc_table.inc` and `docs/API.md` all
+  said the deprecated bare exports were "scheduled for removal at contract
+  v1.0" or "required through contract v0.x". v1.1.0 §1 defers their
+  removal to a future MAJOR and the MUST still binds. These are distinct
+  from citations to retired sections, which are left alone on purpose.
+
+
 ### Security
 - **`aead_encrypt` / `aead_decrypt` now reject out-of-domain calls
   instead of wrapping the address space.** The data walkers advanced

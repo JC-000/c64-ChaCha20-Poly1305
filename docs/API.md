@@ -727,8 +727,9 @@ adopter-side subset assert that pins ownership ⊆ consumes.
 
 The bare names are identical across every adopter library, so a consumer
 linking two libraries and importing both manifests gets `ld65: Error:
-Duplicate external identifier`. They remain exported by default (required
-through contract v0.x, removed at v1.0), and a composing consumer
+Duplicate external identifier`. They remain exported by default — the
+contract's MUST still binds at v1.1.0, and their removal, once advertised
+for v1.0, is deferred there to a future MAJOR — and a composing consumer
 suppresses them across **every** library in the link with:
 
 ```

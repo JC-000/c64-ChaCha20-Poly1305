@@ -1,8 +1,7 @@
-; precalc_table.inc — canonical per c64-lib-contract SPEC §8.0 catch-loop.
+; precalc_table.inc — canonical per c64-lib-contract SPEC §8.4.
 ;
-; CANONICAL SOURCE. The fenced code block in SPEC.md §8.0 is shown for
-; readability; this file is the byte-for-byte source adopters copy into
-; their own src/precalc_table.inc. Updates land via coordinated cross-repo
+; CANONICAL SOURCE. This file is the byte-for-byte source adopters copy
+; into their own src/precalc_table.inc. Updates land via coordinated cross-repo
 ; PR; do not edit your local copy.
 ;
 ; Smoke-tested in examples/precalc_table_smoke.s and exercised by `make verify`
@@ -39,8 +38,8 @@ PRECALC_SHARED_YES     = $01
 ; The prefixed form is collision-free across libraries, so a consumer
 ; linking two libraries can .import both manifests and cross-check that
 ; they agree on a shared table's shape (SPEC #43). The bare form is
-; DEPRECATED — it is the form that collides — and is scheduled for
-; removal at contract v1.0.
+; DEPRECATED — it is the form that collides — and its removal is
+; deferred to a future MAJOR (§1).
 ;
 ; Define LIB_NO_BARE_EXPORTS (ca65 -D LIB_NO_BARE_EXPORTS=1) to suppress
 ; the deprecated bare form. A consumer composing two or more libraries

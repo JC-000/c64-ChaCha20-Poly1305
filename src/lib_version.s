@@ -10,12 +10,24 @@
 ;       equates in src/lib/lib_manifest.s.
 ;
 ;   LIB_VERSION_{MAJOR,MINOR,PATCH} / LIB_ABI_VERSION
-;       The historical bare form. Still REQUIRED through contract v0.x so
-;       existing single-library consumers keep working unchanged, but
-;       DEPRECATED and scheduled for removal at contract v1.0: the names
-;       are identical across every adopter, so a consumer linking two
-;       libraries and importing both manifests gets
+;       The historical bare form. Still REQUIRED — the MUST binds at
+;       contract v1.1.0, it is not scoped to v0.x — so existing
+;       single-library consumers keep working unchanged. DEPRECATED: the
+;       names are identical across every adopter, so a consumer linking
+;       two libraries and importing both manifests gets
 ;       `ld65: Error: Duplicate external identifier`.
+;
+;       Their removal was long advertised for contract v1.0 and did NOT
+;       happen there. v1.1.0 §1 defers it to a future MAJOR, deliberately:
+;       dropping four exports is a real ABI change for every adopter and
+;       should not ride along with a release whose headline was that text
+;       was deleted. It will be its own release with its own review. Do
+;       not pre-emptively drop them.
+;
+;       This library also does not qualify for §1's zero-consumer
+;       carve-out (which says a library with no released consumers SHOULD
+;       NOT export the bare forms at all): c64-wireguard v1.0.0 pins this
+;       repo's v0.6.0, so there is an existing consumer to protect.
 ;
 ;       Suppress them with `ca65 -D LIB_NO_BARE_EXPORTS=1`, applied to
 ;       every library in the link. See issue #57 for the measured
@@ -136,8 +148,9 @@ LIB_CHACHA20_POLY1305_ABI_VERSION   = 4
 .export LIB_CHACHA20_POLY1305_ABI_VERSION:abs
 
 .ifndef LIB_NO_BARE_EXPORTS
-    ; Deprecated bare forms — removed at contract v1.0. A consumer
-    ; composing two or more libraries suppresses these build-wide with
+    ; Deprecated bare forms. Removal is deferred to a future contract
+    ; MAJOR (v1.1.0 §1) — it was NOT done at v1.0. A consumer composing
+    ; two or more libraries suppresses these build-wide with
     ; `ca65 -D LIB_NO_BARE_EXPORTS=1` and imports the prefixed names.
     LIB_VERSION_MAJOR = LIB_CHACHA20_POLY1305_VERSION_MAJOR
     LIB_VERSION_MINOR = LIB_CHACHA20_POLY1305_VERSION_MINOR

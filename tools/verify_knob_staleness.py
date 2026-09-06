@@ -23,7 +23,7 @@ exports each, so 18 vs 24. Per §6.3's checkability note this is an od65
 structural dump, never an archive-bytes diff — ca65 stamps OPT_DATETIME into
 every object, so raw bytes differ on every knob, no-op or not.
 
-Runs against a throwaway copy of `Makefile` + `src/` in a temp dir: the
+Runs against a throwaway copy of `Makefile` + `src/` + `cfg/` in a temp dir: the
 guard's invalidation leg deletes every object under `build/`, and this audit
 must not cost the caller their profile-a/b object cache.
 
@@ -91,6 +91,12 @@ def main():
         tree = Path(td) / "tree"
         tree.mkdir()
         shutil.copytree(ROOT / "src", tree / "src")
+        # cfg/ holds the §6.1 consumer-facing example cfg, which `make lib`
+        # copies into build/lib/cfg/. Without it the sandbox build dies with
+        # "No rule to make target 'cfg/...'" before any knob is exercised —
+        # which is how this guard caught the omission when the §6.1 artifacts
+        # were added. Keep this list in step with `make lib`'s prerequisites.
+        shutil.copytree(ROOT / "cfg", tree / "cfg")
         shutil.copy2(ROOT / "Makefile", tree / "Makefile")
 
         # 1. default
