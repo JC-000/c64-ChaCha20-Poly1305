@@ -63,21 +63,38 @@
 .endif
 
 ; c64-lib-contract SPEC §8.1 sqtab-init migration switch.
-; When a consumer provides a canonical sqtab init (`mul_tables_init`)
-; by defining SHARED_SQTAB_INIT, this lib MUST NOT also export
-; `sqtab_init` — the consumer's canonical owner takes over and a
-; second export would collide at link time. The .ifndef gate below
-; matches the one wrapping the sqtab_init body further down.
 ;
-; Under SHARED_SQTAB_INIT the lib's internal callers (poly1305_lib_init
-; and aead_init_late) still reference `sqtab_init`; we satisfy them by
-; importing the canonical `mul_tables_init` and aliasing locally. This
-; preserves backwards compatibility per SPEC §8.1 ("Each adopting
-; library MAY keep its existing per-lib `sqtab_init` exported …
-; Under .ifdef SHARED_SQTAB_INIT, the library's own init body is gated
-; out and the canonical `mul_tables_init` takes over.").
+; OWNER BUILD (default). §8.1 names `mul_tables_init` as the canonical
+; entry point, so that is what a sibling deferring to us imports — the
+; clause says outright that "a deferring build MUST .import the
+; provider's mul_tables_init". It is therefore the name we MUST export.
+; `sqtab_init` is this library's historical spelling and is kept
+; exported alongside it, which §8.1 explicitly permits ("A library MAY
+; keep its own sqtab_init exported for back-compat"). Both labels sit on
+; the one body further down, so they are the same address.
+;
+; Until issue #105 only `sqtab_init` was exported, while the §5 manifest
+; claimed the $0001 ownership bit in every Profile B build. That made the
+; claim unsatisfiable in exactly the way issue #47 had already made the
+; §8.3 claim unsatisfiable one clause over: a sibling that read the bit,
+; deferred its own sqtab and imported the canonical name got
+; `ld65: Error: Unresolved external 'mul_tables_init'`. Nothing here
+; caught it — standalone builds resolve `sqtab_init` internally and never
+; ask for the canonical name, and every composition the fleet actually
+; exercised had c64-x25519 as the sqtab provider with THIS library
+; deferring, which is the direction that worked. `make lib-verify-shared`
+; now pins both directions.
+;
+; DEFERRAL BUILD (-D SHARED_SQTAB_INIT=1). This lib MUST NOT export
+; either name — the designated owner takes over and a second export of
+; the canonical name would be a duplicate external. The lib's internal
+; callers (poly1305_lib_init and aead_init_late) still reference
+; `sqtab_init`, so we import the canonical name and alias locally. Per
+; §8.1's import-never-stub rule, a deferring build imports the provider's
+; body rather than exporting a stub under the canonical name.
 .ifndef SHARED_SQTAB_INIT
-.export sqtab_init
+.export mul_tables_init         ; SPEC §8.1 canonical entry point
+.export sqtab_init              ; historical name for the same address
 .else
 .import mul_tables_init
 sqtab_init = mul_tables_init
@@ -386,7 +403,8 @@ poly1305_clamp:
 ; =============================================================================
 .ifndef POLY1305_PROFILE_LONG
 .ifndef SHARED_SQTAB_INIT
-sqtab_init:
+mul_tables_init:                ; SPEC §8.1 canonical name
+sqtab_init:                     ; historical name, same address
         lda #0
         sta sq_acc              ; accumulator = 0
         sta sq_acc+1

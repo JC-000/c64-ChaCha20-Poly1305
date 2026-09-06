@@ -559,7 +559,7 @@ $(LIB_AEAD_ONLY_OBJS_DIR):
 	mkdir -p $(LIB_AEAD_ONLY_OBJS_DIR)
 
 # ===========================================================================
-# lib-verify-shared — c64-lib-contract SPEC §8.3 deferral-build linkage guard.
+# lib-verify-shared — c64-lib-contract SPEC §8.1 + §8.3 linkage guard.
 #
 # Regression guard for issue #47: `-D SHARED_CT_MUL_8X8=1` used to flip only
 # the manifest ownership bit while leaving the §8.3 export surface live, so
@@ -593,6 +593,20 @@ LIB_SHARED_OWNED_SYMS  = ct_mul_8x8 mul_8x8 poly_prod_lo poly_prod_hi \
 LIB_SHARED_IMPORT_SYMS = ct_mul_8x8 poly_prod_lo poly_prod_hi \
                          smc_sum_a_imm smc_diff_a_imm
 
+# --- §8.1 sqtab (issue #105) -----------------------------------------------
+# The owner build MUST publish the canonical `mul_tables_init`, because that
+# is the name §8.1 tells a deferring sibling to import. `sqtab_init` is this
+# library's historical spelling, kept exported under §8.1's back-compat
+# permission; both are the same address.
+#
+# Until #105 only `sqtab_init` was exported while the §5 manifest claimed the
+# $0001 ownership bit, so the claim was unsatisfiable and a deferring sibling
+# died on `Unresolved external 'mul_tables_init'`. The §8.3 half of this
+# target existed because issue #47 was the identical defect one clause over;
+# §8.1 had no leg, which is why this one survived #47.
+LIB_SQTAB_OWNED_SYMS   = mul_tables_init sqtab_init
+LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
+
 # R2 audit: the §5 ZP_USAGE_BYTES equate is hand-maintained, so nothing
 # tied it to the actual .exportzp surface until this check. Deliberately
 # NOT named lib-* — contract §6.1 reserves that namespace for targets that
@@ -612,16 +626,24 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	    -o $(LIB_SHARED_VERIFY_DIR)/owner.o
 	@$(CA65) $(CA65FLAGS) -D SHARED_CT_MUL_8X8=1 src/lib/poly1305_lib.s \
 	    -o $(LIB_SHARED_VERIFY_DIR)/defer.o
+	@$(CA65) $(CA65FLAGS) -D SHARED_SQTAB_INIT=1 src/lib/poly1305_lib.s \
+	    -o $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o
 	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/owner.o \
 	    > $(LIB_SHARED_VERIFY_DIR)/owner.exports
 	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/defer.o \
 	    > $(LIB_SHARED_VERIFY_DIR)/defer.exports
 	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer.o \
 	    > $(LIB_SHARED_VERIFY_DIR)/defer.imports
+	@od65 --dump-exports $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.exports
+	@od65 --dump-imports $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.o \
+	    > $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.imports
 	@fail=0; \
 	for pair in "owner.exports:poly1305_multiply" \
 	            "defer.exports:poly1305_multiply" \
-	            "defer.imports:poly_product"; do \
+	            "defer.imports:poly_product" \
+	            "defer_sqtab.exports:poly1305_multiply" \
+	            "defer_sqtab.imports:poly_product"; do \
 	    f=$${pair%%:*}; sentinel=$${pair##*:}; \
 	    grep -q "\"$$sentinel\"" $(LIB_SHARED_VERIFY_DIR)/$$f || { \
 	        echo "FAIL: $$f lacks sentinel '$$sentinel' — od65 dump is empty or"; \
@@ -642,10 +664,30 @@ lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer.imports || { \
 	        echo "FAIL: SHARED_CT_MUL_8X8 build does not import $$s"; fail=1; }; \
 	done; \
+	for s in $(LIB_SQTAB_OWNED_SYMS); do \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/owner.exports || { \
+	        echo "FAIL: owner build does not export $$s — the §5 manifest claims"; \
+	        echo "      the \$$0001 sqtab ownership bit, so a deferring sibling"; \
+	        echo "      importing the canonical name gets an unresolved external"; \
+	        echo "      (issue #105)"; \
+	        fail=1; }; \
+	    if grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.exports; then \
+	        echo "FAIL: SHARED_SQTAB_INIT build still exports $$s — two providers"; \
+	        echo "      of a canonical name is a duplicate external in any"; \
+	        echo "      composed link"; \
+	        fail=1; \
+	    fi; \
+	done; \
+	for s in $(LIB_SQTAB_IMPORT_SYMS); do \
+	    grep -q "\"$$s\"" $(LIB_SHARED_VERIFY_DIR)/defer_sqtab.imports || { \
+	        echo "FAIL: SHARED_SQTAB_INIT build does not import $$s (§8.1"; \
+	        echo "      import-never-stub rule)"; fail=1; }; \
+	done; \
 	if [ $$fail -ne 0 ]; then \
 	    echo "lib-verify-shared: FAILED"; exit 1; \
 	fi; \
-	echo "lib-verify-shared: OK — §8.3 surface owned in default build, fully deferred under SHARED_CT_MUL_8X8"
+	echo "lib-verify-shared: OK — §8.1 and §8.3 surfaces owned in default build,"; \
+	echo "                   each fully deferred under its own switch"
 
 $(LIB_SHARED_VERIFY_DIR):
 	mkdir -p $(LIB_SHARED_VERIFY_DIR)
