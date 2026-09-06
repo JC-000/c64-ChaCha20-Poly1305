@@ -16,9 +16,9 @@ LIB_AEAD = $(PROJECT_ROOT)/build/lib/chacha20poly1305-aead-only.a
 
 BUILD = build
 
-.PHONY: all clean full aead_only smoke-full smoke-aead
+.PHONY: all clean full aead_only smoke-full smoke-aead app-owned-default-link
 
-all: full aead_only smoke-full smoke-aead
+all: full aead_only smoke-full smoke-aead app-owned-default-link
 
 # The consumer side provides:
 #   - min_aead_consumer.o   (its own program)
@@ -66,6 +66,41 @@ smoke-aead: $(BUILD)/aead_smoke-aead.prg
 $(BUILD)/aead_smoke-aead.prg: $(BUILD)/aead_smoke.o $(BUILD)/zp_config.o $(LIB_AEAD) | $(BUILD)
 	$(LD65) -C $(CFG) -m $(BUILD)/smoke-aead.map -Ln $(BUILD)/smoke-aead.labels \
 	    $(BUILD)/aead_smoke.o $(BUILD)/zp_config.o $(LIB_AEAD) -o $@
+
+# --- SPEC §6.1 member isolation, demonstrated at the LINK (issue #108) -----
+# The behavioural half of `make lib-verify-isolation`. That target reads
+# symbol tables; this one links, which is where the clause's failure actually
+# shows up.
+#
+# app_owned_consumer.s is a SPEC §8.0 APP_OWNED consumer: it supplies the
+# §8.1 and §8.3 shared primitives from its own object and links the DEFAULT
+# archive — no rebuild of the library, no deferral define. That is the
+# configuration §6.1 exists for, and the one c64-wireguard would be in if it
+# did not know to pass `-D SHARED_SQTAB_INIT=1 -D SHARED_CT_MUL_8X8=1`.
+#
+# MEASURED at v0.10.0, before the member split:
+#
+#     ld65: Error: Duplicate external identifier: 'sqtab_init'
+#
+# — because `poly1305_lib.o` held the eight displaceable names alongside the
+# nine Poly1305 entry points, so importing `aead_encrypt` dragged the member
+# in beside the consumer's own definitions. Post-split the consumer's object,
+# being on the command line, is in the symbol table first, the library's
+# imports resolve against it, and shared_ct_mul.o / shared_prod_scratch.o /
+# mul_8x8_legacy.o / shared_sqtab_init.o are never pulled. Check
+# build/app-owned.map to see that for yourself.
+#
+# If this target ever fails again with a duplicate external, a displaceable
+# name has been merged back into a member that also exports something a
+# consumer imports.
+app-owned-default-link: $(BUILD)/app_owned-full.prg
+
+$(BUILD)/app_owned_consumer.o: app_owned_consumer.s | $(BUILD)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+$(BUILD)/app_owned-full.prg: $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_FULL) | $(BUILD)
+	$(LD65) -C $(CFG) -m $(BUILD)/app-owned.map -Ln $(BUILD)/app-owned.labels \
+	    $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_FULL) -o $@
 
 clean:
 	rm -rf $(BUILD)

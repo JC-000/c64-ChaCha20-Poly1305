@@ -218,13 +218,26 @@ one commit per upstream bump.
 
    ```
    LIB_MODULES = word32_lib chacha20_lib poly1305_lib \
+                 shared_sqtab_init shared_prod_scratch \
+                 mul_8x8_legacy shared_ct_mul \
+                 poly1305_ripple poly1305_core \
                  chacha20poly1305_lib data_lib \
-                 lib_version lib_manifest
+                 lib_version lib_manifest precalc_manifest
    ```
 
+   **Keep that order.** The seven Poly1305 modules are one contiguous
+   run of the `LIB_CHACHA20_POLY1305_CODE` segment split at issue #108
+   for contract §6.1 member isolation; listing them in this order is
+   what keeps the emitted image identical to v0.10.0. `shared_*.s` and
+   `mul_8x8_legacy.s` hold the §8.1/§8.3 names an APP_OWNED consumer may
+   define itself, isolated so ld65 can resolve those names against YOUR
+   object and never pull the library's copy — see `make
+   lib-verify-isolation` and `test_consumer/app_owned_consumer.s`.
+
    `lib_version.s` lives at `src/lib_version.s` (not under
-   `src/lib/`); `lib_manifest.s` carries the c64-lib-contract
-   manifest exports. Both are linked into every profile and are
+   `src/lib/`); `lib_manifest.s` carries the c64-lib-contract §5
+   manifest exports and `precalc_manifest.s` the §8.4 precalc
+   enumeration (separate members, also per §6.1). Both are linked into every profile and are
    present in the prebuilt archives. `src/zp_config.s` assembles to
    its own `zp_config.o`, which must also be on the link line — the
    library modules import their ZP slots from it.

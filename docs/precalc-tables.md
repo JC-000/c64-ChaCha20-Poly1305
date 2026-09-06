@@ -6,7 +6,7 @@ precomputed table in this library that clears the §8.0 floor
 (>= 256 B AND one of: REU-resident, hot-loop-read, page-aligned for
 fetch alignment).
 
-The enumeration is emitted in `src/lib/lib_manifest.s` via the
+The enumeration is emitted in `src/lib/precalc_manifest.s` via the
 canonical `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc`
 (copied byte-for-byte from c64-lib-contract@b039ab9). Each
 invocation exports three equates per table:
@@ -64,24 +64,44 @@ The two `r_tab_*` rows are gated behind `.ifdef POLY1305_PROFILE_LONG`
 because Profile B does not allocate the Shoup r-tables (it falls back
 to sqtab via `ct_mul_8x8`).
 
-Verify post-build:
+Verify post-build. The enumeration moved to its own member at issue #108
+(contract §6.1 member isolation), so dump `precalc_manifest.o`, not
+`lib_manifest.o`:
 
 ```
-od65 --dump-exports build/profile-a/lib_manifest.o | grep LIB_PRECALC_ | wc -l
-# expect 15 (5 tables * 3 equates)
+od65 --dump-exports build/profile-a/precalc_manifest.o | grep -c _PRECALC_
+# expect 24 (4 tables * 6 equates: bare triple + prefixed triple)
 
-od65 --dump-exports build/profile-b/lib_manifest.o | grep LIB_PRECALC_ | wc -l
-# expect 9 (3 tables * 3 equates)
+od65 --dump-exports build/profile-b/precalc_manifest.o | grep -c _PRECALC_
+# expect 18 (3 tables * 6 equates)
 ```
 
-Spot-check the `sqtab` size equate:
+Grep `_PRECALC_`, not `LIB_PRECALC_`: the older pattern misses every
+prefixed export. Profile A enumerates four tables (the two nibswap LUTs
+plus the two `r_tab_*`) and Profile B three (the two nibswap LUTs plus
+`sqtab`) — `sqtab` is profile-gated as of issue #51, so Profile A
+enumerates no `sqtab` row.
+
+**Extracting names, not counting them: do NOT use `awk '{print $2}'` or a
+`Name:\s+"` regex.** `od65` pads `Name:` to a fixed column, and a name of
+exactly 24 characters computes to ZERO padding — `LIB_PRECALC_sqtab_SHARED`
+and `LIB_PRECALC_sqtab_REGION` both emit as `Name:"..."` with no space, and
+both extractions silently drop them. That turned a true count of 9 bare
+names into a reported 7 during this issue's audit. Use:
 
 ```
-od65 --dump-exports build/profile-a/lib_manifest.o | grep -A1 LIB_PRECALC_sqtab_SIZE
+od65 --dump-exports build/lib/objs/precalc_manifest.o \
+  | sed -n 's/.*Name: *"\([^"]*\)".*/\1/p'
+```
+
+Spot-check the `sqtab` size equate (Profile B — Profile A has no such row):
+
+```
+od65 --dump-exports build/profile-b/precalc_manifest.o | grep -A1 LIB_PRECALC_sqtab_SIZE
 # Value: 0x00000400  (1024)
 ```
 
-## Note on the `sqtab` row being unconditional
+## Note on the `sqtab` row (historical — it is profile-gated now)
 
 The `sqtab` enumeration row is emitted on both profiles even though
 Profile A no longer allocates the table itself (issue #34 F1 gated

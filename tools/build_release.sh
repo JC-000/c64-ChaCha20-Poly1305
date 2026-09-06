@@ -64,8 +64,11 @@ git archive \
   src/zp_config.s src/lib_version.s src/precalc_table.inc \
   src/lib/constants_lib.s src/lib/data_lib.s \
   src/lib/word32_lib.s src/lib/chacha20_lib.s \
-  src/lib/poly1305_lib.s src/lib/chacha20poly1305_lib.s \
-  src/lib/lib_manifest.s \
+  src/lib/poly1305_lib.s src/lib/shared_sqtab_init.s \
+  src/lib/shared_prod_scratch.s src/lib/mul_8x8_legacy.s \
+  src/lib/shared_ct_mul.s src/lib/poly1305_ripple.s \
+  src/lib/poly1305_core.s src/lib/chacha20poly1305_lib.s \
+  src/lib/lib_manifest.s src/lib/precalc_manifest.s \
   src/chacha20poly1305.inc cfg/chacha20poly1305-example.cfg \
   Makefile README.md CHANGELOG.md LICENSE \
   docs/API.md docs/INTEGRATION.md docs/MEMORY_MAP.md \

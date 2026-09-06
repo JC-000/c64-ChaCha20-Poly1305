@@ -353,7 +353,7 @@ aggregate-manifest convention (six §5 aggregate equates plus the two
 
 The §8.x bit constants themselves (`LIB_SHARED_PRIMITIVES_SQTAB` = `$0001`, `LIB_SHARED_PRIMITIVES_CT_MUL_8X8` = `$0004`) are **not** exported — they are plain local equates that consumers copy, since their names and values are identical in every adopter and exporting them collides at link (issue #57). They exist only to build the two masks above, which are the symbols meant to cross the link.
 
-In addition, the manifest emits the [SPEC §8.4 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits **six** exported equates since contract v0.7.0 — the library-prefixed `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}` plus the deprecated bare `LIB_PRECALC_<name>_*` triple, the latter suppressed under `-D LIB_NO_BARE_EXPORTS=1`. Cross-adopter audits grep with `od65 --dump-exports build/profile-*/lib_manifest.o | grep _PRECALC_` — note `_PRECALC_`, not `LIB_PRECALC_`, since the older pattern misses every prefixed export. Profile A enumerates four tables (`chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`) and Profile B three (`sqtab` plus the two nibswap tables) — so a default build surfaces **24** and **18** `_PRECALC_` exports respectively, dropping to **12** and **9** under `-D LIB_NO_BARE_EXPORTS=1` once the deprecated bare triples are suppressed. `sqtab` is profile-gated as of issue #51 — Profile A neither emits nor consumes it, so it enumerates no `sqtab` row. `od65` cannot read `.a` archives, so audit the per-variant object dirs, never the archive. See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
+In addition, the manifest emits the [SPEC §8.4 catch-loop](https://github.com/JC-000/c64-lib-contract/blob/main/SPEC.md) precalc-table enumeration via the `LIB_PRECALC_TABLE` macro from `src/precalc_table.inc` (verbatim copy of the canonical c64-lib-contract source). Each enumerated table emits **six** exported equates since contract v0.7.0 — the library-prefixed `LIB_CHACHA20_POLY1305_PRECALC_<name>_{SIZE,REGION,SHARED}` plus the deprecated bare `LIB_PRECALC_<name>_*` triple, the latter suppressed under `-D LIB_NO_BARE_EXPORTS=1`. Cross-adopter audits grep with `od65 --dump-exports build/profile-*/precalc_manifest.o | grep _PRECALC_` — note `_PRECALC_`, not `LIB_PRECALC_`, since the older pattern misses every prefixed export. Profile A enumerates four tables (`chacha_nibswap_hi_tab`, `chacha_nibswap_lo_tab`, `r_tab_lo`, `r_tab_hi`) and Profile B three (`sqtab` plus the two nibswap tables) — so a default build surfaces **24** and **18** `_PRECALC_` exports respectively, dropping to **12** and **9** under `-D LIB_NO_BARE_EXPORTS=1` once the deprecated bare triples are suppressed. `sqtab` is profile-gated as of issue #51 — Profile A neither emits nor consumes it, so it enumerates no `sqtab` row. `od65` cannot read `.a` archives, so audit the per-variant object dirs, never the archive. See [`docs/precalc-tables.md`](docs/precalc-tables.md) for per-table rationale.
 
 ## Contract conformance
 
@@ -387,13 +387,14 @@ REU DMA in any profile.
 | §4 segment naming | library sources emit only `LIB_CHACHA20_POLY1305_CODE`/`_DATA`; every default segment name is size 0 in all seven archive objects. The cfg declares the load-bearing `align = $100` and `type = rw` attributes **with the consequence of dropping each**, as the clause requires |
 | §5 manifest | six aggregate equates plus the two §8 masks, in `src/lib/lib_manifest.s`, separate from `lib_version.s`. All five `RESIDENT_BYTES` literals re-measured this release and safe-direction. **`LIB_CHACHA20_POLY1305_AAD_LEN_MAX` is new**: §5 asks a library to publish a real input bound as a referenceable symbol, and `aead_aad_len` is one byte, so 255 is a genuine ceiling. The buffer-domain restriction is deliberately **not** published — see below |
 | §6.1 targets and artifacts | `make lib` produces `build/lib/chacha20poly1305.a`, which is all v1.1.1 §6.1 requires. It also emits `chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg` — a local choice, not an obligation; see the note below. Variants: `lib-aead-only`, `lib-app-owned`, both still provided though v1.0.0 stopped requiring them. No `ar65` member surgery anywhere |
+| §6.1 member isolation | **New at v1.2.0, carve-out v1.2.1, both collision directions named at v1.2.2; met as of issue #108.** No archive member exports a displaceable name alongside a name a consumer may import that is not that name's own prefixed counterpart. The §8.4 precalc enumeration left `lib_manifest.o` for `precalc_manifest.o`, and `poly1305_lib.o` became seven members so the eight §8.1/§8.3 `APP_OWNED` names no longer ride with the nine Poly1305 entry points. Pinned by `make lib-verify-isolation`, which MEASURES the displaceable set by differencing builds rather than listing it, and demonstrated at the link by `test_consumer/app-owned-default-link` |
 | §6.2 consumer defines | `CONTRACT_DEFINES` reaches every one of the 60 `ca65` invocations. There is deliberately no `CONTRACT_ZP_DEFINES`: no archive member defines a ZP slot, so the clause's split is satisfied vacuously and a slot override belongs in the consumer's own `zp_config` assembly |
 | §6.4 per-archive manifest | each variant's manifest describes that archive — verified by reading `RESIDENT_BYTES` back out of each built `lib_manifest.o` |
 | §6.5 rename window | archives dual-named; deprecated bare ZP aliases behind `LIB_NO_BARE_EXPORTS` |
 | §7 semver / ABI counter | `LIB_CHACHA20_POLY1305_ABI_VERSION = 4`. §7 rules that the counter moves on what the code does, not on whether the export list changed — a widened return set is the named case, and `aead_decrypt` gained `AEAD_ERR_DOMAIN` while `aead_encrypt` gained a defined return at all. Ratified in issue #103; explicitly **not** a MAJOR, and it owes no deprecation cycle |
 | §8.0 masks | bit constants local, never exported; both masks built in the required conditional form with the ownership-subset assert. Profile B `$0005/$0005`, app-owned `$0000/$0005`, Profile A `$0000/$0000` |
 | §8.1 sqtab | `LIB_SHARED_SQTAB_BASE`, `sqtab_lo`, `sqtab_hi` all unexported; page-alignment and `$0200`-delta asserts present. The owner build exports the canonical **`mul_tables_init`** as well as the historical `sqtab_init` — it exported only the latter until issue #105, which made the ownership claim unsatisfiable. Both directions now pinned by `make lib-verify-shared` |
-| §8.3 ct_mul_8x8 | owner build exports all six names; deferral build exports none and imports the five it references |
+| §8.3 ct_mul_8x8 | owner build exports all six names; deferral build exports none, and `poly1305_core.o` imports the five it references in **both** builds — since issue #108 they live in another TU either way, which is what lets an APP_OWNED consumer's own definitions win against the default archive |
 | §8.4 precalc enumeration | `src/precalc_table.inc` is a **verbatim** copy of the canonical source, re-synced this release; macro included from exactly one TU |
 
 **The §5 bound that is deliberately not published.** The AEAD input
@@ -520,9 +521,17 @@ src/
     data_lib.s                 mutable buffers (cc20_*, poly_*, aead_*)
     word32_lib.s               32-bit add / xor / rotate primitives
     chacha20_lib.s             ChaCha20 stream cipher (inlined QRs, rot-rename)
-    poly1305_lib.s             Poly1305 MAC (Shoup table / quarter-square)
+    poly1305_lib.s             Poly1305 boot/key schedule (lib_init, init, clamp,
+                               shoup_init)
+    shared_sqtab_init.s        SPEC §8.1 mul_tables_init / sqtab_init (displaceable)
+    shared_prod_scratch.s      SPEC §8.3 poly_prod_lo / poly_prod_hi (displaceable)
+    mul_8x8_legacy.s           SPEC §8.3 back-compat mul_8x8 body (displaceable)
+    shared_ct_mul.s            SPEC §8.3 ct_mul_8x8 + SMC sites (displaceable)
+    poly1305_ripple.s          poly_ripple (the unaligned seam — see its header)
+    poly1305_core.s            Poly1305 arithmetic (multiply/reduce/block/update/final)
     chacha20poly1305_lib.s     AEAD wrapper
-    lib_manifest.s             SPEC §5 manifest equates + §8.0 precalc enumeration
+    lib_manifest.s             SPEC §5 manifest equates + §8 ownership masks
+    precalc_manifest.s         SPEC §8.4 precalc-table enumeration (displaceable)
 test/
   rfc7539_vectors.json         RFC 8439 test vectors
 test_consumer/
