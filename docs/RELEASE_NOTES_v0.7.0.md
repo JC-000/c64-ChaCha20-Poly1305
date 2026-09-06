@@ -72,6 +72,15 @@ a non-empty `BSS` loads `__BSS_SIZE__` bytes below its linked address.
 manifest equates. The unprefixed forms are still exported by default and
 are removed at contract v1.0.
 
+> **Correction, 2026-09-06 — the sentence above is no longer true, and is
+> left in place as the record of what this release said.** The bare
+> exports were *not* removed at contract v1.0. Contract v1.1.0 §1 defers
+> their removal to a future MAJOR, deliberately: dropping four exports is
+> a real ABI change for every adopter and was not bundled with a release
+> whose headline was that text was deleted. They are still exported, still
+> gated on `LIB_NO_BARE_EXPORTS`, and no consumer needs to plan for their
+> disappearance at a known version. See `docs/RELEASE_NOTES_v0.10.0.md`.
+
 **3. If you imported the §8.x bit constants**
 (`LIB_SHARED_PRIMITIVES_SQTAB` / `_CT_MUL_8X8`), copy the equates into
 your own source instead — they are no longer exported.

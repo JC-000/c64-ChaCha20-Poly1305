@@ -133,6 +133,23 @@ between releases:
 - **§6.6** requires release notes to state footprint deltas per
   (profile × variant) — which is why the table below exists.
 
+> **Correction, 2026-09-06 — both obligations above have since been
+> withdrawn, and are left in place as the record of what this release
+> said.** Neither is live, and neither should be planned for:
+>
+> - **§6.1's `lib-*` namespace reservation was deleted** in the contract
+>   v1.0.0 text cut. `make lib-verify-shared` keeps its name; this repo is
+>   no longer committed to renaming it at its next MAJOR. Note the
+>   sentence was deleted from a *surviving* section, so it is not listed
+>   in the contract's `RETIRED.md` — do not go looking for it there.
+> - **§6.6 was retired** at v1.0.0. Its safe-direction and RESIDENT/COLD
+>   pairing rules moved to §5; the per-(profile × variant) release-note
+>   requirement did not move anywhere. This repo keeps producing that
+>   table by choice, because one tag here carries five such pairs — but it
+>   is ours to change, not the contract's to require.
+>
+> See `docs/RELEASE_NOTES_v0.10.0.md`.
+
 Citations now follow contract v0.10.3's heading split: the precalc
 catch-loop clause is **§8.4**, not §8.0. `src/precalc_table.inc` is
 deliberately untouched — it is byte-identical to the contract's canonical
