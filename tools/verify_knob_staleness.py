@@ -30,8 +30,11 @@ must not cost the caller their profile-a/b object cache.
 Usage:  python3 tools/verify_knob_staleness.py
 Exit:   0 conformant, 1 drift detected.
 
-Not named `lib-*`: contract §6.1 reserves that make-target namespace for
-targets producing archives.
+Not named `lib-*`: v0.17.1 §6.1 reserved that make-target namespace for
+targets producing archives. That sentence was DELETED from §6.1 at contract
+v1.0.0 and no replacement exists, so this is now a local naming convention
+rather than an obligation — kept because it still tells a reader which
+targets emit artifacts and which only check them.
 """
 
 import re
