@@ -16,6 +16,9 @@
 # docs/RELEASE_NOTES_<tag>.md.
 #
 # File list: the canonical consumer-vendoring set. `src/lib/*.s` plus
+# `src/chacha20poly1305.inc` / `cfg/chacha20poly1305-example.cfg` (which
+# `make lib` copies into build/lib/, so the tarball's `make lib` fails
+# without them — see the build smoke leg below), plus
 # `src/zp_config.s` / `src/lib_version.s` / `src/precalc_table.inc`
 # are the modules consumers link (all mandatory on the v0.6.0+ link
 # line per docs/INTEGRATION.md); `src/main.s` is the library's
@@ -63,6 +66,7 @@ git archive \
   src/lib/word32_lib.s src/lib/chacha20_lib.s \
   src/lib/poly1305_lib.s src/lib/chacha20poly1305_lib.s \
   src/lib/lib_manifest.s \
+  src/chacha20poly1305.inc cfg/chacha20poly1305-example.cfg \
   Makefile README.md CHANGELOG.md LICENSE \
   docs/API.md docs/INTEGRATION.md docs/MEMORY_MAP.md \
   docs/AUDIT.md docs/CT_ANALYSIS.md \
@@ -116,6 +120,36 @@ for t in $REQUIRED_TOOLS; do
     missing=1
   fi
 done
+
+# ---------------------------------------------------------------------------
+# Third leg: actually BUILD the extracted tarball.
+#
+# The two legs above check the `.include` graph and the tools a make target
+# invokes. Neither can see a file the Makefile COPIES rather than includes —
+# which is how `src/chacha20poly1305.inc` and `cfg/chacha20poly1305-example.cfg`
+# were omitted when they were added: `make lib` gained two prerequisites that
+# no shipped source `.include`s, so both legs stayed green while the tarball's
+# `make lib` died with "No rule to make target".
+#
+# The general closure is to build it. This runs the real `make lib` inside the
+# extracted tree, which is the thing a consumer does first and the only check
+# that covers every omission class at once. Skipped, loudly, when ca65 is
+# absent — a release cut on a machine without the toolchain gets a warning
+# rather than a false pass.
+# ---------------------------------------------------------------------------
+if command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 \
+   && command -v ar65 >/dev/null 2>&1; then
+  if ! ( cd "$ROOT_CHECK" && make lib >"$CHECKDIR/build.log" 2>&1 ); then
+    echo "MANIFEST ERROR: 'make lib' fails in the extracted tarball:" >&2
+    tail -20 "$CHECKDIR/build.log" >&2
+    missing=1
+  else
+    echo "  tarball 'make lib': OK"
+  fi
+else
+  echo "  WARNING: ca65/ld65/ar65 not on PATH — tarball build leg SKIPPED." >&2
+  echo "           The manifest is unverified against a real build." >&2
+fi
 
 if [ "$missing" -ne 0 ]; then
   echo "tarball manifest incomplete — $OUT would not build from a clean extraction" >&2
