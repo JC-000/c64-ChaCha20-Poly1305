@@ -151,14 +151,31 @@ CHACHA20POLY1305_INC_INCLUDED = 1
 ; AEAD status codes. Assemble-time equates rather than imports — they are
 ; values, not addresses, and a consumer comparing against them needs them
 ; at assembly time. Keep in step with src/lib/chacha20poly1305_lib.s.
+;
+; Each is `.ifndef`-guarded so including this header cannot collide with a
+; consumer that already defines the name — and each guard has an `.else`
+; that ASSERTS the consumer's value matches. Without that assert the guard
+; is a silent-wrong-answer machine: a consumer carrying its own
+; `AEAD_OK = $42` from some other library would assemble clean here and
+; then compare `aead_decrypt`'s return against $42, treating every
+; successful decrypt as a failure and, worse, every authentication
+; failure as something other than what it is. The guard exists to avoid a
+; redefinition error, not to let two different meanings of the same name
+; coexist.
 .ifndef AEAD_OK
 AEAD_OK         = $00
+.else
+.assert AEAD_OK = $00, error, "AEAD_OK is already defined with a different value than this library returns ($00)"
 .endif
 .ifndef AEAD_ERR_DOMAIN
 AEAD_ERR_DOMAIN = $01
+.else
+.assert AEAD_ERR_DOMAIN = $01, error, "AEAD_ERR_DOMAIN is already defined with a different value than this library returns ($01)"
 .endif
 .ifndef AEAD_ERR_AUTH
 AEAD_ERR_AUTH   = $ff
+.else
+.assert AEAD_ERR_AUTH = $ff, error, "AEAD_ERR_AUTH is already defined with a different value than this library returns ($ff)"
 .endif
 
 ; Published input bound (§5): the AAD length field is one byte.
@@ -185,6 +202,18 @@ AEAD_ERR_AUTH   = $ff
 ; -----------------------------------------------------------------------------
 ; ChaCha20 stream cipher — for consumers wanting the cipher without the AEAD
 ; -----------------------------------------------------------------------------
+;
+; INCOMPLETE INPUT SURFACE, deliberately. `chacha20_encrypt` also reads
+; `cc20_data_ptr` (2 B) and `cc20_remain` (1 B), which are ZERO-PAGE slots
+; and so are not declared here — per §6.2 this library ships no ZP-defining
+; archive member, and you supply those addresses by assembling your own
+; copy of the library's src/zp_config.s (see "WHAT IS NOT HERE" above).
+; `cc20_remain_hi` below is the DATA-resident high byte and IS importable.
+; The same applies to the Poly1305 subset, which uses
+; `chacha20poly1305_zp_ptr1`. If you are calling anything in these two
+; sections rather than the AEAD entry points, read src/zp_config.s and
+; docs/API.md alongside this header — the AEAD surface is the one that is
+; complete here.
 
 .import chacha20_init
 .import chacha20_block
