@@ -7,7 +7,23 @@ Prints the od65 segment sum, the page-aligned section count, the bound and
 the value to declare. With --check, exits 1 if the declared value is below
 the bound — the direction §5 calls dangerous.
 
-WHY A BOUND AND NOT THE SUM (issue #113). od65 reports each OBJECT's segment
+THE BASIS, STATED (issue #113). Declared value =
+    sum of each object's LIB_CHACHA20_POLY1305_* section sizes
+  + sum of (alignment - 1) over every page-aligned fragment
+  rounded up to the next 256.
+
+The charge is per ALIGNED FRAGMENT, not per segment, because this library's
+LIB_CHACHA20_POLY1305_CODE takes contributions from eight objects and three of
+them are aligned — so fill accumulates inside one segment rather than appearing
+as a single inter-segment gap. A sibling using a per-segment charge is correct
+for a tree where each aligned segment draws from exactly one object; that is a
+property no clause requires, and it is not true here.
+
+(alignment - 1) rather than a hardcoded 255: every aligned fragment here is
+256-aligned today, but a future `.align 512` would need 511 and a constant
+would under-charge silently — the exact defect class this tool exists to close.
+
+WHY A BOUND AND NOT THE SUM. od65 reports each OBJECT's segment
 sizes; it cannot report the padding ld65 inserts BETWEEN sections. This
 library forces that padding to exist, because LIB_CHACHA20_POLY1305_CODE must
 be declared `align = $100` for the constant-time invariant on its
@@ -35,6 +51,7 @@ import sys
 def measure(objdir):
     total = 0
     aligned = 0
+    charge = 0          # sum of (alignment - 1) over aligned fragments
     seen = 0
     for obj in sorted(os.listdir(objdir)):
         if not obj.endswith(".o"):
@@ -58,8 +75,10 @@ def measure(objdir):
                 if name.startswith("LIB_CHACHA20_POLY1305") and size > 0:
                     total += size
                     seen += 1
-                    if int(m.group(1)) > 1:
+                    a = int(m.group(1))
+                    if a > 1:
                         aligned += 1
+                        charge += a - 1     # worst-case pad before this fragment
                 name = size = None
     if seen == 0:
         sys.exit(f"FATAL: no LIB_CHACHA20_POLY1305_* sections in {objdir} — "
@@ -70,19 +89,20 @@ def measure(objdir):
                  "This library's CT invariant requires aligned sections, so this "
                  "is a broken parser rather than a real measurement (see the "
                  "PARSER NOTE in this file).")
-    return total, aligned, seen
+    return total, aligned, charge, seen
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     objdir = sys.argv[1]
-    total, aligned, seen = measure(objdir)
-    bound = total + 255 * aligned
+    total, aligned, charge, seen = measure(objdir)
+    bound = total + charge
     declare = (bound + 255) // 256 * 256
     print(f"  sections            : {seen} ({aligned} page-aligned)")
     print(f"  od65 segment sum    : {total}")
-    print(f"  bound (+255 each)   : {bound}")
+    print(f"  worst-case fill     : {charge} (sum of alignment-1 per aligned fragment)")
+    print(f"  bound               : {bound}")
     print(f"  declare (round 256) : {declare}")
     if "--check" in sys.argv:
         declared = int(sys.argv[sys.argv.index("--check") + 1])
