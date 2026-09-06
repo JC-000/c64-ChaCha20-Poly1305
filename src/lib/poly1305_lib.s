@@ -753,12 +753,23 @@ poly_ripple:
 ; Y here is derived from h*r (secret), so a cross-dependent timing
 ; would be a CT violation. Aligning the base low byte to $00 makes the
 ; access strictly constant-time.
+;
+; The `.align 256` above is not self-enforcing: it is honoured only if
+; the consumer's cfg declares LIB_CHACHA20_POLY1305_CODE with
+; `align = $100`, and ld65 merely WARNS when it does not — it links the
+; table misaligned and exits 0. The deferred assert below is what turns
+; that into a link error, on the same footing as the two nibswap LUTs in
+; data_lib.s (issue #100). See the note at the head of that segment in
+; data_lib.s for why the action is `lderror` and why the assert tests
+; the resolved address rather than the directive.
 ; =============================================================================
         .align 256
 poly_reduce_shl6_tab:
         .repeat 256, V
             .byte (V & 3) << 6
         .endrepeat
+
+.assert (poly_reduce_shl6_tab & $00FF) = 0, lderror, "poly_reduce_shl6_tab must be page-aligned (CT invariant): Y derives from poly_product - consumer cfg must declare LIB_CHACHA20_POLY1305_CODE with align = $100, ld65 only WARNS otherwise"
 
 poly1305_multiply:
         ; Zero the product buffer (33 bytes) — unrolled store chain.
