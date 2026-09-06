@@ -605,7 +605,18 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.10.0** (tagged 2026-09-06;
+The current release is **v0.11.0** (tagged 2026-09-06;
+`src/lib_version.s` declares 0.11.0, `LIB_ABI_VERSION` **4**): a
+conformance and correctness release. It makes the archive members
+conformant to contract §6.1 member isolation, and corrects five published
+footprint equates that under-reported what a consumer pays by 768 B — the
+direction §5 calls dangerous. **No code changed**: all four profile PRGs
+are byte-identical to v0.10.0. **If you size a region from
+`LIB_CHACHA20_POLY1305_RESIDENT_BYTES`, it rises 768 B**; a fit check that
+now fails was already failing invisibly. See
+[`docs/RELEASE_NOTES_v0.11.0.md`](docs/RELEASE_NOTES_v0.11.0.md).
+
+The prior release, **v0.10.0** (2026-09-06;
 `src/lib_version.s` declares 0.10.0, `LIB_ABI_VERSION` **4**): a security
 and hardening release, and the first since v0.6.0 whose PRGs are not
 byte-identical to the previous tag. It fixes an AEAD pointer wrap that
