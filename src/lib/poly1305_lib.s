@@ -313,6 +313,14 @@ shoup_j_loop:
         ; max hi = $FE, so `adc #0` for hi can never carry out).
         iny                     ; Y = 1
         clc
+; The two `r_tab_*-1, y` loads below have a base low byte of $FF, so they
+; cross a page on EVERY iteration — deliberately, and harmlessly. Y here is
+; the public loop counter k = 1..255, not a secret: the page cross is
+; unconditional rather than data-dependent, so it costs a fixed extra cycle
+; per iteration and leaks nothing. This is the one indexed access in the
+; library whose base is not page-aligned, and it is safe for a different
+; reason than the aligned tables are — recorded so it reads as a decision
+; rather than an oversight the CT audit missed.
 shoup_k_loop:
         SMC shoup_ld_lo,  { lda r_tab_lo-1, y } ; SMC high byte — prev_lo = T_j[k-1]
         SMC shoup_rj_val, { adc #$00 }          ; SMC immediate = r[j]
@@ -753,12 +761,23 @@ poly_ripple:
 ; Y here is derived from h*r (secret), so a cross-dependent timing
 ; would be a CT violation. Aligning the base low byte to $00 makes the
 ; access strictly constant-time.
+;
+; The `.align 256` above is not self-enforcing: it is honoured only if
+; the consumer's cfg declares LIB_CHACHA20_POLY1305_CODE with
+; `align = $100`, and ld65 merely WARNS when it does not — it links the
+; table misaligned and exits 0. The deferred assert below is what turns
+; that into a link error, on the same footing as the two nibswap LUTs in
+; data_lib.s (issue #100). See the note at the head of that segment in
+; data_lib.s for why the action is `lderror` and why the assert tests
+; the resolved address rather than the directive.
 ; =============================================================================
         .align 256
 poly_reduce_shl6_tab:
         .repeat 256, V
             .byte (V & 3) << 6
         .endrepeat
+
+.assert (poly_reduce_shl6_tab & $00FF) = 0, lderror, "poly_reduce_shl6_tab must be page-aligned (CT invariant): Y derives from poly_product - consumer cfg must declare LIB_CHACHA20_POLY1305_CODE with align = $100, ld65 only WARNS otherwise"
 
 poly1305_multiply:
         ; Zero the product buffer (33 bytes) — unrolled store chain.
