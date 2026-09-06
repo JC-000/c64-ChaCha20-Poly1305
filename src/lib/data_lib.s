@@ -127,10 +127,18 @@ sqtab_ready:
 ;
 ; The asserts live next to the tables, not in a central asserts file,
 ; and they test the address rather than the `.align` directive — so they
-; catch every route to the failure: a consumer cfg dropping
-; `align = $100`, the `.align 256` being deleted, a field inserted
-; between the tables, or a segment reshuffle. They cannot drift away
-; from the thing they guard.
+; catch every route that actually ENDS IN A MISALIGNED TABLE, whatever
+; it was: a consumer cfg dropping `align = $100`, a `.align 256` being
+; deleted, a field inserted between the tables, or a segment reshuffle.
+; They cannot drift away from the thing they guard.
+;
+; Note the converse, which is the point of testing the address: deleting
+; a `.align 256` on its own does not necessarily fire, because the table
+; can still land on a page boundary by accident of whatever precedes it
+; in the segment. That is correct behaviour, not a gap — there is no
+; violation to report when the resolved address is aligned. It does mean
+; a reviewer probing these asserts has to perturb the segment as well as
+; delete the directive.
 ;
 ; The load-bearing choice is the SEVERITY, not the `ld` prefix.
 ; Measured on ca65/ld65 V2.18, contradicting the rationale this comment
@@ -150,9 +158,9 @@ sqtab_ready:
 ; `error` would start firing in the assembler; `lderror` would not
 ; change behaviour.
 ;
-; Same pattern as c64-x25519 src/data.s:175-177 (`mul_dma_lo` /
-; `mul_dma_hi` / `mul_dma_carry`), which uses `lderror` for the same
-; invariant.
+; Same pattern as c64-x25519 src/data.s:168-177 — rationale at :168-174,
+; the three `mul_dma_lo` / `mul_dma_hi` / `mul_dma_carry` asserts at
+; :175-177 — which uses `lderror` for the same invariant.
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; =============================================================================
