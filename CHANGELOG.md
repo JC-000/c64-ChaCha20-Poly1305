@@ -6,6 +6,57 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **The §8.1 sqtab ownership claim was unsatisfiable: the library never
+  exported `mul_tables_init`.** SPEC §8.1 names that as the canonical
+  init entry and tells a deferring build to import it; `sqtab_init` is
+  the optional back-compat spelling. This library exported only the
+  optional one while `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES` claimed
+  the `$0001` ownership bit in every Profile B build. A sibling that read
+  the bit, deferred its own sqtab and imported the canonical name got
+  `ld65: Error: Unresolved external 'mul_tables_init'`.
+
+  The asymmetry is the tell: this library's own `lib-app-owned` variant
+  **imports** a name its `lib` variant did not **export**. Both other
+  §8.1 owners — `c64-x25519` and `c64-mlkem` — already export it.
+
+  Same defect issue #47 fixed for §8.3 one clause over, left behind when
+  #47 landed; #47's own comment sits four lines above where the §8.1 bug
+  was, describing it. §8.3 got a checker then and §8.1 did not, which is
+  why this survived.
+
+  Owner builds now export `mul_tables_init` alongside `sqtab_init`, both
+  on the one body. Additive: **MINOR, and the ABI counter stays 4** —
+  no conforming consumer can be broken by it. (`c64-x25519` exports the
+  same name, but the two libraries already shared 13 exported names, so
+  composing two owners without a deferral switch has never linked.
+  Verified by linking rather than argued: CCP-first links byte-identically
+  before and after; x25519-first fails on the same pre-existing `mul_8x8`
+  collision either way. Against `c64-mlkem` a genuinely new duplicate
+  appears in one link order — which is the §8.0 double-ownership assert
+  doing its job, on a composition that was only ever "working" because
+  our claim was unsatisfiable.) Closes #105.
+
+### Added
+- **`make lib-verify-shared` grows §8.1 legs**, so this cannot silently
+  return: the owner build must export both names, the `SHARED_SQTAB_INIT`
+  build must export neither and import the canonical one. Each leg is
+  demonstrated capable of failing on the failure it guards. A fourth
+  mutation — adding `.export` beside the `.import` — never reaches the
+  check, because ca65 rejects it first with `Cannot import exported
+  symbol`; recorded because it is the mutation a reviewer reaches for.
+- **A link-time `.assert` that `mul_tables_init = sqtab_init`.** Found by
+  adversarial review as the mutation that survived the legs above: an
+  owner can export the canonical name as a separate `rts` stub, leave the
+  real body on `sqtab_init`, and pass every grep leg, because
+  `od65 --dump-exports` emits names without addresses. A deferring sibling
+  then links cleanly against a routine that builds no table and reads an
+  uninitialised one. The assert fires at **link**, not at `make lib` —
+  the operands are relocatable, so ca65 defers to ld65 whatever the action
+  keyword, the same property the #101 alignment asserts have. A clean
+  `make lib` is not evidence for this invariant.
+
+
 ### Security
 - **`aead_encrypt` / `aead_decrypt` now reject out-of-domain calls
   instead of wrapping the address space.** The data walkers advanced
@@ -421,8 +472,8 @@ since, in order:
   | 3 | `verify_zp_usage.py:153-179` unintended-alias sweep | §2 ZP registry, §6.6 | same | **yes, since `b9bffe7`** — see note below |
   | 4 | `verify_zp_usage.py:76` od65-dump sentinel | guards 1–3 against a vacuous pass | tool docstring `:67-73` | no — structurally capable, never exercised |
   | 5 | `verify_knob_staleness.py`, four legs | §6.3 select-or-fail-loudly | `README.md:378`, "`make verify-knob-staleness`" § | **yes** — fails on the pre-fix `Makefile` with the three expected failures |
-  | 6 | `Makefile:633-644` §8.3 owner/deferral surface legs | §8.3 migration shape | `README.md:382`, `:422` | **yes** — 11 named errors against the pre-#47 source |
-  | 7 | `Makefile:622-632` od65-dump sentinels | guards 6 against a vacuous pass | same | **yes** — dump emptied, sentinel fires |
+  | 6 | `Makefile:655-666` §8.3 owner/deferral surface legs | §8.3 migration shape | `README.md:382`, `:422` | **yes** — 11 named errors against the pre-#47 source |
+  | 7 | `Makefile:642-654` od65-dump sentinels | guards 6 and 17 against a vacuous pass | same | **yes** — dump emptied, sentinel fires; re-verified for the two new §8.1 dumps |
   | 8 | `src/include/sqtab_base.inc:32` page-alignment `.assert` | §8.1 placement | `README.md:382` | no — structurally capable (a non-page-aligned `-D` trips it), never exercised; Profile B only |
   | 9 | `src/lib/poly1305_lib.s:143` page-delta `.assert` | §8.1 placement | `README.md:382` | **no — cannot fail** |
   | 10 | `src/main.s:48` `__MAIN_LAST__` image guard, **Profile B** | §6.7 reservations | `README.md:381` | **yes** — seeded link failure with a page-exact boundary sweep, `docs/RELEASE_NOTES_v0.9.0.md:73-77` |
@@ -432,9 +483,14 @@ since, in order:
   | 14 | `LIB_CHACHA20_POLY1305_RESIDENT_BYTES`, five literals | §6.6 footprint | `README.md:347`, `:380` | **no check exists** |
   | 15 | `test_consumer/aead_smoke.s` + `examples/smoke_test/` tag assertions | §6.1/§6.4 consumer-owned build | `README.md:36`, `:513` | **yes, since `b9bffe7`** — see note below |
   | 16 | `tools/hazmat_fuzz.py` `aead_tag` poison-then-act | `docs/API.md`'s documented output; §15.1 cites PR #93 by name as the fleet's poison-then-act reference | `CHANGELOG.md:139` (this Unreleased section) | **yes** — 26 failures on the pre-fix tree (`:173`), green after. Added in `dd9662a`; it does not exist at `v0.9.0` |
+  | 17 | `Makefile:667-686` §8.1 owner/deferral surface legs (issue #105) | §8.1 provider surface — the owner must export the canonical `mul_tables_init`, the deferring build must export neither name and import it | `README.md`, "Contract conformance" §8.1 row | **yes** — three mutations, each firing on the failure it guards: owner drops the export (the #105 defect itself), deferring build ships an exported stub, deferring build stops importing. A fourth mutation, adding `.export` beside the `.import`, never reaches the check: ca65 rejects it first with `Cannot import exported symbol` |
+  | 18 | `src/lib/poly1305_lib.s` `mul_tables_init = sqtab_init` `.assert` | §8.1 — the canonical name and its back-compat alias are one body, not two | same | **yes** — an owner exporting `mul_tables_init` as a separate `rts` stub with the real body on `sqtab_init` passes all of row 17 (od65 dumps carry names, not addresses) and fails this. Fires at **link**, not at `make lib`: the operands are relocatable so ca65 defers to ld65, verified against both `make profile-b` and a consumer link |
 
-  Nine demonstrated, three capable but never exercised (4, 8, 12), and
-  **four outstanding** (9, 11, 13, 14).
+  Eleven demonstrated, three capable but never exercised (4, 8, 12), and
+  **four outstanding** (9, 11, 13, 14). Rows 17 and 18 were added with
+  issue #105; 18 exists because 17 could not close its own gap — an
+  `od65` export dump carries names, not addresses, so a decoy stub under
+  the canonical name satisfies every grep leg.
 
   Rows 3 and 15 are the ones §15 was written for, and both were green
   while unable to report the thing they name. The alias sweep keyed on
