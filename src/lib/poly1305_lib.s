@@ -95,6 +95,25 @@
 .ifndef SHARED_SQTAB_INIT
 .export mul_tables_init         ; SPEC §8.1 canonical entry point
 .export sqtab_init              ; historical name for the same address
+; The two names MUST resolve to the same address, and this is the only thing
+; that checks it. `make lib-verify-shared` cannot: `od65 --dump-exports`
+; emits names without addresses, so every grep-based leg there is satisfied
+; by mere presence. An owner build that exported `mul_tables_init` as a
+; separate stub while leaving the real body on `sqtab_init` passes that
+; target, and hands a deferring sibling a routine that builds no table —
+; silently, because there is no unresolved external to notice.
+;
+; It fires at LINK, not at `make lib`. The operands are relocatable, so ca65
+; defers the assert to ld65 regardless of the action keyword (the same
+; property documented at the head of data_lib.s's segment). `make lib` only
+; assembles and archives, so it cannot catch this; the library's own
+; `make profile-b` does, and so does every consumer link against the
+; archive — both verified against the stub mutation. Do not read a clean
+; `make lib` as evidence for this invariant.
+;
+; Found by adversarial review of #105, as the mutation that survived the
+; checks added with it.
+.assert mul_tables_init = sqtab_init, lderror, "mul_tables_init and sqtab_init must be the same address: the canonical §8.1 name and its historical alias are one body, not two"
 .else
 .import mul_tables_init
 sqtab_init = mul_tables_init
