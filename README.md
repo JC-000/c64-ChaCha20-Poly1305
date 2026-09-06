@@ -450,9 +450,10 @@ and a slot contained inside a larger one — both of which *shrink* the
 measured union rather than tripping the equate check, and neither of
 which the earlier start-address keying could report. Current result: 24 exported names, 88 bytes
 occupied, equate 88. Not named `lib-*`: v0.17.1 §6.1 reserved
-that namespace for archive-producing targets. That clause was retired at
-contract v1.0.0, so the name is now a local convention rather than an
-obligation — kept because it still tells a reader which targets produce
+that namespace for archive-producing targets. That sentence was deleted
+from §6.1 at contract v1.0.0 — deleted from a surviving section, so not
+listed in RETIRED.md — and the name is now a local convention rather than
+an obligation, kept because it still tells a reader which targets produce
 artifacts.
 
 **`make verify-knob-staleness`** pins the §6.3 guard (contract SPEC
@@ -477,13 +478,17 @@ silently producing a mismatched archive. See
 
 Two standing obligations, recorded so they are not lost between releases:
 
-- **~~§6.1 reserved namespace~~ — obligation withdrawn at contract
-  v1.0.0.** v0.17.1 §6.1 reserved the `lib-*` make-target namespace for
-  archive-producing targets and grandfathered existing `lib-verify`-style
-  names "until each repo's next MAJOR". That clause was **deleted** in the
-  v1.0.0 cut; v1.1.1 §6.1 contains no make-target namespace rule at all
-  (v1.1.1 restored three other §6.1 targets to un-required status without
-  restoring this reservation).
+- **~~§6.1 reserved namespace~~ — obligation withdrawn; the sentence was
+  DELETED at contract v1.0.0, not retired.** v0.17.1 §6.1 reserved the
+  `lib-*` make-target namespace for archive-producing targets and
+  grandfathered existing `lib-verify`-style names "until each repo's next
+  MAJOR". That sentence was **deleted** in the v1.0.0 cut while §6.1 as a
+  whole survived — so it is *not* in
+  [RETIRED.md](https://github.com/JC-000/c64-lib-contract/blob/main/RETIRED.md),
+  which lists only wholly retired sections; do not go looking for it
+  there. v1.1.1 §6.1 contains no make-target namespace rule at all, and
+  restored three other §6.1 targets to un-required status without
+  restoring this reservation.
   `make lib-verify-shared` therefore keeps its name, and this repo is no
   longer committed to renaming it at the next MAJOR. Nothing to do —
   recorded because the commitment was published and someone would

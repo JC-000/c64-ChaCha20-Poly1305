@@ -123,10 +123,9 @@ which withdrew two things that removal had carried in:
   added `c64-nist-curves` — three of five adopters, including the
   largest, not two.
 
-  **Untagged as of this release.** v1.1.1 is merged at
-  `d0c64ab` but carries no `v1.1.1` tag yet, so this record cites the
-  commit rather than a tag. Re-cite at the tag when it exists — the same
-  handling this repo gave contract v0.11.1.
+  **Citable at a tag**: `v1.1.1`. It was untagged when this record was
+  first written against `d0c64ab`; the cite now points at the tag, the
+  same handling this repo gave contract v0.11.1.
 
 ### Added
 - **`LIB_CHACHA20_POLY1305_AAD_LEN_MAX` (= 255)** — §5 asks a library to
@@ -157,7 +156,10 @@ which withdrew two things that removal had carried in:
 ### Changed
 - **`src/precalc_table.inc` re-synced** to the canonical
   `c64-lib-contract/precalc_table.inc`. Comment-only; the rebuilt
-  `lib_manifest.o` export and segment dumps are byte-identical.
+  `lib_manifest.o`'s `--dump-exports`, `--dump-imports` and
+  `--dump-segments` are identical. Note that is the sound comparand: the
+  object file's own bytes are not, and never are here, because `-g` line
+  info shifts and `OPT_DATETIME` moves on every assemble.
 - **`tools/verify_knob_staleness.py` copies `cfg/` into its sandbox.** The
   guard builds in a throwaway copy of `Makefile` + `src/`; adding the
   example cfg gave `make lib` a prerequisite outside that list, so the

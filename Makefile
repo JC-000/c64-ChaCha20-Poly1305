@@ -635,8 +635,10 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 # R2 audit: the §5 ZP_USAGE_BYTES equate is hand-maintained, so nothing
 # tied it to the actual .exportzp surface until this check. Deliberately
 # NOT named lib-*: v0.17.1 §6.1 reserved that namespace for targets that
-# produce archives. That clause was retired at contract v1.0.0, so this is
-# now a local naming convention rather than an obligation — kept because
+# produce archives. That sentence was DELETED from §6.1 at contract v1.0.0
+# — deleted from a surviving section, so it is not in RETIRED.md, which
+# lists only wholly retired sections. This is now a local naming
+# convention rather than an obligation — kept because
 # it still tells a reader which targets emit artifacts and which only
 # check them.
 verify-zp-usage: lib
