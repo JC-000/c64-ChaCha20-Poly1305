@@ -888,6 +888,7 @@ verify-resident-bytes:
 	    python3 tools/measure_resident_bytes.py $$d --check; \
 	  done; \
 	done; \
+	$(MAKE) --no-print-directory lib >/dev/null; \
 	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles"
 
 

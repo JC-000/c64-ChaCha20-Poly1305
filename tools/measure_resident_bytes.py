@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """Measure the §5 RESIDENT_BYTES bound for one variant's object directory.
 
-    python3 tools/measure_resident_bytes.py build/lib/objs [--check N]
+    python3 tools/measure_resident_bytes.py build/lib/objs [--check]
 
-Prints the od65 segment sum, the page-aligned section count, the bound and
-the value to declare. With --check, exits 1 if the declared value is below
-the bound — the direction §5 calls dangerous.
+Prints the od65 segment sum, the alignment fill terms, the bound and the
+value to declare. With --check it additionally reads
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES out of that directory's lib_manifest.o
+and exits 1 if the declared value is below the bound — the direction §5
+calls dangerous.
+
+--check takes NO argument. It used to take the expected value, which meant
+the check supplied its own answer: a maintainer lowering the equate passed.
+A trailing number is now rejected rather than ignored, so a stale
+`--check 17920` in a script fails loudly instead of silently reading as the
+no-argument form.
 
 THE BASIS, STATED (issue #113). Declared value =
     sum of each object's LIB_CHACHA20_POLY1305_* section sizes
@@ -169,6 +177,13 @@ def main():
     print(f"  bound               : {bound}")
     print(f"  declare (round 256) : {declare}")
     if "--check" in sys.argv:
+        i = sys.argv.index("--check")
+        if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
+            sys.exit(f"FATAL: --check takes no argument, got '{sys.argv[i + 1]}'. "
+                     "It used to take the expected value; that let the check "
+                     "supply its own answer, so lowering the equate passed. The "
+                     "declared value is now read from lib_manifest.o. Drop the "
+                     "number — a stale one must fail loudly, not be ignored.")
         declared = declared_from_object(objdir)
         print(f"  declared (from .o)  : {declared}")
         if declared < bound:
