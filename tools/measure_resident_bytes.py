@@ -19,6 +19,13 @@ as a single inter-segment gap. A sibling using a per-segment charge is correct
 for a tree where each aligned segment draws from exactly one object; that is a
 property no clause requires, and it is not true here.
 
+SCOPE: the bound is over CONFORMING consumer cfgs. It covers fill forced by
+the alignments this library DECLARES. A consumer who declares more than §4
+requires — say `LIB_CHACHA20_POLY1305_CODE: align = $200` in their own cfg —
+forces fill beyond this charge, and is choosing a cost that is not this
+library's footprint, any more than the gaps they leave between segments are.
+A bound that tracked arbitrary consumer cfg choices would not be bounded.
+
 (alignment - 1) rather than a hardcoded 255: every aligned fragment here is
 256-aligned today, but a future `.align 512` would need 511 and a constant
 would under-charge silently — the exact defect class this tool exists to close.

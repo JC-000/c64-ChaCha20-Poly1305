@@ -191,6 +191,24 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   that reaches 419 B — the old convention silently assumed ONE aligned
 ;   section and there are three.
 ;
+;   THIS IS AN UPPER BOUND, NOT A MEASUREMENT, AND IT OVER-RESERVES ON
+;   PURPOSE. The charge is the worst case each aligned fragment can cost;
+;   any given link pays less — measured fill has run 246-419 B against a
+;   765 B charge, so roughly 350-500 B of the declared value is slack a
+;   real link will not use. §5 requires the safe direction, so that is
+;   conformant — but it matters to a consumer sizing a tight region: if
+;   your fit check fails against this equate by a few hundred bytes, a
+;   real link may still fit, so measure your own before re-planning a
+;   memory map. What you must NOT do is lower this literal on the strength
+;   of that measurement: it is a bound over EVERY consumer, not a
+;   description of yours.
+;
+;   The bound is over CONFORMING cfgs. It covers fill forced by the
+;   alignments this library declares (§4). A consumer declaring more than
+;   is required — `align = $200`, say — forces fill beyond this charge and
+;   is choosing a cost that is not this library's footprint, any more than
+;   the gaps they leave between segments are.
+;
 ;   Do NOT re-derive these literals from a measured consumer link either.
 ;   There is no single real link: a consumer that pulls part of the archive
 ;   measures BELOW the sum (test_consumer's aead-only link came in 453 B
