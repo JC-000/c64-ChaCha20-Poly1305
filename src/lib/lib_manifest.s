@@ -314,20 +314,27 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
   .else
     ; BOTH switches, not either (issue #126). 17664 covers a bound of 17564,
-    ; which is what the two deferrals together produce. With SHARED_CT_MUL_8X8
+    ; which is what the two deferrals TOGETHER produce. With SHARED_CT_MUL_8X8
     ; ALONE the bound is 17724 and this literal under-declared by 60 B — §5's
-    ; unsafe direction. The branch keyed on the define while the footprint also
-    ; depends on the TARGET, because the target selects the member set: 17664
-    ; was measured on the app-owned member set (12 sections), and target `lib`
-    ; with only this one switch has 9 and lands above it. §8.3 permits deferring
-    ; ct_mul_8x8 independently of sqtab_init, so that combination is one the
-    ; contract invites a consumer to build.
+    ; unsafe direction.
     ;
-    ;   target lib, none            bound 17861  -> .else 17920   ok
-    ;   target lib, SQTAB only      bound 17701  -> .else 17920   ok
-    ;   target lib, CT_MUL only     bound 17724  -> .else 17920   ok  (was 17664, FAIL)
-    ;   target lib, both            bound 17564  -> 17664         ok
-    ;   lib-app-owned (both)        bound 17564  -> 17664         ok
+    ; The cause is entirely define-side. `lib-app-owned` passes BOTH switches
+    ; (`LIB_APP_OWNED_DEFINE`, Makefile), so 17664 was measured with both
+    ; deferrals in effect while the branch keyed on only one of them. The TARGET
+    ; is irrelevant to this figure: `make lib CONTRACT_DEFINES="-D
+    ; SHARED_SQTAB_INIT=1 -D SHARED_CT_MUL_8X8=1"` and `make lib-app-owned`
+    ; measure identically (8 sections, sum 16544, bound 17564). An earlier
+    ; version of this comment claimed the target selects the member set; that
+    ; was false and is corrected here.
+    ;
+    ; §8.3 permits deferring ct_mul_8x8 independently of sqtab_init, so the
+    ; single-switch case is one the contract invites a consumer to build.
+    ;
+    ; Measured on target lib, Profile B — the switches are exactly additive:
+    ;   no switches       bound 17861   -> .else 17920   ok
+    ;   SQTAB only        bound 17701   -> .else 17920   ok   (-160)
+    ;   CT_MUL only       bound 17724   -> .else 17920   ok   (-137, was 17664 FAIL)
+    ;   both              bound 17564   -> 17664         ok   (-297)
     .if .defined(SHARED_CT_MUL_8X8) .and .defined(SHARED_SQTAB_INIT)
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
       ; consumer. Measured 16 544 B (was 16 593 before the §14.1 domain

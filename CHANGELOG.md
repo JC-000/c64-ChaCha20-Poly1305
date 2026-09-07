@@ -10,11 +10,13 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`RESIDENT_BYTES` under-declared by 60 B for `make lib` with
   `SHARED_CT_MUL_8X8` alone (issue #126).** §5's **unsafe** direction — the
   named hazard, not the harmless one — live since the literal was introduced.
-  `lib_manifest.s` branched on the *define*, but the footprint also depends on
-  the *target*, because the target selects the member set: 17664 was measured
-  on the app-owned member set (12 sections) and target `lib` with only that one
-  switch has 9, landing at bound 17724. The branch now requires **both**
-  deferral switches, which is the configuration 17664 actually covers.
+  The cause is entirely define-side: `lib-app-owned` passes **both** deferral
+  switches, so 17664 was measured with both in effect while the branch keyed on
+  only one. The branch now requires both, which is the configuration that
+  figure actually covers. The target is irrelevant — `make lib` with both
+  switches and `make lib-app-owned` measure identically (8 sections, sum 16544,
+  bound 17564). Switches are exactly additive on target `lib`, Profile B: none
+  17861, SQTAB only 17701 (−160), CT_MUL only 17724 (−137), both 17564 (−297).
 
   | target `lib` | bound | declared before | after |
   |---|---|---|---|
@@ -34,8 +36,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Found while supplying measurements to calibrate a draft §5 slack clause on
   the contract side; enumerating the branch boundaries to answer their question
   turned it up. Four gates and three adversarial review rounds had not, because
-  `verify-resident-bytes` only ever paired the `SHARED_*` switches with
-  `lib-app-owned` — the member set the literal was correct for.
+  the gap was **single-switch coverage**: every leg that set a `SHARED_*`
+  switch set both of them, so the one-switch case existed in no configuration
+  anything built.
 - **Macro-local label names no longer leak into a consumer's label file
   (issue #117).** `AEAD_DOMAIN_GUARD` used `.local ok` / `.local reject`.
   ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
@@ -87,9 +90,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - **`verify-resident-bytes` builds each §8 deferral switch on its own**
   (issue #126) — two more legs, ten in total. The single-switch combinations
-  were the gap that let the under-declaration above live: the gate paired
-  `SHARED_*` only with `lib-app-owned`. Driven red by reverting the branch fix:
-  nine legs green, `FAIL: declared 17664 < bound 17724`, exit 2.
+  were the gap that let the under-declaration above live: every existing leg
+  that set a `SHARED_*` switch set both. Driven red by reverting the branch
+  fix: **8** legs green, `FAIL: declared 17664 < bound 17724`, exit 2 — the
+  tenth never runs, because the recipe is under `set -e` and aborts at the
+  failure.
 - **Both footprint and label gates now build the configuration the only real
   consumer builds** (issue #122). `c64-wireguard` runs `make lib
   CONTRACT_DEFINES=...` with four defines
