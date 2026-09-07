@@ -18,6 +18,25 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bound 17564). Switches are exactly additive on target `lib`, Profile B: none
   17861, SQTAB only 17701 (−160), CT_MUL only 17724 (−137), both 17564 (−297).
 
+  **Two honest caveats.** The two-arm form is kept deliberately: collapsing to a
+  single 17920 for the whole non-aead-only Profile B arm would be more robust
+  but would raise the figure `c64-wireguard` reads from 17664 to 17920, trading
+  a real consumer's tightness for margin it does not need. And the correctness
+  of both arms rests on every knob being subtractive relative to the no-switch
+  build — true today across a 288-configuration sweep, not structurally
+  guaranteed, and the same caveat the multiply and word32 axes carry.
+
+  **The defect's framing is measurand-dependent, and the fix is not.** Under
+  this repo's basis as it ships — od65 sum plus fragment fill plus a 255 B
+  per-segment start charge — 17664 < 17724 and the literal is wrong. Contract
+  PR c64-lib-contract#200, unmerged, would exclude the start charge as the
+  consumer's; on that basis the bound is 17469 and the original figure clears
+  it. So this is a real defect under the only basis that is currently tagged,
+  and its description as a *live* §5 unsafe-direction failure would not survive
+  that clause. 17920 is safe under both bases either way. Recorded because the
+  contract PR cited this issue as evidence and has since withdrawn the
+  citation on exactly this ground.
+
   | target `lib` | bound | declared before | after |
   |---|---|---|---|
   | no switches | 17861 | 17920 | 17920 |
@@ -88,6 +107,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement reported three times, not three independent ones.
 
 ### Added
+- **`verify-resident-bytes` pins the `CHACHA20_USE_WORD32` axis** — the second
+  unmodelled footprint axis, found by #126's review and folded in rather than
+  deferred, since this branch's whole argument is that single-axis coverage was
+  missing. It is a documented consumer knob (`docs/API.md`,
+  `docs/INTEGRATION.md`) appearing **nowhere** in `lib_manifest.s`, and
+  `chacha20_lib.s` *swaps* macro expansions between an inline and a
+  pointer-mode form — a substitution, not a subtraction, so nothing structural
+  holds the sign. Measured uniformly **−488 B** across every target and both
+  profiles, orthogonal to the other knobs; safe-direction today and no consumer
+  passes it, which makes it shipped-surface coverage. Eleven legs total. Driven
+  red by growing the word32 path 800 B past the default: ten legs green,
+  `FAIL: declared 17920 < bound 18173`, exit 2.
 - **`verify-resident-bytes` builds each §8 deferral switch on its own**
   (issue #126) — two more legs, ten in total. The single-switch combinations
   were the gap that let the under-declaration above live: every existing leg
