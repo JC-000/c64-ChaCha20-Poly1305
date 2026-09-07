@@ -864,11 +864,19 @@ VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
 # -j8 while serial and `-j8 profile-a profile-b lib` both pass. Running them
 # through a loop makes `make -j8 verify` safe without imposing .NOTPARALLEL on
 # ordinary builds, which are parallel-safe and should stay that way.
+# KNOWN AND NOT DEFENDED AGAINST: `make -i verify` prints the green banner over
+# a broken gate. Do not try to fix it in this recipe — I did, and it does not
+# work. `-i` propagates through MAKEFLAGS to the sub-makes, so the GATE ITSELF
+# exits 0 (`make -i verify-resident-bytes` exits 0 where plain make exits 2);
+# `set -e` has nothing to catch and no recipe-level guard can see a failure that
+# was erased one level down. Operator-induced, and tools/build_release.sh does
+# not pass -i. The banner is in the same set -e shell as the loop anyway, which
+# is where it belongs, but that is tidiness and not a defence.
 verify:
 	@set -e; for t in $(VERIFY_TARGETS); do \
 	  $(MAKE) --no-print-directory $$t; \
-	done
-	@echo "verify: all $(words $(VERIFY_TARGETS)) gates green"
+	done; \
+	echo "verify: all $(words $(VERIFY_TARGETS)) gates green"
 
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
