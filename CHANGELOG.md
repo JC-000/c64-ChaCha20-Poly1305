@@ -56,6 +56,32 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement reported three times, not three independent ones.
 
 ### Added
+- **Both footprint and label gates now build the configuration the only real
+  consumer builds** (issue #122). `c64-wireguard` runs `make lib
+  CONTRACT_DEFINES=...` with four defines
+  (`tools/integration/build_chacha20poly1305.sh:57,72`); until now
+  `verify-resident-bytes` iterated 3 targets × 2 profiles passing the profile
+  define only, so target `lib` was never combined with the `SHARED_*`
+  switches, and `verify-label-hygiene` scanned a default `make lib` object.
+  One `CONSUMER_DEFINES` variable now feeds both, so they cannot drift apart.
+
+  **What this pins is narrower than first filed, and the issue was corrected
+  on that point.** The consumer's config declares 17664 against a bound near
+  9371, and that gap is *deliberate*: `lib_manifest.s:327-335` documents both
+  `SHARED_*` switches as purely subtractive `.ifndef` gates, so declaring the
+  un-deferred value is a safe superset and a large gap is the designed
+  outcome — the same comment warns that comparing the two "is the wrong
+  comparison and makes a safe case look dangerous". This leg is not hunting a
+  wrong number. It pins the **subtractive invariant** that number depends on,
+  and it passes on the day it lands.
+
+  **Demonstrated capable of failing, isolating the new leg from the old ones.**
+  Making a switch additive (`+9000 B` behind `.ifdef LIB_NO_BARE_EXPORTS`,
+  which among these legs only the consumer config defines) leaves all six
+  original legs green and fails only the seventh: `declared 17664 < bound
+  18371 — under-reports what a consumer can pay`, exit 2. A `.local` behind
+  the same guard leaves all seven existing label-hygiene checks green and
+  fails only the new sixth configuration, 4 synthesised names, exit 2.
 - `make verify-label-hygiene` (`tools/verify_label_hygiene.py`) — issue #117
   guard. Rejects any ca65-synthesised `LOCAL-MACRO_SYMBOL` name reaching a
   consumer, in the label output and in the built objects alike. The
