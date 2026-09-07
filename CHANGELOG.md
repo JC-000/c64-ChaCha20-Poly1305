@@ -6,30 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-- **`make verify` — one target running all six gates** (issue #119), and
-  `tools/build_release.sh` now runs *that* inside the extracted tarball
-  instead of a hand-copied list. Nothing previously invoked the gates as a
-  set: there is no CI, and the release script carried its own list which had
-  **already drifted** — `verify-knob-staleness` and `verify-label-hygiene`
-  were absent, so every tarball was checked with four of six. That is the
-  omission class `build_release.sh`'s own comment records happening once
-  before with `verify_member_isolation.py`. One list now, in the Makefile.
-  `tools/verify_label_hygiene.py` was also missing from the shipped-tools
-  manifest and is added.
+_Nothing yet._
 
-  `make verify` runs the gates through a loop rather than as prerequisites,
-  because as prerequisites `make -j` runs them concurrently and several build
-  into the same directories — `ar65: Error: Problem deleting temporary library
-  file`, reproducible at `-j8` while serial passes. Ordinary builds stay
-  parallel-safe.
-
-  **Proven end-to-end, both directions**, by tagging a throwaway clone:
-  a green tagged tree gives `tarball build + verify (…): OK` and a tarball;
-  a tagged tree carrying the #126 defect gives `MANIFEST ERROR`, quotes
-  `FAIL: declared 17664 < bound 17724`, and produces no tarball. Note this
-  verifies the **tagged** tree — `dist` runs `git archive "$TAG"` and never
-  looks at the working tree.
+## [0.12.0] - 2026-09-07
 
 ### Fixed
 - **`verify-label-hygiene` examined almost nothing when run after another
@@ -152,6 +131,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement reported three times, not three independent ones.
 
 ### Added
+- **`make verify` — one target running all six gates** (issue #119), and
+  `tools/build_release.sh` now runs *that* inside the extracted tarball
+  instead of a hand-copied list. Nothing previously invoked the gates as a
+  set: there is no CI, and the release script carried its own list which had
+  **already drifted** — `verify-knob-staleness` and `verify-label-hygiene`
+  were absent, so every tarball was checked with four of six. That is the
+  omission class `build_release.sh`'s own comment records happening once
+  before with `verify_member_isolation.py`. One list now, in the Makefile.
+  `tools/verify_label_hygiene.py` was also missing from the shipped-tools
+  manifest and is added.
+
+  `make verify` runs the gates through a loop rather than as prerequisites,
+  because as prerequisites `make -j` runs them concurrently and several build
+  into the same directories — `ar65: Error: Problem deleting temporary library
+  file`, reproducible at `-j8` while serial passes. Ordinary builds stay
+  parallel-safe.
+
+  **Proven end-to-end, both directions**, by tagging a throwaway clone:
+  a green tagged tree gives `tarball build + verify (…): OK` and a tarball;
+  a tagged tree carrying the #126 defect gives `MANIFEST ERROR`, quotes
+  `FAIL: declared 17664 < bound 17724`, and produces no tarball. Note this
+  verifies the **tagged** tree — `dist` runs `git archive "$TAG"` and never
+  looks at the working tree.
 - **`verify-resident-bytes` pins the `CHACHA20_USE_WORD32` axis** — the second
   unmodelled footprint axis, found by #126's review and folded in rather than
   deferred, since this branch's whole argument is that single-axis coverage was
@@ -274,7 +276,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the build*, the opposite role — generality makes it catch more and
   swallows nothing, because nothing is removed.
 
-  It examines **all five shipped configurations**, not just the two that
+  It examines **six configurations** — five shipped plus the consumer's own —
+  not just the two that
   produce a label file. Consumers link the archives, and the three archive
   variants are assembled with different defines, so a `.local` behind an
   `.ifdef` on one of those reaches a consumer while both profile PRGs stay

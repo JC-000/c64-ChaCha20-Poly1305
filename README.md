@@ -631,7 +631,20 @@ profiles from a fully consumer-owned build tree.
 ## Releases
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
-The current release is **v0.11.0** (tagged 2026-09-06;
+The current release is **v0.12.0** (tagged 2026-09-07;
+`src/lib_version.s` declares 0.12.0, `LIB_ABI_VERSION` **4**): a hygiene and
+coverage release. `AEAD_DOMAIN_GUARD` no longer leaks 8 ca65-synthesised
+`.LOCAL-MACRO_SYMBOL-NNNN` names into a consumer's `-Ln` label file, one
+`RESIDENT_BYTES` figure that under-declared by 60 B is corrected upward, and
+`make verify` now runs all six gates — including inside the release tarball,
+so a release cannot be cut past a red one. **No code changed**: all four
+profile PRGs are byte-identical to v0.11.0, and the exported surface is
+unchanged at 97 symbols. **Nothing a current consumer reads changes**; if you
+defer `ct_mul_8x8` without deferring `sqtab_init`, that one configuration's
+`RESIDENT_BYTES` rises 17664 → 17920. See
+[`docs/RELEASE_NOTES_v0.12.0.md`](docs/RELEASE_NOTES_v0.12.0.md).
+
+The prior release, **v0.11.0** (tagged 2026-09-06;
 `src/lib_version.s` declares 0.11.0, `LIB_ABI_VERSION` **4**): a
 conformance and correctness release. It makes the archive members
 conformant to contract §6.1 member isolation, and corrects five published

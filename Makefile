@@ -854,6 +854,13 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 # so a release tarball was checked with four of six gates. That is the exact
 # omission class the script's own comment describes happening once already with
 # verify_member_isolation.py. A second list is a second thing to forget.
+# SIX of the SEVEN gates issue #119 enumerated. `bench-check` is deliberately
+# OUT: its recipe runs $(BENCH_PYTHON) $(BENCH_TOOL), which needs the c64-test
+# harness and a VICE or Ultimate 64 target, so it cannot live in a
+# toolchain-only umbrella and cannot run inside the release tarball. Recorded
+# here rather than only in tools/build_release.sh, because that comment is
+# scoped to the tarball manifest and a reader following #119 into this target
+# would otherwise watch a gate vanish between issue and implementation.
 VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
                  verify-label-hygiene lib-verify-isolation lib-verify-shared
 
@@ -1016,7 +1023,8 @@ lib-verify-isolation:
 # profile-a and profile-b are .PHONY and regenerate labels.txt on every
 # invocation. The tool can be pointed at a crafted file; this target cannot.
 #
-# COVERS ALL FIVE SHIPPED CONFIGURATIONS, not just the two that produce a
+# COVERS SIX CONFIGURATIONS — five shipped plus the consumer's own build
+# recipe — not just the two that produce a
 # label file. Consumers link the ARCHIVES, and the three archive variants are
 # assembled with different defines, so a `.local` behind an `.ifdef` on one of
 # those leaks to a consumer while both profile PRGs stay clean. That was

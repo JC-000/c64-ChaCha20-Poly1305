@@ -127,6 +127,42 @@ for t in $REQUIRED_TOOLS; do
 done
 
 # ---------------------------------------------------------------------------
+# CHANGELOG.md ships in the tarball, so its header is a consumer-visible
+# artifact. This leg exists because a scripted section edit deleted the H1 and
+# the Keep a Changelog / SemVer declaration TWICE in one day (2026-09-07), both
+# times by slicing the file around a section and writing back without the
+# preamble. The second time was in the release commit itself, after the first
+# had been fixed and a "check every diff hunk is in the range you meant to
+# touch" habit written into CLAUDE.md — a habit that then went unrun. Two
+# failures of the same habit on the same file is the point at which it stops
+# being a habit and becomes a check.
+#
+# Deliberately narrow: the title and the two convention URLs, nothing about
+# content or ordering. Prove it can fail with
+#   sed -i '' '1,5d' <extracted>/CHANGELOG.md
+# before trusting it green.
+# ---------------------------------------------------------------------------
+CL="$ROOT_CHECK/CHANGELOG.md"
+if [ ! -s "$CL" ]; then
+  echo "MANIFEST ERROR: CHANGELOG.md missing or empty in the tarball" >&2
+  missing=1
+else
+  if [ "$(head -1 "$CL")" != "# Changelog" ]; then
+    echo "MANIFEST ERROR: CHANGELOG.md does not start with '# Changelog' —" >&2
+    echo "  got: $(head -1 "$CL")" >&2
+    echo "  a scripted section edit has eaten the file preamble before" >&2
+    missing=1
+  fi
+  for u in keepachangelog.com semver.org; do
+    if ! grep -q "$u" "$CL"; then
+      echo "MANIFEST ERROR: CHANGELOG.md no longer cites $u — the format" >&2
+      echo "  declaration was dropped; it appears nowhere else in the repo" >&2
+      missing=1
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # Third leg: actually BUILD the extracted tarball.
 #
 # The two legs above check the `.include` graph and the tools a make target
