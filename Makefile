@@ -897,6 +897,24 @@ verify-knob-staleness:
 CONSUMER_DEFINES = -D SHARED_SQTAB_INIT=1 -D SHARED_CT_MUL_8X8=1 \
                    -D POLY1305_MULTIPLY_ROLLED_OUTER=1 -D LIB_NO_BARE_EXPORTS=1
 
+# The multiply axis, which lib_manifest.s does not model AT ALL — `ROLLED`
+# appears nowhere in it, at RESIDENT_BYTES, COLD_BYTES or the §8 masks.
+# poly1305_core.s:176 SWAPS one multiply body for another rather than removing
+# one, so nothing structural bounds the direction. Measured on target `lib`:
+#
+#   default (fully inlined)              sum 16841   bound 17861
+#   POLY1305_MULTIPLY_ROLLED=1           sum  8072   bound  9092
+#   POLY1305_MULTIPLY_ROLLED_OUTER=1     sum  8648   bound  9668
+#
+# The declared 17920 covers all three only because the DEFAULT happens to be
+# the largest member of the axis. That is a property of today's code, not a
+# guarantee: if an alternative body ever grows past the default, the declared
+# literal stops covering an archive a consumer can build, and no manifest
+# branch would notice. ROLLED_OUTER is pinned by CONSUMER_DEFINES above;
+# this pins the other documented knob (docs/API.md:687), which until now was
+# exercised only by the profile-b-rolled PRG target and by no archive leg.
+ROLLED_DEFINES = -D POLY1305_MULTIPLY_ROLLED=1
+
 verify-resident-bytes:
 	@set -e; \
 	for prof in "" "-D POLY1305_PROFILE_LONG=1"; do \
@@ -915,8 +933,11 @@ verify-resident-bytes:
 	echo "  --- consumer config (c64-wireguard): lib + CONSUMER_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	echo "  --- multiply axis: lib + ROLLED_DEFINES ---"; \
+	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(ROLLED_DEFINES)" >/dev/null; \
+	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
 	$(MAKE) --no-print-directory lib >/dev/null; \
-	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles, plus the consumer's own config"
+	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles, plus the consumer's own config and the multiply axis"
 
 
 # §6.1 member-isolation guard (contract SPEC v1.2.0/v1.2.1/v1.2.2, issue #108).

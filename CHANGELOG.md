@@ -75,6 +75,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrong number. It pins the **subtractive invariant** that number depends on,
   and it passes on the day it lands.
 
+  **Where the gap actually comes from — measured, and not what I first said.**
+  The `SHARED_*` switches account for **297 B** of it (160 + 137, exactly
+  additive, no interaction term). The other **8193 B** is
+  `POLY1305_MULTIPLY_ROLLED_OUTER`, and `lib_manifest.s` does not model that
+  switch **anywhere** — `ROLLED` appears zero times in it, at `RESIDENT_BYTES`,
+  at `COLD_BYTES` and in the §8 masks alike. So the subtractive-switch comment
+  I cited as the explanation covers 3.5% of the phenomenon.
+
+  `poly1305_core.s:176,250` SWAPS one multiply body for another rather than
+  removing one, so nothing structural bounds the direction. Measured on target
+  `lib`: default 16841, `ROLLED` 8072, `ROLLED_OUTER` 8648. The declared 17920
+  covers all three **only because the default happens to be the largest member
+  of the axis** — a property of today's code, not a guarantee.
+
   **"Safe" only against §5's stated hazard, which is understatement.** §5
   (SPEC v1.2.2) requires equates be "safe-direction: round up, never down",
   because "an equate that understates the true footprint makes that check pass
@@ -90,6 +104,14 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configuration that ships, rather than merely to round up from it, is being
   worked out at c64-lib-contract#199; this release does not act on an
   interpretation still under discussion.
+
+  A second new leg pins the rest of that axis: `ROLLED_DEFINES`
+  (`POLY1305_MULTIPLY_ROLLED`) is a documented consumer knob
+  (`docs/API.md:687`) that until now was exercised only by the
+  `profile-b-rolled` PRG target and by **no archive-producing leg at all**,
+  while the footprint gate measures archives. Driven red by growing that body
+  past the default — the exact scenario nothing could previously see: seven
+  legs green, `FAIL: declared 17920 < bound 19092`, exit 2.
 
   **Demonstrated capable of failing, isolating the new leg from the old ones.**
   Making a switch additive (`+9000 B` behind `.ifdef LIB_NO_BARE_EXPORTS`,
