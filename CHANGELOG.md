@@ -28,8 +28,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Measured:** both profile PRGs are byte-identical to the pre-fix build
   (`38ea1c83614e7fced3ba6d70e150038d` / `85f19d9b6408d0734f4f6c2c5d67e9ef`),
   the label diff is exactly the 8 removals with nothing else added or
-  dropped (280→272 profile A, 294→286 profile B), and all three archive
-  variants' segment sizes are unchanged.
+  dropped (280→272 profile A, 294→286 profile B), and the archive
+  variants' segment sizes are unchanged — though note the three variants
+  produce identical segment dumps to each other, so that is one
+  measurement reported three times, not three independent ones.
 - **Contract §6.1 member isolation (issue #108).** `ld65` links whole
   archive members, so a displaceable name sharing a member with an entry
   point a consumer imports arrives in every link whether the consumer
@@ -66,8 +68,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   just as happily on an empty or missing file. It lives in a tool rather
   than in the recipe precisely so those controls can be driven red:
   `profile-a`/`profile-b` are `.PHONY` and regenerate `labels.txt` on every
-  invocation, so a mutation of the file cannot survive the target. All
-  five legs were demonstrated failing before the check was trusted green.
+  invocation, so a mutation of the file cannot survive the target.
+
+  It examines **all five shipped configurations**, not just the two that
+  produce a label file. Consumers link the archives, and the three archive
+  variants are assembled with different defines, so a `.local` behind an
+  `.ifdef` on one of those reaches a consumer while both profile PRGs stay
+  clean. Demonstrated, not theorised: a `.local` gated on
+  `LIB_VARIANT_AEAD_ONLY` leaves both profile label files at 0 leaks — the
+  profile-only check reported ok — while the aead-only object carries 4
+  synthesised names and a probe consumer linked against
+  `chacha20poly1305-aead-only.a` gets `al 0045C5 .LOCAL-MACRO_SYMBOL-0000`
+  in its label file. No consumer links that variant today
+  (`c64-wireguard/Makefile:75` takes the full archive), so this closes the
+  gap before it has a victim.
 - `make lib-verify-isolation` (`tools/verify_member_isolation.py`) — §6.1
   guard. The displaceable set is MEASURED, by building the same sources
   with and without each suppression knob and differencing the export

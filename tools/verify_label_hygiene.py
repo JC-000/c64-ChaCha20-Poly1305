@@ -29,6 +29,55 @@ import sys
 SENTINEL = ".aead_encrypt"
 LEAK = "LOCAL-MACRO_SYMBOL"
 
+# Object-level sentinel and leak marker. The synthesised name is stored in the
+# object's symbol table -- that is how ld65 has it to emit -- so a raw byte
+# search finds it with no parser to break.
+OBJ_SENTINEL = b"aead_encrypt"
+OBJ_LEAK = b"LOCAL-MACRO_SYMBOL"
+
+
+def check_object(path):
+    """Scan a built .o for synthesised macro-local names.
+
+    WHY OBJECTS AND NOT JUST LABEL FILES. Only profile-a and profile-b produce
+    a label file, but consumers link the ARCHIVES, and the three archive
+    variants are assembled with different defines (LIB_VARIANT_AEAD_ONLY,
+    SHARED_SQTAB_INIT/SHARED_CT_MUL_8X8). A `.local` inside an `.ifdef` on one
+    of those defines leaks into that archive and reaches a consumer's label
+    file while both profiles stay clean -- demonstrated: a probe consumer
+    linked against chacha20poly1305-aead-only.a carried
+    `al 0045C5 .LOCAL-MACRO_SYMBOL-0000` while the profile-only check reported
+    ok. No consumer links that variant today (c64-wireguard/Makefile:75 takes
+    the full archive), so this closes the gap before it has a victim rather
+    than after.
+    """
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+    except OSError as e:
+        return False, f"FAIL: cannot read {path}: {e}\n      Nothing was examined."
+
+    if not blob:
+        return False, (f"FAIL: {path} is empty — an absence check against it would\n"
+                       f"      pass vacuously. Nothing was examined.")
+
+    if OBJ_SENTINEL not in blob:
+        return False, (f"FAIL: {path} ({len(blob)} B) does not contain "
+                       f"'{OBJ_SENTINEL.decode()}'.\n"
+                       f"      This is not the AEAD translation unit, so an absence\n"
+                       f"      result from it means nothing.")
+
+    if OBJ_LEAK in blob:
+        n = blob.count(OBJ_LEAK)
+        return False, (f"FAIL: {path} carries {n} ca65-synthesised macro-local "
+                       f"name(s) (issue #117).\n"
+                       f"      This object goes into an archive a consumer links, so the\n"
+                       f"      name reaches their label file even though no profile PRG\n"
+                       f"      shows it. Use unnamed ':' labels in the macro, not '.local'.")
+
+    return True, (f"ok — {path}: {len(blob)} B, sentinel present, "
+                  f"0 synthesised macro-locals")
+
 
 def check(path):
     """Return (ok, message). ok is False for every reason including unreadable."""
@@ -60,14 +109,23 @@ def check(path):
 
 
 def main(argv):
-    if len(argv) < 2:
-        sys.exit("usage: verify_label_hygiene.py <labels.txt> [labels.txt ...]")
+    args = argv[1:]
+    if not args:
+        sys.exit("usage: verify_label_hygiene.py <labels.txt|object.o> [...]\n"
+                 "       .o arguments are scanned as objects, everything else as\n"
+                 "       a linker label file.")
     failed = 0
-    for path in argv[1:]:
-        ok, msg = check(path)
+    examined = 0
+    for path in args:
+        ok, msg = (check_object(path) if path.endswith(".o") else check(path))
         print(("verify-label-hygiene: " if ok else "") + msg)
+        examined += 1
         if not ok:
             failed = 1
+    # Reconciliation: refuse to report success for a run that examined nothing.
+    if examined == 0:
+        print("FAIL: no inputs examined — this run proves nothing.")
+        return 1
     return failed
 
 
