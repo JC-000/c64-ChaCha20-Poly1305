@@ -21,6 +21,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   c64-x25519 made in `src/constants.s` for an unrelated reason
   (cheap-local scoping).
 
+  **A second, latent benefit — measured here, not borrowed.** A named label
+  inside a macro expansion opens a new cheap-local scope and orphans the
+  enclosing proc's `@labels` across the site, and `.local` counts as named.
+  Assembling a proc with an `@label` before the expansion and a reference
+  to it after gives `Error: Symbol '@before' is undefined` for both a
+  `.local` and a fully-named label, while the same proc with an unnamed
+  `:` label — including the guard's exact two-label, three-branch shape
+  expanded twice adjacently — assembles clean. A macro-free control also
+  assembles clean, so the expansion itself is not the cause. This was
+  **latent, never live**: the pre-fix tree assembled, which by construction
+  means no `@` reference crossed a guard — the guards are the first
+  instructions of each entry point. The fix removes the hazard for anyone
+  who later adds an `@label` above them. c64-x25519's `src/constants.s`
+  states the same mechanism; it is cited here as corroboration, having been
+  independently run rather than taken on its word.
+
   **The addresses were always correct; this was symbol-output noise, not a
   correctness defect.** `AEAD_DOMAIN_GUARD` is internal to
   `chacha20poly1305_lib.s` and is not exported by the public header — what
