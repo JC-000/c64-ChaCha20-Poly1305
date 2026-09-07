@@ -18,6 +18,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tools/verify_label_hygiene.py` was also missing from the shipped-tools
   manifest and is added.
 
+  `make verify` runs the gates through a loop rather than as prerequisites,
+  because as prerequisites `make -j` runs them concurrently and several build
+  into the same directories — `ar65: Error: Problem deleting temporary library
+  file`, reproducible at `-j8` while serial passes. Ordinary builds stay
+  parallel-safe.
+
   **Proven end-to-end, both directions**, by tagging a throwaway clone:
   a green tagged tree gives `tarball build + verify (…): OK` and a tarball;
   a tagged tree carrying the #126 defect gives `MANIFEST ERROR`, quotes
@@ -28,18 +34,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 - **`verify-label-hygiene` examined almost nothing when run after another
   gate.** It listed five configurations as prerequisites and scanned their
-  objects afterwards; §6.3 knob-staleness invalidation deletes every object
-  under `build/` when `CONTRACT_DEFINES` changes, so building `lib` after
-  `profile-a` wiped four of the five objects before the tool ran. Standalone
-  it passed, which is why nothing caught it. It now builds and scans **one
-  configuration at a time**.
+  objects afterwards. It now builds and scans **one configuration at a time**.
 
-  The tool's own positive control is what surfaced it — `FAIL: cannot read
-  … Nothing was examined` rather than a silent pass. The label *files*
-  survived, because each phony link regenerates them, so a check without
-  that control would have reported ok on a run that examined almost nothing.
-  Found only because `make verify` runs the gates in a sequence no developer
-  types by hand.
+  **The mechanism, after two wrong first answers.** The wiper is not
+  `profile-a` — its `-DPOLY1305_PROFILE_LONG=1` is a per-recipe literal that
+  never reaches `CURRENT_KNOBS`. It is `verify-resident-bytes`, whose recursive
+  sub-makes do pass `CONTRACT_DEFINES` and so trip §6.3 invalidation, deleting
+  every `*.o` under `build/`. And the trigger is not "under `make verify`" —
+  the six gates alone on a clean tree pass. It needs the five build targets to
+  be **prior goals of the same make process**, so make memoises them as
+  already-updated and skips the phony rebuild. That is
+  `tools/build_release.sh`'s invocation shape, which is why only the release
+  path exposed it.
+
+  The label *files* survived not because links re-ran — they did not — but
+  because invalidation deletes only `*.o` and `*.a`. The conclusion is
+  unchanged: the tool's own non-empty positive control is what surfaced this
+  (`FAIL: cannot read … Nothing was examined`), and a check without it would
+  have reported ok on a run that examined almost nothing.
 - **`RESIDENT_BYTES` under-declared by 60 B for `make lib` with
   `SHARED_CT_MUL_8X8` alone (issue #126).** §5's **unsafe** direction — the
   named hazard, not the harmless one — live since the literal was introduced.

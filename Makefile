@@ -857,7 +857,17 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
                  verify-label-hygiene lib-verify-isolation lib-verify-shared
 
-verify: $(VERIFY_TARGETS)
+# SERIAL BY CONSTRUCTION. These are NOT prerequisites: as prerequisites `make -j`
+# runs them concurrently, and several recursively build into the SAME
+# build/lib/objs* directories, so two gates race on one archive —
+# `ar65: Error: Problem deleting temporary library file`, reproducible 3/3 at
+# -j8 while serial and `-j8 profile-a profile-b lib` both pass. Running them
+# through a loop makes `make -j8 verify` safe without imposing .NOTPARALLEL on
+# ordinary builds, which are parallel-safe and should stay that way.
+verify:
+	@set -e; for t in $(VERIFY_TARGETS); do \
+	  $(MAKE) --no-print-directory $$t; \
+	done
 	@echo "verify: all $(words $(VERIFY_TARGETS)) gates green"
 
 verify-zp-usage: lib
@@ -1013,18 +1023,26 @@ lib-verify-isolation:
 # BUILD-THEN-SCAN, ONE CONFIGURATION AT A TIME — not all-then-scan.
 #
 # The previous form listed the five configurations as prerequisites and scanned
-# their objects afterwards. That works standalone and FAILS under `make verify`,
-# because §6.3 knob-staleness invalidation deletes every object under build/
-# whenever CONTRACT_DEFINES changes: building `lib` (no defines) after
-# `profile-a` (POLY1305_PROFILE_LONG) wipes profile-a's object, so by the time
-# the tool ran, four of five objects were gone and the tool reported
-# "cannot read ... Nothing was examined" — its own positive control catching
-# the problem, which is the one good part of the story.
+# their objects afterwards.
 #
-# The label FILES survived because each phony link regenerates them, so a
-# weaker check would have reported ok on a run that examined almost nothing.
-# Found by tools/build_release.sh running the umbrella inside an extracted
-# tarball, which is exactly the sequencing a developer never does by hand.
+# WHAT ACTUALLY BREAKS IT — measured, after two wrong first answers. NOT
+# `profile-a`: its -DPOLY1305_PROFILE_LONG=1 is a per-recipe literal on the
+# pattern rules, never reaches CURRENT_KNOBS and never trips invalidation. The
+# wiper is `verify-resident-bytes`, whose recursive sub-makes DO pass
+# CONTRACT_DEFINES and so change the stamp, deleting every *.o under build/.
+#
+# And NOT "under `make verify`": six gates in VERIFY_TARGETS order on a clean
+# tree pass. The extra ingredient is the five build targets being PRIOR GOALS OF
+# THE SAME MAKE PROCESS — make memoises them as already-updated and skips the
+# phony rebuild after their objects are deleted. That is tools/build_release.sh's
+# invocation shape (TARBALL_TARGETS + TARBALL_VERIFY in one make), which is why
+# only the release path exposed it.
+#
+# The label FILES survived not because links re-ran — they did not; the only two
+# ld65 lines in the failing transcript are the original goals — but because
+# invalidation deletes only *.o and $(LIB_DIR)/*.a and never touches labels.txt.
+# The conclusion stands either way: a check without the tool's non-empty
+# positive control would have reported ok on a run that examined almost nothing.
 verify-label-hygiene:
 	@$(MAKE) --no-print-directory profile-a >/dev/null
 	python3 tools/verify_label_hygiene.py \
