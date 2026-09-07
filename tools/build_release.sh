@@ -76,6 +76,7 @@ git archive \
   docs/precalc-tables.md docs/REPRO_CHECK.md \
   tools/verify_zp_usage.py tools/verify_knob_staleness.py \
   tools/verify_member_isolation.py tools/measure_resident_bytes.py \
+  tools/verify_label_hygiene.py \
   test/rfc7539_vectors.json \
   "$NOTES" \
   | gzip -n -9 > "$OUT"
@@ -117,7 +118,7 @@ done
 # dependency), and re-rolling a release from inside a release tarball is not a
 # supported operation. Only tools a consumer needs to BUILD or VERIFY the
 # library are required here.
-REQUIRED_TOOLS="tools/verify_zp_usage.py tools/verify_knob_staleness.py tools/verify_member_isolation.py tools/measure_resident_bytes.py"
+REQUIRED_TOOLS="tools/verify_zp_usage.py tools/verify_knob_staleness.py tools/verify_member_isolation.py tools/measure_resident_bytes.py tools/verify_label_hygiene.py"
 for t in $REQUIRED_TOOLS; do
   if [ ! -f "$ROOT_CHECK/$t" ]; then
     echo "MANIFEST ERROR: the shipped Makefile invokes '$t', which the tarball omits" >&2
@@ -154,7 +155,11 @@ done
 # ran the target that needs it — the same omission class as the two source
 # files this leg was added to catch, one layer up.
 TARBALL_TARGETS="profile-a profile-b lib lib-aead-only lib-app-owned"
-TARBALL_VERIFY="lib-verify-isolation lib-verify-shared verify-zp-usage verify-resident-bytes"
+# The umbrella target, NOT a hand-copied list. This list had already drifted
+# from the Makefile's gates — verify-knob-staleness and verify-label-hygiene
+# were missing, so tarballs were checked with four of six. `make verify` is
+# defined once in the Makefile; deriving it here cannot drift again.
+TARBALL_VERIFY="verify"
 
 if command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 \
    && command -v ar65 >/dev/null 2>&1; then

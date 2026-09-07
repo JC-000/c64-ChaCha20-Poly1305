@@ -235,7 +235,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_manifest.o \
           $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
+.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -847,6 +847,37 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 # convention rather than an obligation — kept because
 # it still tells a reader which targets emit artifacts and which only
 # check them.
+# THE gate list. Defined once and used by `make verify` below AND, via that
+# target, by tools/build_release.sh inside the extracted tarball. Before this,
+# build_release.sh carried a hand-copied duplicate of this list and it had
+# already drifted: verify-knob-staleness and verify-label-hygiene were absent,
+# so a release tarball was checked with four of six gates. That is the exact
+# omission class the script's own comment describes happening once already with
+# verify_member_isolation.py. A second list is a second thing to forget.
+VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
+                 verify-label-hygiene lib-verify-isolation lib-verify-shared
+
+# SERIAL BY CONSTRUCTION. These are NOT prerequisites: as prerequisites `make -j`
+# runs them concurrently, and several recursively build into the SAME
+# build/lib/objs* directories, so two gates race on one archive —
+# `ar65: Error: Problem deleting temporary library file`, reproducible 3/3 at
+# -j8 while serial and `-j8 profile-a profile-b lib` both pass. Running them
+# through a loop makes `make -j8 verify` safe without imposing .NOTPARALLEL on
+# ordinary builds, which are parallel-safe and should stay that way.
+# KNOWN AND NOT DEFENDED AGAINST: `make -i verify` prints the green banner over
+# a broken gate. Do not try to fix it in this recipe — I did, and it does not
+# work. `-i` propagates through MAKEFLAGS to the sub-makes, so the GATE ITSELF
+# exits 0 (`make -i verify-resident-bytes` exits 0 where plain make exits 2);
+# `set -e` has nothing to catch and no recipe-level guard can see a failure that
+# was erased one level down. Operator-induced, and tools/build_release.sh does
+# not pass -i. The banner is in the same set -e shell as the loop anyway, which
+# is where it belongs, but that is tidiness and not a defence.
+verify:
+	@set -e; for t in $(VERIFY_TARGETS); do \
+	  $(MAKE) --no-print-directory $$t; \
+	done; \
+	echo "verify: all $(words $(VERIFY_TARGETS)) gates green"
+
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
 
@@ -997,14 +1028,42 @@ lib-verify-isolation:
 # mtimes at one-second granularity — a git checkout landing in the same second
 # as the object leaves a stale .o and this target then reads a stale link),
 # rebuild, and it must report 8 leaked names per profile.
-verify-label-hygiene: profile-a profile-b lib lib-aead-only lib-app-owned
+# BUILD-THEN-SCAN, ONE CONFIGURATION AT A TIME — not all-then-scan.
+#
+# The previous form listed the five configurations as prerequisites and scanned
+# their objects afterwards.
+#
+# WHAT ACTUALLY BREAKS IT — measured, after two wrong first answers. NOT
+# `profile-a`: its -DPOLY1305_PROFILE_LONG=1 is a per-recipe literal on the
+# pattern rules, never reaches CURRENT_KNOBS and never trips invalidation. The
+# wiper is `verify-resident-bytes`, whose recursive sub-makes DO pass
+# CONTRACT_DEFINES and so change the stamp, deleting every *.o under build/.
+#
+# And NOT "under `make verify`": six gates in VERIFY_TARGETS order on a clean
+# tree pass. The extra ingredient is the five build targets being PRIOR GOALS OF
+# THE SAME MAKE PROCESS — make memoises them as already-updated and skips the
+# phony rebuild after their objects are deleted. That is tools/build_release.sh's
+# invocation shape (TARBALL_TARGETS + TARBALL_VERIFY in one make), which is why
+# only the release path exposed it.
+#
+# The label FILES survived not because links re-ran — they did not; the only two
+# ld65 lines in the failing transcript are the original goals — but because
+# invalidation deletes only *.o and $(LIB_DIR)/*.a and never touches labels.txt.
+# The conclusion stands either way: a check without the tool's non-empty
+# positive control would have reported ok on a run that examined almost nothing.
+verify-label-hygiene:
+	@$(MAKE) --no-print-directory profile-a >/dev/null
 	python3 tools/verify_label_hygiene.py \
-	    build/profile-a/labels.txt build/profile-b/labels.txt \
-	    build/profile-a/chacha20poly1305_lib.o \
-	    build/profile-b/chacha20poly1305_lib.o \
-	    build/lib/objs/chacha20poly1305_lib.o \
-	    build/lib/objs-aead-only/chacha20poly1305_lib.o \
-	    build/lib/objs-app-owned/chacha20poly1305_lib.o
+	    build/profile-a/labels.txt build/profile-a/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory profile-b >/dev/null
+	python3 tools/verify_label_hygiene.py \
+	    build/profile-b/labels.txt build/profile-b/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib-aead-only >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs-aead-only/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib-app-owned >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs-app-owned/chacha20poly1305_lib.o
 	@echo "  --- consumer config (c64-wireguard), issue #122 ---"
 	@$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null
 	python3 tools/verify_label_hygiene.py build/lib/objs/chacha20poly1305_lib.o
