@@ -69,11 +69,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on that point.** The consumer's config declares 17664 against a bound near
   9371, and that gap is *deliberate*: `lib_manifest.s:327-335` documents both
   `SHARED_*` switches as purely subtractive `.ifndef` gates, so declaring the
-  un-deferred value is a safe superset and a large gap is the designed
+  un-deferred value is a deliberate superset and a large gap is the designed
   outcome — the same comment warns that comparing the two "is the wrong
   comparison and makes a safe case look dangerous". This leg is not hunting a
   wrong number. It pins the **subtractive invariant** that number depends on,
   and it passes on the day it lands.
+
+  **"Safe" only against §5's stated hazard, which is understatement.** §5
+  (SPEC v1.2.2) requires equates be "safe-direction: round up, never down",
+  because "an equate that understates the true footprint makes that check pass
+  while the library overruns" — and 17664 over 8351 is up. But over-declaration
+  is not free in both directions: a consumer that binds the equate to a budget
+  with `<=` loses that headroom, and `c64-https` is exactly that shape
+  (`src/contract_footprint_asserts.s:127`, `RESIDENT + COLD <=
+  __CRYPTO_HOT_SIZE__`). It does not link this library. Our only consumer
+  asserts the other way and its chacha leg is self-documented as inert
+  (`c64-wireguard/src/contract_asserts.s:308-311`, 8921 B of slack). So the
+  cost is latent here, not live — but "safe superset" was too strong and is
+  withdrawn. Whether §5 additionally requires the figure to describe the
+  configuration that ships, rather than merely to round up from it, is being
+  worked out at c64-lib-contract#199; this release does not act on an
+  interpretation still under discussion.
 
   **Demonstrated capable of failing, isolating the new leg from the old ones.**
   Making a switch additive (`+9000 B` behind `.ifdef LIB_NO_BARE_EXPORTS`,
