@@ -933,6 +933,11 @@ verify-resident-bytes:
 	echo "  --- consumer config (c64-wireguard): lib + CONSUMER_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	for sw in "-D SHARED_SQTAB_INIT=1" "-D SHARED_CT_MUL_8X8=1"; do \
+	  echo "  --- §8 deferral, one switch at a time: lib $$sw (issue #126) ---"; \
+	  $(MAKE) --no-print-directory lib CONTRACT_DEFINES="$$sw" >/dev/null; \
+	  python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	done; \
 	echo "  --- multiply axis: lib + ROLLED_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(ROLLED_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \

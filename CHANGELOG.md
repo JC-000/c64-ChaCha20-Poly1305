@@ -7,6 +7,35 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`RESIDENT_BYTES` under-declared by 60 B for `make lib` with
+  `SHARED_CT_MUL_8X8` alone (issue #126).** §5's **unsafe** direction — the
+  named hazard, not the harmless one — live since the literal was introduced.
+  `lib_manifest.s` branched on the *define*, but the footprint also depends on
+  the *target*, because the target selects the member set: 17664 was measured
+  on the app-owned member set (12 sections) and target `lib` with only that one
+  switch has 9, landing at bound 17724. The branch now requires **both**
+  deferral switches, which is the configuration 17664 actually covers.
+
+  | target `lib` | bound | declared before | after |
+  |---|---|---|---|
+  | no switches | 17861 | 17920 | 17920 |
+  | `SHARED_SQTAB_INIT` alone | 17701 | 17920 | 17920 |
+  | **`SHARED_CT_MUL_8X8` alone** | **17724** | **17664 — under by 60** | **17920** |
+  | both | 17564 | 17664 | 17664 |
+
+  **Consumer disclosure: no consumer is affected and no declared value a
+  consumer reads today changes.** `c64-wireguard` passes both switches and
+  still gets 17664; both profile PRGs remain byte-identical to v0.11.0. The
+  correction only *raises* a figure for a configuration nothing currently
+  builds, so it is safe-direction and the ABI counter holds — §8.3 nonetheless
+  permits deferring `ct_mul_8x8` independently, so the combination is one the
+  contract invites.
+
+  Found while supplying measurements to calibrate a draft §5 slack clause on
+  the contract side; enumerating the branch boundaries to answer their question
+  turned it up. Four gates and three adversarial review rounds had not, because
+  `verify-resident-bytes` only ever paired the `SHARED_*` switches with
+  `lib-app-owned` — the member set the literal was correct for.
 - **Macro-local label names no longer leak into a consumer's label file
   (issue #117).** `AEAD_DOMAIN_GUARD` used `.local ok` / `.local reject`.
   ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
@@ -56,6 +85,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement reported three times, not three independent ones.
 
 ### Added
+- **`verify-resident-bytes` builds each §8 deferral switch on its own**
+  (issue #126) — two more legs, ten in total. The single-switch combinations
+  were the gap that let the under-declaration above live: the gate paired
+  `SHARED_*` only with `lib-app-owned`. Driven red by reverting the branch fix:
+  nine legs green, `FAIL: declared 17664 < bound 17724`, exit 2.
 - **Both footprint and label gates now build the configuration the only real
   consumer builds** (issue #122). `c64-wireguard` runs `make lib
   CONTRACT_DEFINES=...` with four defines

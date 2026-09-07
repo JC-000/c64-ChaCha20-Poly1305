@@ -313,7 +313,22 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 16640
   .ifdef LIB_VARIANT_AEAD_ONLY
 LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17664
   .else
-    .ifdef SHARED_CT_MUL_8X8
+    ; BOTH switches, not either (issue #126). 17664 covers a bound of 17564,
+    ; which is what the two deferrals together produce. With SHARED_CT_MUL_8X8
+    ; ALONE the bound is 17724 and this literal under-declared by 60 B — §5's
+    ; unsafe direction. The branch keyed on the define while the footprint also
+    ; depends on the TARGET, because the target selects the member set: 17664
+    ; was measured on the app-owned member set (12 sections), and target `lib`
+    ; with only this one switch has 9 and lands above it. §8.3 permits deferring
+    ; ct_mul_8x8 independently of sqtab_init, so that combination is one the
+    ; contract invites a consumer to build.
+    ;
+    ;   target lib, none            bound 17861  -> .else 17920   ok
+    ;   target lib, SQTAB only      bound 17701  -> .else 17920   ok
+    ;   target lib, CT_MUL only     bound 17724  -> .else 17920   ok  (was 17664, FAIL)
+    ;   target lib, both            bound 17564  -> 17664         ok
+    ;   lib-app-owned (both)        bound 17564  -> 17664         ok
+    .if .defined(SHARED_CT_MUL_8X8) .and .defined(SHARED_SQTAB_INIT)
       ; app-owned (issue #74): §8.3 body + §8.1 init deferred to the
       ; consumer. Measured 16 544 B (was 16 593 before the §14.1 domain
       ; guards, which pushed it past the old 17 664 literal — hence the
