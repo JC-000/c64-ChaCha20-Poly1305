@@ -65,13 +65,18 @@ consumer builds"** — not "can go red".
   directly, never `pkill`. On an Ultimate 64, call `set_turbo_mhz(client, 1)`
   before any timing run — turbo survives `client.reset()`.
 - **Footprint is measured, never inferred.** `make verify-resident-bytes`
-  (`tools/measure_resident_bytes.py`) runs **six** legs — 3 targets × 2
-  profiles — over **five** `RESIDENT_BYTES` literal sites in
-  `src/lib/lib_manifest.s`; five and six differ because Profile A app-owned
-  resolves to the same branch as Profile A full. Do not confuse either number
-  with the *other* five in this repo: `verify-label-hygiene`'s five shipped
-  configurations are a different, non-overlapping set. Do not read footprint
-  off the linked PRG.
+  (`tools/measure_resident_bytes.py`) runs **eleven** legs as of v0.12.0 — the
+  3 targets × 2 profiles matrix, plus the configuration `c64-wireguard`
+  actually builds, each §8 deferral switch alone, and the two knob axes
+  `lib_manifest.s` models nowhere (`POLY1305_MULTIPLY_ROLLED`,
+  `CHACHA20_USE_WORD32`). They cover **five** `RESIDENT_BYTES` literal sites in
+  `src/lib/lib_manifest.s`; legs and sites differ because several
+  configurations resolve to the same branch. `verify-label-hygiene` covers
+  **six** configurations — five shipped plus the consumer's — and examines
+  eight inputs, since each profile contributes a label file *and* an object.
+  **Count these by running the target, not from this list**: every one of these
+  figures was stale within a day of being written. Do not read footprint off
+  the linked PRG.
 - **Never byte-compare `.o`/`.a` files** — ca65 stamps `OPT_DATETIME`. Compare
   linked PRGs or `od65` dumps.
 - **Assert diff SCOPE, not just diff content.** `git diff <base> -- <file> |

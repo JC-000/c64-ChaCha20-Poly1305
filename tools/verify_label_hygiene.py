@@ -9,13 +9,16 @@ symbol-output noise, not a correctness defect.
 
 WHY THIS IS A TOOL AND NOT A GREP IN THE MAKEFILE. A bare "grep finds nothing"
 passes just as happily on an empty or missing file — the vacuous-absence shape
-this fleet keeps finding. The absence assertion is therefore gated behind two
-positive controls: the file must be non-empty, and it must contain a sentinel
-label that has to be there. Those legs are only trustworthy if they can be
+this fleet keeps finding. The absence assertion is therefore gated behind positive
+controls: for a label file the input must be readable, non-empty, carry a
+sentinel label that has to be there, and yield an extracted-name count that
+reconciles against the raw line count; for an object, readable, non-empty and
+carrying the sentinel. main() additionally refuses to report success for a run
+that examined nothing. Those legs are only trustworthy if they can be
 driven red, and they cannot be driven red through the Makefile: `profile-a`
 and `profile-b` are .PHONY, so they re-link and regenerate labels.txt on every
 invocation, erasing any mutation of the file. Pointing this tool straight at a
-crafted file is what makes all three legs demonstrable:
+crafted file is what makes those legs demonstrable:
 
     printf '' > /tmp/empty.txt          && python3 tools/verify_label_hygiene.py /tmp/empty.txt
     grep -v ' \\.aead_encrypt$' real.txt > /tmp/nosent.txt \\
