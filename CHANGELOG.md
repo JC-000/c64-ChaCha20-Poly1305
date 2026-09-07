@@ -127,11 +127,15 @@ release and was merely invisible. Full detail in
   `make lib-verify-shared` follows the §8.1/§8.3 symbols to their new TUs);
   before, that was `Duplicate external identifier: 'sqtab_init'`.
 - **All five `RESIDENT_BYTES` literals under-reported by 768 B** (#113).
-  (Separately, and not the same fact: the measured column in
-  `src/lib/lib_manifest.s` fell 83–145 B per variant with no byte moving,
-  because the basis counts `.align` fill inside an object's section and not
-  the fill `ld65` inserts between sections. See
-  `docs/RELEASE_NOTES_v0.11.0.md`.)
+  (Disambiguation, because this release moves two `RESIDENT_BYTES` numbers
+  in opposite directions and they are not in conflict: while these declared
+  literals RISE 768 B, the *measured column* in `src/lib/lib_manifest.s`
+  FALLS 83–145 B per variant — and **no byte moved** in either case. The
+  column's basis counts `.align` fill inside an object's section but not the
+  fill `ld65` inserts between sections, and the §6.1 member split moved that
+  pad from the first bucket to the second. The declared literals were
+  untouched by that split; they rise here for the separate reason above.
+  Derivation in `docs/RELEASE_NOTES_v0.11.0.md`.)
   The basis summed each object's segments, which cannot see the padding
   ld65 inserts between them — padding this library forces to exist via the
   `align = $100` CT invariant. Measured, all ten rows: `sum + fill = link`
