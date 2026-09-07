@@ -235,7 +235,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_manifest.o \
           $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
+.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -847,6 +847,19 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 # convention rather than an obligation — kept because
 # it still tells a reader which targets emit artifacts and which only
 # check them.
+# THE gate list. Defined once and used by `make verify` below AND, via that
+# target, by tools/build_release.sh inside the extracted tarball. Before this,
+# build_release.sh carried a hand-copied duplicate of this list and it had
+# already drifted: verify-knob-staleness and verify-label-hygiene were absent,
+# so a release tarball was checked with four of six gates. That is the exact
+# omission class the script's own comment describes happening once already with
+# verify_member_isolation.py. A second list is a second thing to forget.
+VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
+                 verify-label-hygiene lib-verify-isolation lib-verify-shared
+
+verify: $(VERIFY_TARGETS)
+	@echo "verify: all $(words $(VERIFY_TARGETS)) gates green"
+
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
 
@@ -997,14 +1010,34 @@ lib-verify-isolation:
 # mtimes at one-second granularity — a git checkout landing in the same second
 # as the object leaves a stale .o and this target then reads a stale link),
 # rebuild, and it must report 8 leaked names per profile.
-verify-label-hygiene: profile-a profile-b lib lib-aead-only lib-app-owned
+# BUILD-THEN-SCAN, ONE CONFIGURATION AT A TIME — not all-then-scan.
+#
+# The previous form listed the five configurations as prerequisites and scanned
+# their objects afterwards. That works standalone and FAILS under `make verify`,
+# because §6.3 knob-staleness invalidation deletes every object under build/
+# whenever CONTRACT_DEFINES changes: building `lib` (no defines) after
+# `profile-a` (POLY1305_PROFILE_LONG) wipes profile-a's object, so by the time
+# the tool ran, four of five objects were gone and the tool reported
+# "cannot read ... Nothing was examined" — its own positive control catching
+# the problem, which is the one good part of the story.
+#
+# The label FILES survived because each phony link regenerates them, so a
+# weaker check would have reported ok on a run that examined almost nothing.
+# Found by tools/build_release.sh running the umbrella inside an extracted
+# tarball, which is exactly the sequencing a developer never does by hand.
+verify-label-hygiene:
+	@$(MAKE) --no-print-directory profile-a >/dev/null
 	python3 tools/verify_label_hygiene.py \
-	    build/profile-a/labels.txt build/profile-b/labels.txt \
-	    build/profile-a/chacha20poly1305_lib.o \
-	    build/profile-b/chacha20poly1305_lib.o \
-	    build/lib/objs/chacha20poly1305_lib.o \
-	    build/lib/objs-aead-only/chacha20poly1305_lib.o \
-	    build/lib/objs-app-owned/chacha20poly1305_lib.o
+	    build/profile-a/labels.txt build/profile-a/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory profile-b >/dev/null
+	python3 tools/verify_label_hygiene.py \
+	    build/profile-b/labels.txt build/profile-b/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib-aead-only >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs-aead-only/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib-app-owned >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs-app-owned/chacha20poly1305_lib.o
 	@echo "  --- consumer config (c64-wireguard), issue #122 ---"
 	@$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null
 	python3 tools/verify_label_hygiene.py build/lib/objs/chacha20poly1305_lib.o

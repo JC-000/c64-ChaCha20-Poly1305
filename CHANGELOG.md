@@ -6,7 +6,40 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`make verify` — one target running all six gates** (issue #119), and
+  `tools/build_release.sh` now runs *that* inside the extracted tarball
+  instead of a hand-copied list. Nothing previously invoked the gates as a
+  set: there is no CI, and the release script carried its own list which had
+  **already drifted** — `verify-knob-staleness` and `verify-label-hygiene`
+  were absent, so every tarball was checked with four of six. That is the
+  omission class `build_release.sh`'s own comment records happening once
+  before with `verify_member_isolation.py`. One list now, in the Makefile.
+  `tools/verify_label_hygiene.py` was also missing from the shipped-tools
+  manifest and is added.
+
+  **Proven end-to-end, both directions**, by tagging a throwaway clone:
+  a green tagged tree gives `tarball build + verify (…): OK` and a tarball;
+  a tagged tree carrying the #126 defect gives `MANIFEST ERROR`, quotes
+  `FAIL: declared 17664 < bound 17724`, and produces no tarball. Note this
+  verifies the **tagged** tree — `dist` runs `git archive "$TAG"` and never
+  looks at the working tree.
+
 ### Fixed
+- **`verify-label-hygiene` examined almost nothing when run after another
+  gate.** It listed five configurations as prerequisites and scanned their
+  objects afterwards; §6.3 knob-staleness invalidation deletes every object
+  under `build/` when `CONTRACT_DEFINES` changes, so building `lib` after
+  `profile-a` wiped four of the five objects before the tool ran. Standalone
+  it passed, which is why nothing caught it. It now builds and scans **one
+  configuration at a time**.
+
+  The tool's own positive control is what surfaced it — `FAIL: cannot read
+  … Nothing was examined` rather than a silent pass. The label *files*
+  survived, because each phony link regenerates them, so a check without
+  that control would have reported ok on a run that examined almost nothing.
+  Found only because `make verify` runs the gates in a sequence no developer
+  types by hand.
 - **`RESIDENT_BYTES` under-declared by 60 B for `make lib` with
   `SHARED_CT_MUL_8X8` alone (issue #126).** §5's **unsafe** direction — the
   named hazard, not the harmless one — live since the literal was introduced.
