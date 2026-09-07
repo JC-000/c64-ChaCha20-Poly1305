@@ -1,3 +1,9 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
 
 ### Fixed
@@ -121,6 +127,11 @@ release and was merely invisible. Full detail in
   `make lib-verify-shared` follows the §8.1/§8.3 symbols to their new TUs);
   before, that was `Duplicate external identifier: 'sqtab_init'`.
 - **All five `RESIDENT_BYTES` literals under-reported by 768 B** (#113).
+  (Separately, and not the same fact: the measured column in
+  `src/lib/lib_manifest.s` fell 83–145 B per variant with no byte moving,
+  because the basis counts `.align` fill inside an object's section and not
+  the fill `ld65` inserts between sections. See
+  `docs/RELEASE_NOTES_v0.11.0.md`.)
   The basis summed each object's segments, which cannot see the padding
   ld65 inserts between them — padding this library forces to exist via the
   `align = $100` CT invariant. Measured, all ten rows: `sum + fill = link`
@@ -135,7 +146,8 @@ release and was merely invisible. Full detail in
   variants, each reading the equate from the object it just built. The
   "wave 3 item F" the manifest had asked for since v0.9.0; its absence is
   why five wrong literals shipped through four releases.
-- **`make lib-verify-isolation`** — measures the displaceable set by
+- **`make lib-verify-isolation`** (`tools/verify_member_isolation.py`) —
+  measures the displaceable set by
   differencing builds rather than listing names; reconciles
   `bare + prefixed + other == exports` per member; checks its own
   suppression roster against the switches present in `src/`.
