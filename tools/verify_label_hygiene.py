@@ -21,8 +21,13 @@ crafted file is what makes all three legs demonstrable:
     grep -v ' \\.aead_encrypt$' real.txt > /tmp/nosent.txt \\
                                         && python3 tools/verify_label_hygiene.py /tmp/nosent.txt
 
-Both must exit 1. Exit 0 only ever means "I read a real label file for this
-library and it carried no synthesised macro-local names".
+Both must exit 1. The tool's own exit code is 0 or 1 — a `2` seen at the shell
+is make's code for a failed recipe, not this tool's.
+
+Exit 0 means: every input named was read, each carried its sentinel, and none
+carried a synthesised macro-local name. It covers label files AND objects,
+because only two configurations produce a label file while consumers link the
+archives -- see check_object() for the leak that fact allowed.
 """
 import sys
 

@@ -12,7 +12,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
   expansion and ld65 emits those into the `-Ln` label output, so the four
   expansions (two entry guards in each of `aead_encrypt` and
-  `aead_decrypt`) put **8** such names into every consumer link. The `-` is
+  `aead_decrypt`) put **8** such names into every profile link and into
+  every archive a consumer links. The `-` is
   outside the character set a VICE label parser accepts; c64-wireguard's
   format check rejected `al C:65AA .LOCAL-MACRO_SYMBOL-0006` at the
   v0.11.0 pin, having seen zero at v0.9.0. The two labels are now unnamed
@@ -25,10 +26,15 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `chacha20poly1305_lib.s` and is not exported by the public header — what
   reached consumers was the emitted label, not the macro.
 
-  **Measured:** both profile PRGs are byte-identical to the pre-fix build
-  (`38ea1c83614e7fced3ba6d70e150038d` / `85f19d9b6408d0734f4f6c2c5d67e9ef`),
-  the label diff is exactly the 8 removals with nothing else added or
-  dropped (280→272 profile A, 294→286 profile B), and the archive
+  **Measured:** **all four** profile PRGs are byte-identical to the pre-fix
+  build — profile A `38ea1c83614e7fced3ba6d70e150038d`, profile B
+  `85f19d9b6408d0734f4f6c2c5d67e9ef`, B-rolled
+  `67014ae7b41839deade9e4bdbc8cb455`, B-rolled-outer
+  `2e87bb963a96efa86bf428a0afdef4de`. The fix also clears 8 leaks from each
+  of the two rolled profiles (297→289 and 296→288), which the first draft
+  of this entry did not mention. The label diff is exactly the 8 removals
+  with nothing else added or dropped (280→272 profile A, 294→286
+  profile B), and the archive
   variants' segment sizes are unchanged — though note the three variants
   produce identical segment dumps to each other, so that is one
   measurement reported three times, not three independent ones.
@@ -68,7 +74,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   just as happily on an empty or missing file. It lives in a tool rather
   than in the recipe precisely so those controls can be driven red:
   `profile-a`/`profile-b` are `.PHONY` and regenerate `labels.txt` on every
-  invocation, so a mutation of the file cannot survive the target.
+  invocation, so a mutation of the file cannot survive the target. Four
+  legs were demonstrated failing — the `.local` macro, an empty file, a
+  278-line file with the sentinel removed, and a missing file — and the
+  fifth is the green leg, which by definition was not.
 
   It examines **all five shipped configurations**, not just the two that
   produce a label file. Consumers link the archives, and the three archive
