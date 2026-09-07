@@ -457,6 +457,32 @@ listed in RETIRED.md — and the name is now a local convention rather than
 an obligation, kept because it still tells a reader which targets produce
 artifacts.
 
+**`make verify-label-hygiene`** (issue #117) keeps ca65-synthesised
+symbol names out of what a consumer parses. `.local` inside a macro makes
+ca65 mint a `LOCAL-MACRO_SYMBOL-NNNN` name per expansion, and `ld65` emits
+those into the `-Ln` label file; the `-` is outside the charset a VICE
+label parser accepts, so a consumer's format check rejects the file. The
+addresses were always correct — this is symbol-output noise, not a
+correctness defect. It is **not** offered as evidence for a contract
+clause: it is downstream-tooling hygiene, so it is deliberately excluded
+from the eighteen-check enumeration above.
+
+The check examines all five shipped configurations, not just the two that
+produce a label file, because consumers link the archives and the archive
+variants are assembled with different defines — a `.local` behind an
+`.ifdef` on one of those reaches a consumer while both profile PRGs stay
+clean, which was demonstrated rather than assumed. Two absence legs run
+per label file: an anchored one naming `LOCAL-MACRO_SYMBOL` exactly, and a
+general one rejecting any name outside the consumer charset, whatever
+minted it. Both sit behind positive controls — the file must be non-empty,
+must carry an `.aead_encrypt` sentinel, and the extracted name count must
+reconcile against the raw line count — because a bare "grep finds nothing"
+passes just as happily on an empty file. The controls live in
+`tools/verify_label_hygiene.py` rather than in the recipe precisely so
+they can be driven red: `profile-a`/`profile-b` are `.PHONY` and
+regenerate `labels.txt` on every invocation, so no mutation of that file
+survives the target.
+
 **`make verify-knob-staleness`** pins the §6.3 guard (contract SPEC
 v0.10.5). `CONTRACT_DEFINES` reaches every `ca65` invocation but no make
 *prerequisite*, so before issue #86 a knob change reused every stale

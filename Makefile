@@ -235,7 +235,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_manifest.o \
           $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness lib-verify-isolation test test-fuzz test-fuzz-full
+.PHONY: all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -910,6 +910,33 @@ verify-resident-bytes:
 # reports lib_manifest.o and poly1305_lib.o in all three variants.
 lib-verify-isolation:
 	python3 tools/verify_member_isolation.py
+
+# verify-label-hygiene — issue #117. See tools/verify_label_hygiene.py for the
+# mechanism and, importantly, for why the check lives in a tool: its two
+# positive-control legs cannot be driven red through this target, because
+# profile-a and profile-b are .PHONY and regenerate labels.txt on every
+# invocation. The tool can be pointed at a crafted file; this target cannot.
+#
+# COVERS ALL FIVE SHIPPED CONFIGURATIONS, not just the two that produce a
+# label file. Consumers link the ARCHIVES, and the three archive variants are
+# assembled with different defines, so a `.local` behind an `.ifdef` on one of
+# those leaks to a consumer while both profile PRGs stay clean. That was
+# demonstrated against an earlier version of this target, not theorised.
+#
+# Prove it can fail before trusting it green: restore `.local ok` /
+# `.local reject` in AEAD_DOMAIN_GUARD, `make clean` (do NOT rely on `touch` —
+# make compares
+# mtimes at one-second granularity — a git checkout landing in the same second
+# as the object leaves a stale .o and this target then reads a stale link),
+# rebuild, and it must report 8 leaked names per profile.
+verify-label-hygiene: profile-a profile-b lib lib-aead-only lib-app-owned
+	python3 tools/verify_label_hygiene.py \
+	    build/profile-a/labels.txt build/profile-b/labels.txt \
+	    build/profile-a/chacha20poly1305_lib.o \
+	    build/profile-b/chacha20poly1305_lib.o \
+	    build/lib/objs/chacha20poly1305_lib.o \
+	    build/lib/objs-aead-only/chacha20poly1305_lib.o \
+	    build/lib/objs-app-owned/chacha20poly1305_lib.o
 
 lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
 	@rm -f $(LIB_SHARED_VERIFY_DIR)/*.o $(LIB_SHARED_VERIFY_DIR)/*.exports \

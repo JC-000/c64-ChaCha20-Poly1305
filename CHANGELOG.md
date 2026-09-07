@@ -7,6 +7,53 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Macro-local label names no longer leak into a consumer's label file
+  (issue #117).** `AEAD_DOMAIN_GUARD` used `.local ok` / `.local reject`.
+  ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
+  expansion and ld65 emits those into the `-Ln` label output, so the four
+  expansions (two entry guards in each of `aead_encrypt` and
+  `aead_decrypt`) put **8** such names into every profile link and into
+  every archive a consumer links. The `-` is
+  outside the character set a VICE label parser accepts; c64-wireguard's
+  format check rejected `al C:65AA .LOCAL-MACRO_SYMBOL-0006` at the
+  v0.11.0 pin, having seen zero at v0.9.0. The two labels are now unnamed
+  `:` labels, which synthesise no name at all — the same choice
+  c64-x25519 made in `src/constants.s` for an unrelated reason
+  (cheap-local scoping).
+
+  **A second, latent benefit — measured here, not borrowed.** A named label
+  inside a macro expansion opens a new cheap-local scope and orphans the
+  enclosing proc's `@labels` across the site, and `.local` counts as named.
+  Assembling a proc with an `@label` before the expansion and a reference
+  to it after gives `Error: Symbol '@before' is undefined` for both a
+  `.local` and a fully-named label, while the same proc with an unnamed
+  `:` label — including the guard's exact two-label, three-branch shape
+  expanded twice adjacently — assembles clean. A macro-free control also
+  assembles clean, so the expansion itself is not the cause. This was
+  **latent, never live**: the pre-fix tree assembled, which by construction
+  means no `@` reference crossed a guard — the guards are the first
+  instructions of each entry point. The fix removes the hazard for anyone
+  who later adds an `@label` above them. c64-x25519's `src/constants.s`
+  states the same mechanism; it is cited here as corroboration, having been
+  independently run rather than taken on its word.
+
+  **The addresses were always correct; this was symbol-output noise, not a
+  correctness defect.** `AEAD_DOMAIN_GUARD` is internal to
+  `chacha20poly1305_lib.s` and is not exported by the public header — what
+  reached consumers was the emitted label, not the macro.
+
+  **Measured:** **all four** profile PRGs are byte-identical to the pre-fix
+  build — profile A `38ea1c83614e7fced3ba6d70e150038d`, profile B
+  `85f19d9b6408d0734f4f6c2c5d67e9ef`, B-rolled
+  `67014ae7b41839deade9e4bdbc8cb455`, B-rolled-outer
+  `2e87bb963a96efa86bf428a0afdef4de`. The fix also clears 8 leaks from each
+  of the two rolled profiles (297→289 and 296→288), which the first draft
+  of this entry did not mention. The label diff is exactly the 8 removals
+  with nothing else added or dropped (280→272 profile A, 294→286
+  profile B), and the archive
+  variants' segment sizes are unchanged — though note the three variants
+  produce identical segment dumps to each other, so that is one
+  measurement reported three times, not three independent ones.
 - **Contract §6.1 member isolation (issue #108).** `ld65` links whole
   archive members, so a displaceable name sharing a member with an entry
   point a consumer imports arrives in every link whether the consumer
@@ -35,6 +82,47 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lives in moved.
 
 ### Added
+- `make verify-label-hygiene` (`tools/verify_label_hygiene.py`) — issue #117
+  guard. Rejects any ca65-synthesised `LOCAL-MACRO_SYMBOL` name in the
+  linked label output of both profiles. The absence assertion sits behind
+  two positive controls — the file must be non-empty and must carry an
+  `.aead_encrypt` sentinel — because a bare "grep finds nothing" passes
+  just as happily on an empty or missing file. It lives in a tool rather
+  than in the recipe precisely so those controls can be driven red:
+  `profile-a`/`profile-b` are `.PHONY` and regenerate `labels.txt` on every
+  invocation, so a mutation of the file cannot survive the target. Six
+  legs were demonstrated failing — the `.local` macro; an empty file; a
+  file with the `.aead_encrypt` sentinel removed (crafted from the
+  **pre-fix** labels, so its 278 lines do not reconcile against the
+  shipped artifact — the leg shows the sentinel gate firing ahead of the
+  leak scan, nothing more); a missing file; a name outside the consumer
+  charset carrying no `LOCAL-MACRO_SYMBOL` at all, which is what shows
+  the general leg is independent of the anchored one; and a short line,
+  which breaks the extractor reconciliation. The green leg was by
+  definition not among them.
+
+  A second, more general absence leg rejects any label name outside the
+  charset a consumer's parser accepts — taken from the strictest one we
+  know of, `c64-wireguard/tools/test_build_both_backends.py:47`. That
+  **diverges deliberately** from c64-wireguard's own written position,
+  which rejects a general match on the grounds that it would make their
+  format check unfalsifiable. Their reasoning is correct for a filter that
+  *deletes* lines, which is what they have; this is a detector that *fails
+  the build*, the opposite role — generality makes it catch more and
+  swallows nothing, because nothing is removed.
+
+  It examines **all five shipped configurations**, not just the two that
+  produce a label file. Consumers link the archives, and the three archive
+  variants are assembled with different defines, so a `.local` behind an
+  `.ifdef` on one of those reaches a consumer while both profile PRGs stay
+  clean. Demonstrated, not theorised: a `.local` gated on
+  `LIB_VARIANT_AEAD_ONLY` leaves both profile label files at 0 leaks — the
+  profile-only check reported ok — while the aead-only object carries 4
+  synthesised names and a probe consumer linked against
+  `chacha20poly1305-aead-only.a` gets `al 0045C5 .LOCAL-MACRO_SYMBOL-0000`
+  in its label file. No consumer links that variant today
+  (`c64-wireguard/Makefile:75` takes the full archive), so this closes the
+  gap before it has a victim.
 - `make lib-verify-isolation` (`tools/verify_member_isolation.py`) — §6.1
   guard. The displaceable set is MEASURED, by building the same sources
   with and without each suppression knob and differencing the export
