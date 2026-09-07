@@ -113,7 +113,7 @@ AEAD_ERR_AUTH    = $ff
 ; further load, so the wrapped $0000 pointer is never dereferenced
 ; (chacha20_lib.s:909-915 / :928-930; chacha20poly1305_lib.s:@next_block).
 ;
-; DO NOT "OPTIMISE" THE `bne reject` OUT OF THE AAD EXPANSION. With the
+; DO NOT "OPTIMISE" THE `bne :+` (reject) OUT OF THE AAD EXPANSION. With the
 ; 8-bit aead_aad_len the high-byte add is `adc #0`, so carry out of it
 ; requires ptr_hi = $FF and a carry in, which leaves A = $00 — C=1 then
 ; implies hi==0 and that branch is unreachable. It costs 2 bytes and 0
@@ -125,22 +125,27 @@ AEAD_ERR_AUTH    = $ff
 ; immediate high byte. Clobbers A, X and flags only — both registers are
 ; already documented clobbered by both entry points.
 ; -----------------------------------------------------------------------------
+; UNNAMED LABELS, NOT `.local` (issue #117). ca65 synthesises a
+; `LOCAL-MACRO_SYMBOL-NNNN` name for every `.local` per expansion and ld65
+; emits those into a consumer's `-Ln` label file: four expansions = 8 labels
+; carrying a `-`, which is outside the character set a VICE label parser
+; accepts. Unnamed `:` labels synthesise no name at all, so nothing reaches
+; the consumer. The `; -> ok` / `; -> reject` comments carry the names the
+; three-way analysis above refers to; keep them in step with the branches.
 .macro AEAD_DOMAIN_GUARD ptr, len_lo, len_hi
-.local ok
-.local reject
         clc
         lda ptr
         adc len_lo
         tax                     ; low byte of the 17-bit sum
         lda ptr+1
         adc len_hi
-        bcc ok                  ; sum <= $FFFF -> fits
-        bne reject              ; C set, hi != 0  -> > $10000
+        bcc :++                 ; -> ok      sum <= $FFFF -> fits
+        bne :+                  ; -> reject  C set, hi != 0  -> > $10000
         txa
-        beq ok                  ; C set, sum == $10000 exactly -> legal
-reject: lda #AEAD_ERR_DOMAIN    ; C set, hi = 0, lo != 0 -> > $10000
+        beq :++                 ; -> ok      C set, sum == $10000 exactly -> legal
+:       lda #AEAD_ERR_DOMAIN    ; reject:    C set, hi = 0, lo != 0 -> > $10000
         rts
-ok:
+:                               ; ok:
 .endmacro
 
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)

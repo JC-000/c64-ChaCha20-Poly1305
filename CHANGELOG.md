@@ -7,6 +7,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Macro-local label names no longer leak into a consumer's label file
+  (issue #117).** `AEAD_DOMAIN_GUARD` used `.local ok` / `.local reject`.
+  ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
+  expansion and ld65 emits those into the `-Ln` label output, so the four
+  expansions (two entry guards in each of `aead_encrypt` and
+  `aead_decrypt`) put **8** such names into every consumer link. The `-` is
+  outside the character set a VICE label parser accepts; c64-wireguard's
+  format check rejected `al C:65AA .LOCAL-MACRO_SYMBOL-0006` at the
+  v0.11.0 pin, having seen zero at v0.9.0. The two labels are now unnamed
+  `:` labels, which synthesise no name at all — the same choice
+  c64-x25519 made in `src/constants.s` for an unrelated reason
+  (cheap-local scoping).
+
+  **The addresses were always correct; this was symbol-output noise, not a
+  correctness defect.** `AEAD_DOMAIN_GUARD` is internal to
+  `chacha20poly1305_lib.s` and is not exported by the public header — what
+  reached consumers was the emitted label, not the macro.
+
+  **Measured:** both profile PRGs are byte-identical to the pre-fix build
+  (`38ea1c83614e7fced3ba6d70e150038d` / `85f19d9b6408d0734f4f6c2c5d67e9ef`),
+  the label diff is exactly the 8 removals with nothing else added or
+  dropped (280→272 profile A, 294→286 profile B), and all three archive
+  variants' segment sizes are unchanged.
 - **Contract §6.1 member isolation (issue #108).** `ld65` links whole
   archive members, so a displaceable name sharing a member with an entry
   point a consumer imports arrives in every link whether the consumer
@@ -35,6 +58,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lives in moved.
 
 ### Added
+- `make verify-label-hygiene` (`tools/verify_label_hygiene.py`) — issue #117
+  guard. Rejects any ca65-synthesised `LOCAL-MACRO_SYMBOL` name in the
+  linked label output of both profiles. The absence assertion sits behind
+  two positive controls — the file must be non-empty and must carry an
+  `.aead_encrypt` sentinel — because a bare "grep finds nothing" passes
+  just as happily on an empty or missing file. It lives in a tool rather
+  than in the recipe precisely so those controls can be driven red:
+  `profile-a`/`profile-b` are `.PHONY` and regenerate `labels.txt` on every
+  invocation, so a mutation of the file cannot survive the target. All
+  five legs were demonstrated failing before the check was trusted green.
 - `make lib-verify-isolation` (`tools/verify_member_isolation.py`) — §6.1
   guard. The displaceable set is MEASURED, by building the same sources
   with and without each suppression knob and differencing the export
