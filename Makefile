@@ -915,6 +915,18 @@ CONSUMER_DEFINES = -D SHARED_SQTAB_INIT=1 -D SHARED_CT_MUL_8X8=1 \
 # exercised only by the profile-b-rolled PRG target and by no archive leg.
 ROLLED_DEFINES = -D POLY1305_MULTIPLY_ROLLED=1
 
+# The SECOND unmodelled footprint axis, found by the #126 review. Same shape as
+# the multiply one and worse in the respect that matters: `CHACHA20_USE_WORD32`
+# is a documented consumer knob (docs/API.md, docs/INTEGRATION.md) that appears
+# NOWHERE in lib_manifest.s, and src/lib/chacha20_lib.s swaps macro expansions
+# between an inline form and a pointer-mode form — a SUBSTITUTION, not a
+# subtraction, so nothing structural holds the sign. Measured uniformly -488 B
+# across every target and both profiles (Profile B lib 17861 -> 17373, Profile A
+# 16588 -> 16100), orthogonal to the other knobs. Safe-direction today; no
+# consumer passes it. That is shipped-surface coverage, which CLAUDE.md §1 says
+# still counts.
+WORD32_DEFINES = -D CHACHA20_USE_WORD32=1
+
 verify-resident-bytes:
 	@set -e; \
 	for prof in "" "-D POLY1305_PROFILE_LONG=1"; do \
@@ -933,8 +945,16 @@ verify-resident-bytes:
 	echo "  --- consumer config (c64-wireguard): lib + CONSUMER_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	for sw in "-D SHARED_SQTAB_INIT=1" "-D SHARED_CT_MUL_8X8=1"; do \
+	  echo "  --- §8 deferral, one switch at a time: lib $$sw (issue #126) ---"; \
+	  $(MAKE) --no-print-directory lib CONTRACT_DEFINES="$$sw" >/dev/null; \
+	  python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	done; \
 	echo "  --- multiply axis: lib + ROLLED_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(ROLLED_DEFINES)" >/dev/null; \
+	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	echo "  --- word32 axis: lib + WORD32_DEFINES ---"; \
+	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(WORD32_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
 	$(MAKE) --no-print-directory lib >/dev/null; \
 	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles, plus the consumer's own config and the multiply axis"

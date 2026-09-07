@@ -7,6 +7,57 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`RESIDENT_BYTES` under-declared by 60 B for `make lib` with
+  `SHARED_CT_MUL_8X8` alone (issue #126).** §5's **unsafe** direction — the
+  named hazard, not the harmless one — live since the literal was introduced.
+  The cause is entirely define-side: `lib-app-owned` passes **both** deferral
+  switches, so 17664 was measured with both in effect while the branch keyed on
+  only one. The branch now requires both, which is the configuration that
+  figure actually covers. The target is irrelevant — `make lib` with both
+  switches and `make lib-app-owned` measure identically (8 sections, sum 16544,
+  bound 17564). Switches are exactly additive on target `lib`, Profile B: none
+  17861, SQTAB only 17701 (−160), CT_MUL only 17724 (−137), both 17564 (−297).
+
+  **Two honest caveats.** The two-arm form is kept deliberately: collapsing to a
+  single 17920 for the whole non-aead-only Profile B arm would be more robust
+  but would raise the figure `c64-wireguard` reads from 17664 to 17920, trading
+  a real consumer's tightness for margin it does not need. And the correctness
+  of both arms rests on every knob being subtractive relative to the no-switch
+  build — true today across a 288-configuration sweep, not structurally
+  guaranteed, and the same caveat the multiply and word32 axes carry.
+
+  **The defect's framing is measurand-dependent, and the fix is not.** Under
+  this repo's basis as it ships — od65 sum plus fragment fill plus a 255 B
+  per-segment start charge — 17664 < 17724 and the literal is wrong. Contract
+  PR c64-lib-contract#200, unmerged, would exclude the start charge as the
+  consumer's; on that basis the bound is 17469 and the original figure clears
+  it. So this is a real defect under the only basis that is currently tagged,
+  and its description as a *live* §5 unsafe-direction failure would not survive
+  that clause. 17920 is safe under both bases either way. Recorded because the
+  contract PR cited this issue as evidence and has since withdrawn the
+  citation on exactly this ground.
+
+  | target `lib` | bound | declared before | after |
+  |---|---|---|---|
+  | no switches | 17861 | 17920 | 17920 |
+  | `SHARED_SQTAB_INIT` alone | 17701 | 17920 | 17920 |
+  | **`SHARED_CT_MUL_8X8` alone** | **17724** | **17664 — under by 60** | **17920** |
+  | both | 17564 | 17664 | 17664 |
+
+  **Consumer disclosure: no consumer is affected and no declared value a
+  consumer reads today changes.** `c64-wireguard` passes both switches and
+  still gets 17664; both profile PRGs remain byte-identical to v0.11.0. The
+  correction only *raises* a figure for a configuration nothing currently
+  builds, so it is safe-direction and the ABI counter holds — §8.3 nonetheless
+  permits deferring `ct_mul_8x8` independently, so the combination is one the
+  contract invites.
+
+  Found while supplying measurements to calibrate a draft §5 slack clause on
+  the contract side; enumerating the branch boundaries to answer their question
+  turned it up. Four gates and three adversarial review rounds had not, because
+  the gap was **single-switch coverage**: every leg that set a `SHARED_*`
+  switch set both of them, so the one-switch case existed in no configuration
+  anything built.
 - **Macro-local label names no longer leak into a consumer's label file
   (issue #117).** `AEAD_DOMAIN_GUARD` used `.local ok` / `.local reject`.
   ca65 synthesises a `LOCAL-MACRO_SYMBOL-NNNN` name for each `.local` per
@@ -56,6 +107,25 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement reported three times, not three independent ones.
 
 ### Added
+- **`verify-resident-bytes` pins the `CHACHA20_USE_WORD32` axis** — the second
+  unmodelled footprint axis, found by #126's review and folded in rather than
+  deferred, since this branch's whole argument is that single-axis coverage was
+  missing. It is a documented consumer knob (`docs/API.md`,
+  `docs/INTEGRATION.md`) appearing **nowhere** in `lib_manifest.s`, and
+  `chacha20_lib.s` *swaps* macro expansions between an inline and a
+  pointer-mode form — a substitution, not a subtraction, so nothing structural
+  holds the sign. Measured uniformly **−488 B** across every target and both
+  profiles, orthogonal to the other knobs; safe-direction today and no consumer
+  passes it, which makes it shipped-surface coverage. Eleven legs total. Driven
+  red by growing the word32 path 800 B past the default: ten legs green,
+  `FAIL: declared 17920 < bound 18173`, exit 2.
+- **`verify-resident-bytes` builds each §8 deferral switch on its own**
+  (issue #126) — two more legs, ten in total. The single-switch combinations
+  were the gap that let the under-declaration above live: every existing leg
+  that set a `SHARED_*` switch set both. Driven red by reverting the branch
+  fix: **8** legs green, `FAIL: declared 17664 < bound 17724`, exit 2 — the
+  tenth never runs, because the recipe is under `set -e` and aborts at the
+  failure.
 - **Both footprint and label gates now build the configuration the only real
   consumer builds** (issue #122). `c64-wireguard` runs `make lib
   CONTRACT_DEFINES=...` with four defines
