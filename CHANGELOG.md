@@ -101,9 +101,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`c64-wireguard/src/contract_asserts.s:308-311`, 8921 B of slack). So the
   cost is latent here, not live — but "safe superset" was too strong and is
   withdrawn. Whether §5 additionally requires the figure to describe the
-  configuration that ships, rather than merely to round up from it, is being
-  worked out at c64-lib-contract#199; this release does not act on an
-  interpretation still under discussion.
+  configuration that ships, rather than merely to round up from it, was raised
+  at c64-lib-contract#199 and **retracted there**: §6.4 is not violated and
+  §5's round-up rule is satisfied by this manifest. What survives from that
+  exchange is the sharper property this release's own measurement found —
+  **§5's "round up, never down" is only meaningful if every axis that moves
+  the footprint is modelled.** A subtractive gate guarantees the direction; a
+  body *swap* does not, and the multiply axis is a swap that the manifest does
+  not model. Safe today because the default is the axis maximum; a future
+  variant larger than the default would understate, which is §5's actual named
+  hazard. The contract side is measuring that across the other four adopters
+  before proposing anything, so nothing here changes yet — the two new legs
+  are what pin it in the meantime.
 
   A second new leg pins the rest of that axis: `ROLLED_DEFINES`
   (`POLY1305_MULTIPLY_ROLLED`) is a documented consumer knob
