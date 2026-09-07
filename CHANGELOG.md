@@ -1,9 +1,3 @@
-# Changelog
-
-All notable changes to this project are documented in this file.
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
 
 ### Fixed
@@ -13,8 +7,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expansion and ld65 emits those into the `-Ln` label output, so the four
   expansions (two entry guards in each of `aead_encrypt` and
   `aead_decrypt`) put **8** such names into every profile link and into
-  every archive a consumer links. The `-` is
-  outside the character set a VICE label parser accepts; c64-wireguard's
+  every archive a consumer links. The `-` is outside the character set a
+  VICE label parser accepts; c64-wireguard's
   format check rejected `al C:65AA .LOCAL-MACRO_SYMBOL-0006` at the
   v0.11.0 pin, having seen zero at v0.9.0. The two labels are now unnamed
   `:` labels, which synthesise no name at all — the same choice
@@ -50,41 +44,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the two rolled profiles (297→289 and 296→288), which the first draft
   of this entry did not mention. The label diff is exactly the 8 removals
   with nothing else added or dropped (280→272 profile A, 294→286
-  profile B), and the archive
-  variants' segment sizes are unchanged — though note the three variants
+  profile B), and the archive variants' segment sizes are unchanged —
+  though note the three variants
   produce identical segment dumps to each other, so that is one
   measurement reported three times, not three independent ones.
-- **Contract §6.1 member isolation (issue #108).** `ld65` links whole
-  archive members, so a displaceable name sharing a member with an entry
-  point a consumer imports arrives in every link whether the consumer
-  wants it or not. Two members did that, and both are now split:
-  - the SPEC §8.4 precalc enumeration (nine deprecated bare
-    `LIB_PRECALC_*` equates plus their nine prefixed counterparts) moved
-    out of `lib_manifest.o` into its own `precalc_manifest.o`, away from
-    the §5 aggregates and §8 masks — which are counterparts of nothing
-    displaceable, so their presence kept the bare triples un-droppable in
-    any composed link. The hazard here is **library-versus-library**: no
-    consumer defines `LIB_PRECALC_sqtab_SHARED`, but every sibling §8.4
-    adopter exports the identical bare name.
-  - `poly1305_lib.o` became seven members, so the eight §8.1/§8.3 names an
-    `APP_OWNED` consumer may define itself (`mul_tables_init`,
-    `sqtab_init`, `ct_mul_8x8`, `mul_8x8`, `poly_prod_lo`, `poly_prod_hi`,
-    `smc_sum_a_imm`, `smc_diff_a_imm`) no longer ride with the nine
-    Poly1305 entry points. **Measured:** an APP_OWNED consumer that
-    supplies its own §8.1/§8.3 bodies and links the DEFAULT archive died
-    at v0.10.0 with `ld65: Error: Duplicate external identifier:
-    'sqtab_init'`, and now links clean with none of the four displaceable
-    members pulled. That consumer needs no rebuild of this library and no
-    deferral define, which is the case §6.1 exists for.
-
-  **All four profile PRGs are byte-identical to v0.10.0** and every
-  variant's exported symbol set is unchanged — only which member a symbol
-  lives in moved.
 
 ### Added
 - `make verify-label-hygiene` (`tools/verify_label_hygiene.py`) — issue #117
-  guard. Rejects any ca65-synthesised `LOCAL-MACRO_SYMBOL` name in the
-  linked label output of both profiles. The absence assertion sits behind
+  guard. Rejects any ca65-synthesised `LOCAL-MACRO_SYMBOL` name reaching a
+  consumer, in the label output and in the built objects alike. The
+  absence assertion sits behind
   two positive controls — the file must be non-empty and must carry an
   `.aead_encrypt` sentinel — because a bare "grep finds nothing" passes
   just as happily on an empty or missing file. It lives in a tool rather
@@ -123,33 +92,6 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in its label file. No consumer links that variant today
   (`c64-wireguard/Makefile:75` takes the full archive), so this closes the
   gap before it has a victim.
-- `make lib-verify-isolation` (`tools/verify_member_isolation.py`) — §6.1
-  guard. The displaceable set is MEASURED, by building the same sources
-  with and without each suppression knob and differencing the export
-  tables, never listed; per-member category counts are reconciled against
-  each member's total export count so a mis-parsed `od65` dump fails
-  loudly instead of reading as a clean zero. Verified to go red on
-  `v0.10.0`, reporting `lib_manifest.o` and `poly1305_lib.o`.
-- `test_consumer/app-owned-default-link` — the same property demonstrated
-  at the link rather than in the symbol table.
-- Page-alignment asserts on `r_tab_lo` / `r_tab_hi` (`constants_lib.s`,
-  Profile A). They are secret-indexed `abs,x` by `poly_h` and were the one
-  page-sensitive table in this library with no check of any kind: they are
-  absolute literals, so no `.align` covers them. `error` rather than
-  `lderror` because the operands are assemble-time constants.
-
-### Changed
-- `make lib-verify-shared` follows the §8.1/§8.3 symbols to their new TUs,
-  and gained a structural sentinel for the deferral dumps, which are now
-  empty by design and so cannot carry a name sentinel. It also now
-  requires the canonical names to be imported in the OWNER build, not only
-  the deferral build.
-- The `RESIDENT_BYTES` measured column in `src/lib/lib_manifest.s` fell by
-  83–145 B per variant with no byte moving: the basis counts `.align` fill
-  inside an object's section and not the fill `ld65` inserts between
-  sections, and the split moved that pad from the first bucket to the
-  second. The declared literals are unchanged and still over-report, which
-  is the safe direction.
 
 ## [0.11.0] - 2026-09-06
 
@@ -174,7 +116,9 @@ release and was merely invisible. Full detail in
   the same bare `sqtab` triple. `poly1305_lib.o` mixed 8 `APP_OWNED` names
   with 9 Poly1305 entry points. Split into `precalc_manifest.s` and seven
   Poly1305 TUs grouped by which switch drops each name. A consumer
-  supplying its own §8.1/§8.3 bodies can now link the **default** archive;
+  supplying its own §8.1/§8.3 bodies can now link the **default** archive
+  (demonstrated at the link by `test_consumer/app-owned-default-link`, and
+  `make lib-verify-shared` follows the §8.1/§8.3 symbols to their new TUs);
   before, that was `Duplicate external identifier: 'sqtab_init'`.
 - **All five `RESIDENT_BYTES` literals under-reported by 768 B** (#113).
   The basis summed each object's segments, which cannot see the padding
