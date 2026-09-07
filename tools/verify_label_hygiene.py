@@ -29,10 +29,27 @@ carried a synthesised macro-local name. It covers label files AND objects,
 because only two configurations produce a label file while consumers link the
 archives -- see check_object() for the leak that fact allowed.
 """
+import re
 import sys
 
 SENTINEL = ".aead_encrypt"
 LEAK = "LOCAL-MACRO_SYMBOL"
+
+# The charset a consumer's label parser accepts. Taken from the strictest one
+# we know of: c64-wireguard/tools/test_build_both_backends.py:47,
+#   LABEL_LINE_RE = re.compile(r"^al C:[0-9a-fA-F]{4} \.[A-Za-z_0-9@]+$")
+# `-` is what fails it, which is the whole of issue #117.
+#
+# DELIBERATE DIVERGENCE FROM A SIBLING'S WRITTEN POSITION. c64-wireguard's
+# Makefile comment rejects a general "drop any name the parser would reject"
+# match, reasoning it would make their format check unfalsifiable by silently
+# swallowing every future malformed line. That is correct for a FILTER THAT
+# DELETES LINES, which is what they have. This is a DETECTOR THAT FAILS THE
+# BUILD -- the opposite role: generality here makes it catch more, and nothing
+# is swallowed because nothing is removed. Both legs are kept: the anchored
+# LOCAL-MACRO_SYMBOL leg names the known defect precisely, and this one
+# generalises past that one ca65 internal string.
+NAME_OK = re.compile(r"^\.[A-Za-z0-9_@]+$")
 
 # Object-level sentinel and leak marker. The synthesised name is stored in the
 # object's symbol table -- that is how ld65 has it to emit -- so a raw byte
@@ -109,8 +126,25 @@ def check(path):
                        f"macro-local label(s) (issue #117):\n{body}\n"
                        f"      Use unnamed ':' labels in the macro, not '.local'.")
 
+    # Second, more general leg: any name outside the charset a consumer's
+    # parser accepts, whatever produced it. Reconcile the extraction against
+    # the raw line count first -- an extractor that silently drops rows would
+    # make this leg agree with anything.
+    names = [parts[2] for parts in (ln.split() for ln in lines) if len(parts) >= 3]
+    if len(names) != len(lines):
+        return False, (f"FAIL: {path}: extracted {len(names)} names from "
+                       f"{len(lines)} lines.\n"
+                       f"      The extractor is dropping rows, so a clean result "
+                       f"from it means nothing.")
+
+    bad = sorted({n for n in names if not NAME_OK.match(n)})
+    if bad:
+        body = "\n".join("        " + n for n in bad)
+        return False, (f"FAIL: {path} carries {len(bad)} label name(s) outside the "
+                       f"charset a\n      consumer's label parser accepts:\n{body}")
+
     return True, (f"ok — {path}: {len(lines)} labels, sentinel present, "
-                  f"0 synthesised macro-locals")
+                  f"{len(names)} names all in charset, 0 synthesised macro-locals")
 
 
 def main(argv):

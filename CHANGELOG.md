@@ -74,10 +74,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   just as happily on an empty or missing file. It lives in a tool rather
   than in the recipe precisely so those controls can be driven red:
   `profile-a`/`profile-b` are `.PHONY` and regenerate `labels.txt` on every
-  invocation, so a mutation of the file cannot survive the target. Four
-  legs were demonstrated failing — the `.local` macro, an empty file, a
-  278-line file with the sentinel removed, and a missing file — and the
-  fifth is the green leg, which by definition was not.
+  invocation, so a mutation of the file cannot survive the target. Six
+  legs were demonstrated failing — the `.local` macro; an empty file; a
+  file with the `.aead_encrypt` sentinel removed (crafted from the
+  **pre-fix** labels, so its 278 lines do not reconcile against the
+  shipped artifact — the leg shows the sentinel gate firing ahead of the
+  leak scan, nothing more); a missing file; a name outside the consumer
+  charset carrying no `LOCAL-MACRO_SYMBOL` at all, which is what shows
+  the general leg is independent of the anchored one; and a short line,
+  which breaks the extractor reconciliation. The green leg was by
+  definition not among them.
+
+  A second, more general absence leg rejects any label name outside the
+  charset a consumer's parser accepts — taken from the strictest one we
+  know of, `c64-wireguard/tools/test_build_both_backends.py:47`. That
+  **diverges deliberately** from c64-wireguard's own written position,
+  which rejects a general match on the grounds that it would make their
+  format check unfalsifiable. Their reasoning is correct for a filter that
+  *deletes* lines, which is what they have; this is a detector that *fails
+  the build*, the opposite role — generality makes it catch more and
+  swallows nothing, because nothing is removed.
 
   It examines **all five shipped configurations**, not just the two that
   produce a label file. Consumers link the archives, and the three archive
