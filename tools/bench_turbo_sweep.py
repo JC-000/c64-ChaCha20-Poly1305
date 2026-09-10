@@ -37,11 +37,8 @@ import time
 from c64_test_harness import (
     Labels,
     create_manager,
-    wait_for_text,
-    write_bytes,
-    keyboard,
+    run_prg_via_sys,
 )
-from c64_test_harness.backends.ultimate64_helpers import set_turbo_mhz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import benchmark_chacha20_poly1305 as bench  # noqa: E402
@@ -89,28 +86,27 @@ def run_sweep(speeds, samples):
     with mgr:
         with mgr.instance() as target:
             transport = target.transport
-            client = getattr(transport, "client", None) or transport._client
-            product = client.get_info().get("product", "unknown")
+            # Public accessor for the bodyless GET /v1/info product read
+            # (skill principle #20: transport.client, never the private
+            # underscore-prefixed attribute).
+            product = transport.client.get_info().get("product", "unknown")
             print(f"Device: {product}")
 
-            client.reset()
-            time.sleep(2.0)
-            set_turbo_mhz(client, 1)
+            # Normalize to 1 MHz through the transport, then load through
+            # the harness public API (chunked write_memory + SYS). run_prg_via_sys's
+            # internal soft reset preserves the 1 MHz baseline before the
+            # sweep drives it up.
+            transport.set_speed(1)
             try:
-                _ = wait_for_text(transport, "READY", timeout=30.0)
                 with open(DEFAULT_BUILD_PRG, "rb") as f:
                     prg = f.read()
-                load_addr = prg[0] | (prg[1] << 8)
-                write_bytes(transport, load_addr, prg[2:])
-                keyboard.send_text(transport, "RUN\r")
-                time.sleep(2.0)
-                _ = wait_for_text(transport, "READY", timeout=30.0)
+                run_prg_via_sys(target, prg)
 
                 bench.install_wrapper(transport)
 
                 for mhz in speeds:
                     try:
-                        set_turbo_mhz(client, mhz)
+                        transport.set_speed(mhz)
                     except Exception as exc:  # firmware-rejected speed
                         skipped.append((mhz, str(exc)))
                         print(f"-- {mhz} MHz: rejected by firmware "
@@ -143,7 +139,7 @@ def run_sweep(speeds, samples):
                               f"spread {max(vals) - ticks})")
             finally:
                 # Device is shared: never leave turbo enabled.
-                set_turbo_mhz(client, 1)
+                transport.set_speed(1)
     return product, rows, skipped
 
 

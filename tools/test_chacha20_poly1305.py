@@ -25,7 +25,6 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
     write_bytes,
     wait_for_text,
@@ -34,6 +33,11 @@ from c64_test_harness import (
 # Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
 # trampoline + sentinel poll. Returns the post-JSR A register value.
 from _u64_helpers import run_subroutine
+
+# Harness-blessed, non-leaking PRG load path (chunked write_memory + SYS
+# trigger, verified head-write). Routes the U64 sideload through the harness
+# so chunking and /Temp hygiene stay in one place.
+from c64_test_harness import run_prg_via_sys
 
 # Independent ground-truth oracle: pyca/cryptography. Used by the
 # "cross-check vs pyca" tests below so that the expected values we compare
@@ -1105,51 +1109,33 @@ def main():
 
         # UnifiedManager.acquire() does not auto-load a PRG on the U64
         # backend (unlike VICE, where ViceConfig.prg_path is loaded by
-        # ViceProcess). Side-load the PRG via PUT writemem (avoiding the
-        # POST-body endpoints, which can return 'Could not read data
-        # from attachment' on degraded U64E fw 3.14d state) and drive
-        # `RUN` through the keyboard buffer to autostart.
+        # ViceProcess). Load it through the harness's public API so the
+        # harness — not this tool — owns PUT/POST selection, 84-byte
+        # chunking, and /Temp hygiene (the single point that filters
+        # device traffic).
         if inst.backend == "u64":
-            # Harness gap: TestTarget does not expose the underlying
-            # Ultimate64Client; reach for it via the transport.
-            client = inst.transport._client
-            # Bump the PUT/POST split threshold so write_bytes never
-            # touches the POST writemem path. The firmware caps PUT at
-            # 128 bytes/call; write_bytes already chunks at 84 internally.
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            # A previous test session may have left the CPU parked in
-            # the trampoline at $0360, so BASIC isn't draining the
-            # keyboard buffer. A soft reset returns the C64 to BASIC
-            # READY without resetting the FPGA / DMA controller.
-            client.reset()
-            # Belt-and-braces: client.reset() is a 6510 reset and does
-            # NOT touch FPGA-level turbo state. Force 1 MHz so a sibling
-            # agent's bench at e.g. 48 MHz cannot leak into this run.
-            from c64_test_harness.backends.ultimate64_helpers import (
-                set_turbo_mhz,
-            )
-            set_turbo_mhz(client, 1)
-            time.sleep(2.0)
-            grid = wait_for_text(inst.transport, "READY", timeout=30.0)
-            if grid is None:
-                print("  warning: BASIC READY prompt not seen within 30s after reset")
+            # Normalize CPU speed through the transport first: turbo state
+            # survives a soft reset, so a sibling agent's leftover 48 MHz
+            # would otherwise leak into this run. set_speed(1) is
+            # "1 MHz / warp off / turbo off"; run_prg_via_sys's internal
+            # soft reset preserves it.
+            inst.transport.set_speed(1)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            print(f"Sideloading PRG: load_addr=${load_addr:04X}, "
-                  f"body={len(prg) - 2} bytes")
+            print(f"Loading PRG via run_prg_via_sys: body={len(prg) - 2} bytes")
             t_load = time.time()
-            write_bytes(inst.transport, load_addr, prg[2:])
-            print(f"  sideload done in {time.time() - t_load:.1f}s")
-            keyboard.send_text(inst.transport, "RUN\r")
-            time.sleep(2.0)
-            grid = wait_for_text(inst.transport, "READY", timeout=30.0)
-            if grid is None:
-                print("  warning: BASIC READY prompt not seen within 30s after RUN")
-            # The reset above wiped the trampoline at $0360, so any
-            # cached "installed" state from a prior session no longer
-            # corresponds to live RAM. Clearing the attribute makes the
-            # very next run_subroutine() reinstall + re-trigger.
+            # run_prg_via_sys resets to BASIC READY, writes the body via
+            # chunked write_memory, and types the stub's SYS. The harness —
+            # not this tool — selects PUT vs POST per firmware capability
+            # and owns /Temp hygiene: bodyless PUT on the leaky firmwares
+            # that can wedge (C64U 1.x, U64E 3.14), GC-collected POST on
+            # the fixed 3.15+.
+            run_prg_via_sys(inst, prg)
+            print(f"  load done in {time.time() - t_load:.1f}s")
+            # run_prg_via_sys reset the machine, wiping the trampoline at
+            # $0360, so any cached "installed" state from a prior session
+            # no longer corresponds to live RAM. Clearing the attribute
+            # makes the very next run_subroutine() reinstall + re-trigger.
             if hasattr(inst, "_u64_shim_state"):
                 delattr(inst, "_u64_shim_state")
         else:

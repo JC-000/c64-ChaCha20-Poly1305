@@ -31,7 +31,6 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
     write_bytes,
     wait_for_text,
@@ -40,6 +39,10 @@ from c64_test_harness import (
 # Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
 # trampoline + sentinel poll. Returns the post-JSR A register value.
 from _u64_helpers import run_subroutine
+
+# Harness-blessed, non-leaking PRG load path (chunked write_memory + SYS
+# trigger). Routes the U64 sideload through the harness public API.
+from c64_test_harness import run_prg_via_sys
 
 PRG_PATH = os.path.join(PROJECT_ROOT, "build", "profile-b", "c64_chacha20_poly1305.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "profile-b", "labels.txt")
@@ -127,39 +130,21 @@ def main() -> int:
         transport = inst.transport
 
         # UnifiedManager.acquire() does not auto-load a PRG on the U64
-        # backend. Side-load via PUT writemem (avoiding the POST endpoints
-        # that returned 'Could not read data from attachment' on degraded
-        # U64E fw 3.14d state) and drive `RUN` through the keyboard buffer.
+        # backend. Load it through the harness public API so the harness
+        # owns PUT/POST selection, chunking, and /Temp hygiene (the
+        # single point that filters device traffic).
         if inst.backend == "u64":
-            client = inst.transport._client
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            client.reset()
-            # Belt-and-braces: client.reset() does not touch FPGA-level
-            # turbo state. Force 1 MHz so a sibling agent's bench at e.g.
-            # 48 MHz does not leak into this run (or vice versa).
-            from c64_test_harness.backends.ultimate64_helpers import (
-                set_turbo_mhz,
-            )
-            set_turbo_mhz(client, 1)
-            time.sleep(2.0)
-            grid = wait_for_text(transport, "READY", timeout=30.0)
-            if grid is None:
-                print("  warning: BASIC READY prompt not seen within 30s "
-                      "after reset")
+            # Normalize CPU speed through the transport first: turbo
+            # survives a soft reset, so a sibling agent's leftover 48 MHz
+            # would otherwise leak into this run (or vice versa).
+            # run_prg_via_sys's internal soft reset preserves it.
+            transport.set_speed(1)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            print(f"Sideloading PRG: load_addr=${load_addr:04X}, "
-                  f"body={len(prg) - 2} bytes")
+            print(f"Loading PRG via run_prg_via_sys: body={len(prg) - 2} bytes")
             t_load = time.time()
-            write_bytes(transport, load_addr, prg[2:])
-            print(f"  sideload done in {time.time() - t_load:.1f}s")
-            keyboard.send_text(transport, "RUN\r")
-            time.sleep(2.0)
-            grid = wait_for_text(transport, "READY", timeout=30.0)
-            if grid is None:
-                print("  warning: BASIC READY prompt not seen within 30s "
-                      "after RUN")
+            run_prg_via_sys(inst, prg)
+            print(f"  load done in {time.time() - t_load:.1f}s")
         else:
             time.sleep(1.0)  # let BASIC settle before first jsr
 

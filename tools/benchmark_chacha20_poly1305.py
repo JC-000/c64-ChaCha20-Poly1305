@@ -59,13 +59,12 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
+    run_prg_via_sys,
     wait_for_text,
     write_bytes,
     jsr,
 )
-from c64_test_harness.backends.ultimate64_helpers import set_turbo_mhz
 
 from _u64_helpers import run_subroutine
 
@@ -551,34 +550,23 @@ def _run_u64(samples):
     with mgr:
         with mgr.instance() as target:
             transport = target.transport
-            client = transport._client
 
-            # Sideload + RUN to reach the same BASIC-READY state VICE
-            # gets via -autostart. Mirrors tools/audit_cross_check.py.
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            client.reset()
-            time.sleep(2.0)
-            # Force CPU back to 1 MHz: client.reset() is a soft 6510
-            # reset and does NOT touch the FPGA-level turbo/CPU-speed
-            # config. If a prior session (this agent or another) left
-            # the U64 in turbo mode (e.g. 48 MHz), the CIA timer counts
-            # at the slower CIA rate while the CPU runs faster, and our
-            # wrapper measures only ~1/N of the real cycle count
-            # (e.g. ~500 cy spinner reads as ~11 cy at 48 MHz). Setting
-            # 1 MHz here is idempotent and cheap, and makes the bench
-            # robust to leftover FPGA state from other agents sharing
-            # the device.
-            set_turbo_mhz(client, 1)
-            _ = wait_for_text(transport, "READY", timeout=30.0)
+            # Reach the same BASIC-READY state VICE gets via -autostart,
+            # through the harness public API: run_prg_via_sys does the
+            # chunked write_memory + SYS trigger, so the harness —
+            # not this tool — owns chunking and /Temp hygiene.
+            #
+            # Normalize CPU speed first. set_speed(1) is "1 MHz / warp
+            # off / turbo off"; run_prg_via_sys's internal soft reset
+            # preserves it. This matters for the CIA-timer wrapper: if a
+            # prior session left the U64 in turbo (e.g. 48 MHz), the CIA
+            # counts at the slower rate while the CPU runs faster and the
+            # wrapper reads only ~1/N of the true cycle count (~500 cy
+            # reads as ~11 at 48 MHz).
+            transport.set_speed(1)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            write_bytes(transport, load_addr, prg[2:])
-            keyboard.send_text(transport, "RUN\r")
-            time.sleep(2.0)
-            grid = wait_for_text(transport, "READY", timeout=30.0)
-            if grid is None and VERBOSE:
-                print("  warning: BASIC READY prompt not seen within 30s")
+            run_prg_via_sys(target, prg)
 
             install_wrapper(transport)
             calib_samples = 20
@@ -829,29 +817,16 @@ def _sweep_collect_u64(samples, sizes):
     with mgr:
         with mgr.instance() as target:
             transport = target.transport
-            client = transport._client
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            client.reset()
-            time.sleep(2.0)
-            # Force CPU back to 1 MHz: client.reset() is a soft 6510
-            # reset and does NOT touch the FPGA-level turbo/CPU-speed
-            # config. If a prior session (this agent or another) left
-            # the U64 in turbo mode (e.g. 48 MHz), the CIA timer counts
-            # at the slower CIA rate while the CPU runs faster, and our
-            # wrapper measures only ~1/N of the real cycle count
-            # (e.g. ~500 cy spinner reads as ~11 cy at 48 MHz). Setting
-            # 1 MHz here is idempotent and cheap, and makes the bench
-            # robust to leftover FPGA state from other agents sharing
-            # the device.
-            set_turbo_mhz(client, 1)
-            _ = wait_for_text(transport, "READY", timeout=30.0)
+
+            # Load through the harness public API (chunked write_memory + SYS via
+            # run_prg_via_sys), normalizing CPU speed first so leftover
+            # turbo cannot poison the CIA-timer wrapper. See _run_u64 for
+            # the full rationale; run_prg_via_sys's soft reset preserves
+            # the 1 MHz setting.
+            transport.set_speed(1)
             with open(PRG_PATH, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            write_bytes(transport, load_addr, prg[2:])
-            keyboard.send_text(transport, "RUN\r")
-            time.sleep(2.0)
-            _ = wait_for_text(transport, "READY", timeout=30.0)
+            run_prg_via_sys(target, prg)
 
             install_wrapper(transport)
             calib_samples = 20

@@ -22,9 +22,11 @@ affects the production hot path:
 Methodology mirrors the existing bench: SEI; save CIA; CIA setup; JSR
 target; CIA stop; restore CIA; CLI; RTS at $C080. min-of-N reduction.
 calibrate() subtracts wrapper overhead. verify_wrapper() sanity-checks
-against a 501-cy stub. set_turbo_mhz(client, 1) is called after
-client.reset() on the U64 path (per project memory: U64E turbo state
-survives client.reset() and CIA timer reads ~1/N at turbo N MHz).
+against a 501-cy stub. On the U64 path transport.set_speed(1) normalizes
+the CPU to 1 MHz before loading (per project memory: U64E turbo state
+survives a soft reset and the CIA timer reads ~1/N at turbo N MHz), and
+run_prg_via_sys() — whose internal soft reset preserves that speed —
+loads the PRG through the harness public API.
 
 Default mode emits a JSON sidecar at docs/BENCH_REPORT.md.json and a
 human-readable docs/BENCH_REPORT.md. `--check <baseline.json>` diffs
@@ -62,13 +64,12 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
+    run_prg_via_sys,
     wait_for_text,
     write_bytes,
     jsr,
 )
-from c64_test_harness.backends.ultimate64_helpers import set_turbo_mhz
 
 # Reuse the wrapper installation + calibration + measurement primitives
 # from the existing bench (single source of truth for the CIA wrapper).
@@ -618,21 +619,15 @@ def _run_u64(samples, profile, sweep_targets):
     with mgr:
         with mgr.instance() as target:
             transport = target.transport
-            client = transport._client
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            client.reset()
-            time.sleep(2.0)
-            # Belt-and-braces — see project memory: U64E turbo state
-            # survives client.reset() and CIA timer reads ~1/N at N MHz.
-            set_turbo_mhz(client, 1)
-            _ = wait_for_text(transport, "READY", timeout=30.0)
+            # Normalize CPU speed through the transport (turbo survives a
+            # soft reset; leftover 48 MHz poisons the CIA-timer wrapper),
+            # then load through the harness public API so the harness owns
+            # chunking and /Temp hygiene. run_prg_via_sys's internal soft
+            # reset preserves the 1 MHz setting.
+            transport.set_speed(1)
             with open(DEFAULT_BUILD_PRG, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            write_bytes(transport, load_addr, prg[2:])
-            keyboard.send_text(transport, "RUN\r")
-            time.sleep(2.0)
-            _ = wait_for_text(transport, "READY", timeout=30.0)
+            run_prg_via_sys(target, prg)
 
             bench.install_wrapper(transport)
             calib_samples = 20
