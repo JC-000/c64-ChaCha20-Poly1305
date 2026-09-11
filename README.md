@@ -228,6 +228,19 @@ the same test/audit/bench flows produce equivalent results on both.
 Library PRG output is unchanged — only the validation harness picks
 up the new backend support.
 
+**Single point of device routing.** On the Ultimate 64 backend, every
+byte these tools put on the wire goes through the c64-test-harness
+**public** API — `create_manager` (which holds the `DeviceLock`),
+`transport.client` / `target.client`, `write_bytes`, `run_prg_via_sys`
+for the PRG load, and `transport.set_speed`. Nothing reaches the private
+client or hardcodes its own chunking/PUT-vs-POST threshold: the harness
+is the single place that selects the wire form, does the 84-byte
+chunking, and owns `/Temp` hygiene — so a firmware-level mitigation
+(e.g. the C64 Ultimate writemem-exhaustion guard) applies to all of our
+traffic without per-tool changes. `make verify-harness-routing` (one of
+the `make verify` gates) statically enforces this: it fails if any tool
+reaches `._client` or pokes a `write_mem` threshold.
+
 `make test` builds each profile and runs
 `tools/test_chacha20_poly1305.py` against it; the target exits non-zero
 on the first failing profile. Both `make test` and the fuzz targets

@@ -249,9 +249,11 @@ def measure_cycles(
     is the routine body excluding its final RTS.
 
     :param target: TestTarget with ``backend == "u64"``.
-    :param client: Connected ``Ultimate64Client`` (NOT exposed on
-        ``TestTarget`` — caller must obtain via ``target.transport._client``
-        or by constructing one separately. See module docstring.)
+    :param client: Connected ``Ultimate64Client`` obtained via the public
+        accessor ``target.transport.client`` (skill principle #20 — never
+        reach the private underscore-prefixed client attribute).
+        DebugCapture needs a raw client for ``stream_debug_start``; this
+        is the one sanctioned use.
     :param addr: Routine entry-point address.
     :param samples: Number of cycle samples to collect.
     :param mhz: Must be 1 (DebugCapture is cycle-accurate only at 1 MHz).

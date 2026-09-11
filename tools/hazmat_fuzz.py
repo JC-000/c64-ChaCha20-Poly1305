@@ -93,7 +93,6 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
     write_bytes,
     wait_for_text,
@@ -102,6 +101,10 @@ from c64_test_harness import (
 # Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
 # trampoline + sentinel poll. Returns the post-JSR A register value.
 from _u64_helpers import run_subroutine
+
+# Harness-blessed, non-leaking PRG load path (chunked write_memory + SYS
+# trigger). Routes the U64 sideload through the harness public API.
+from c64_test_harness import run_prg_via_sys
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -1080,24 +1083,16 @@ def main():
 
         if inst.backend == "u64":
             # UnifiedManager.acquire() does not auto-load a PRG on the U64
-            # backend. Side-load via PUT writemem and drive `RUN` through
-            # the keyboard buffer, exactly as test_chacha20_poly1305.py.
-            client = inst.transport.client
-            client.WRITE_MEM_QUERY_THRESHOLD = 128
-            client.reset()
-            from c64_test_harness.backends.ultimate64_helpers import set_turbo_mhz
-            set_turbo_mhz(client, 1)
-            time.sleep(2.0)
-            if wait_for_text(inst.transport, "READY", timeout=30.0) is None:
-                print("  warning: BASIC READY prompt not seen within 30s after reset")
+            # backend. Load it through the harness public API so the
+            # harness owns PUT/POST selection, chunking, and /Temp hygiene
+            # (the single point that filters device traffic).
+            # Normalize CPU speed first: turbo survives a soft reset, so a
+            # sibling agent's leftover 48 MHz would poison this fuzz run's
+            # timing. run_prg_via_sys's internal soft reset preserves it.
+            inst.transport.set_speed(1)
             with open(prg_path, "rb") as f:
                 prg = f.read()
-            load_addr = prg[0] | (prg[1] << 8)
-            write_bytes(inst.transport, load_addr, prg[2:])
-            keyboard.send_text(inst.transport, "RUN\r")
-            time.sleep(2.0)
-            if wait_for_text(inst.transport, "READY", timeout=30.0) is None:
-                print("  warning: BASIC READY prompt not seen within 30s after RUN")
+            run_prg_via_sys(inst, prg)
             if hasattr(inst, "_u64_shim_state"):
                 delattr(inst, "_u64_shim_state")
         else:

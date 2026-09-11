@@ -64,7 +64,6 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     create_manager,
-    keyboard,
     read_bytes,
     write_bytes,
     wait_for_text,
@@ -73,6 +72,10 @@ from c64_test_harness import (
 # Backend-agnostic JSR shim: VICE thin-wraps harness jsr(); U64 drives a
 # trampoline + sentinel poll. Returns the post-JSR A register value.
 from _u64_helpers import run_subroutine
+
+# Harness-blessed, non-leaking PRG load path (chunked write_memory + SYS
+# trigger). Routes the U64 sideload through the harness public API.
+from c64_test_harness import run_prg_via_sys
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -606,43 +609,23 @@ def main():
             inst = mgr.acquire()
 
             # UnifiedManager.acquire() does not auto-load a PRG on the
-            # U64 backend. Side-load via PUT writemem (avoiding the POST
-            # endpoints that returned 'Could not read data from
-            # attachment' on degraded U64E fw 3.14d state) and drive
-            # `RUN` through the keyboard buffer to autostart.
+            # U64 backend. Load it through the harness public API so the
+            # harness owns PUT/POST selection, chunking, and /Temp
+            # hygiene (the single point that filters device traffic).
             if inst.backend == "u64":
-                client = inst.transport._client
-                client.WRITE_MEM_QUERY_THRESHOLD = 128
-                client.reset()
-                # Belt-and-braces: client.reset() is a 6510 reset and does
-                # NOT touch FPGA-level turbo. Leftover turbo from a sibling
-                # agent's bench leaves the device at e.g. 48 MHz, which
-                # this tool doesn't time-sensitive read directly but would
-                # poison any subsequent bench reuse of the same locked
-                # device. Force 1 MHz so the device is in a known state.
-                from c64_test_harness.backends.ultimate64_helpers import (
-                    set_turbo_mhz,
-                )
-                set_turbo_mhz(client, 1)
-                time.sleep(2.0)
-                grid = wait_for_text(inst.transport, "READY", timeout=30.0)
-                if grid is None:
-                    log.line("  warning: BASIC READY prompt not seen "
-                             "within 30s after reset")
+                # Normalize CPU speed through the transport first: turbo
+                # survives a soft reset, so a sibling agent's leftover
+                # 48 MHz would otherwise poison a later bench reuse of the
+                # locked device. run_prg_via_sys's internal soft reset
+                # preserves this 1 MHz setting.
+                inst.transport.set_speed(1)
                 with open(PRG_PATH, "rb") as f:
                     prg = f.read()
-                load_addr = prg[0] | (prg[1] << 8)
-                log.line(f"Sideloading PRG: load_addr=${load_addr:04X}, "
+                log.line(f"Loading PRG via run_prg_via_sys: "
                          f"body={len(prg) - 2} bytes")
                 t_load = time.time()
-                write_bytes(inst.transport, load_addr, prg[2:])
-                log.line(f"  sideload done in {time.time() - t_load:.1f}s")
-                keyboard.send_text(inst.transport, "RUN\r")
-                time.sleep(2.0)
-                grid = wait_for_text(inst.transport, "READY", timeout=30.0)
-                if grid is None:
-                    log.line("  warning: BASIC READY prompt not seen "
-                             "within 30s after RUN")
+                run_prg_via_sys(inst, prg)
+                log.line(f"  load done in {time.time() - t_load:.1f}s")
             else:
                 time.sleep(1.5)  # KERNAL settle
 

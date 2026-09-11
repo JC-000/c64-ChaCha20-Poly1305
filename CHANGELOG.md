@@ -6,7 +6,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- **All Ultimate 64 device traffic in the `tools/` scripts now routes through
+  the c64-test-harness public API**, so the harness is the single point that
+  selects PUT vs POST, chunks writes at 84 bytes, and owns `/Temp` hygiene.
+  The tools no longer reach the private `transport._client` (they use the
+  public `transport.client` / `target.client`); the PRG side-load uses the
+  harness loader `run_prg_via_sys()` (chunked `write_memory` + `SYS`, with a
+  verified head-write that recovers the U64's post-reset `$0801/$0802`
+  zeroing); and CPU-speed normalization uses the cross-backend
+  `transport.set_speed(1)`. Library PRG output is unchanged — tooling only.
+
+### Added
+- **`make verify-harness-routing`** (`tools/verify_harness_routing.py`), a
+  toolchain-only gate in the `make verify` umbrella that fails if any tool
+  reaches the private client (`._client`) or hardcodes a `write_mem`
+  chunking/threshold override. A regression tripwire, not a bypass-proof
+  boundary.
+
+### Removed
+- **Seven inert `client.WRITE_MEM_QUERY_THRESHOLD = 128` pokes** across the
+  U64 tools. They set an uppercase class fallback that `write_mem` never reads
+  (it reads the lowercase instance attr set from device capabilities), so they
+  were no-ops; the harness owns the PUT/POST split.
 
 ## [0.12.0] - 2026-09-07
 

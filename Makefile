@@ -235,7 +235,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_manifest.o \
           $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene lib-verify-isolation test test-fuzz test-fuzz-full
+.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene verify-harness-routing lib-verify-isolation test test-fuzz test-fuzz-full
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -862,7 +862,14 @@ LIB_SQTAB_IMPORT_SYMS  = mul_tables_init
 # scoped to the tarball manifest and a reader following #119 into this target
 # would otherwise watch a gate vanish between issue and implementation.
 VERIFY_TARGETS = verify-zp-usage verify-knob-staleness verify-resident-bytes \
-                 verify-label-hygiene lib-verify-isolation lib-verify-shared
+                 verify-label-hygiene verify-harness-routing \
+                 lib-verify-isolation lib-verify-shared
+
+# verify-harness-routing is NOT one of #119's seven gates — it is the
+# single-choke-point guard added by the writemem-wedge routing scrub
+# (2026-09-10). Toolchain-only (a pure static grep of tools/, no build, no
+# device, no c64-test harness import), so it is parallel-safe and belongs
+# in this umbrella rather than in the device-dependent bench/test targets.
 
 # SERIAL BY CONSTRUCTION. These are NOT prerequisites: as prerequisites `make -j`
 # runs them concurrently, and several recursively build into the SAME
@@ -887,6 +894,15 @@ verify:
 
 verify-zp-usage: lib
 	python3 tools/verify_zp_usage.py
+
+# Single-choke-point routing guard: our on-target tooling must route all
+# device traffic through the c64-test-harness public API so the harness is
+# the one place that selects PUT vs POST, does the 84-byte chunking, and
+# owns /Temp hygiene. Fails on any private-client reach (._client) or
+# hardcoded chunking/threshold override (WRITE_MEM_QUERY_THRESHOLD, or an
+# assignment to write_mem_query_threshold). Static; no device required.
+verify-harness-routing:
+	python3 tools/verify_harness_routing.py
 
 # §6.3 knob-staleness guard (contract SPEC v0.10.5, issue #86). Runs against
 # a throwaway copy of Makefile + src/ + cfg/, so it does not cost the caller their
