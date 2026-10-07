@@ -395,6 +395,15 @@ aead_compute_tag:
 @skip_ct:
         ; --- Process lengths block (16 bytes) ---
         ; Build: aad_len as 8-byte LE ‖ data_len as 8-byte LE
+.ifdef LIB_VARIANT_COMPACT
+        ; Compact: zero-fill loop, then the three live bytes over it.
+        ldx #15
+        lda #0
+@zero_len:
+        sta aead_scratch,x
+        dex
+        bpl @zero_len
+.else
         ; A3 (S8): unrolled 16 straight stores — no loop overhead (-80 cy).
         ; The three "live" bytes (aad_len at 0, data_len lo at 8, hi at 9)
         ; are written directly with no intermediate zero store.
@@ -412,6 +421,7 @@ aead_compute_tag:
         sta aead_scratch+13
         sta aead_scratch+14
         sta aead_scratch+15
+.endif
 
         lda aead_aad_len
         sta aead_scratch        ; low byte of AAD length (rest is 0)
@@ -482,6 +492,24 @@ aead_process_padded:
         jmp @next_block
 
 @partial:
+.ifdef LIB_VARIANT_COMPACT
+        ; Compact: zero-fill, then copy n = cc20_remain (1..15) bytes. n is
+        ; the public length, so the copy loop's trip count is not a leak.
+        ldx #15
+        lda #0
+@zero_pad:
+        sta aead_scratch,x
+        dex
+        bpl @zero_pad
+        ldy #0
+        ldx cc20_remain
+@copy_pad:
+        lda (chacha20poly1305_zp_ptr1),y
+        sta aead_scratch,y
+        iny
+        dex
+        bne @copy_pad
+.else
         ; A4 (S8): merged partial-block copy + zero-fill via SMC jump
         ; dispatch. cc20_remain holds n (1..15) — a public length, so
         ; branching on it is CT-safe.
@@ -594,6 +622,7 @@ aead_process_padded:
 @zf13:  sta aead_scratch+13
 @zf14:  sta aead_scratch+14
 @zf15:  sta aead_scratch+15
+.endif
 
         ; Process zero-padded block with hibit=1
         lda #<aead_scratch

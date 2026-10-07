@@ -14,6 +14,7 @@ PROFILE_A_DIR = build/profile-a
 PROFILE_B_DIR = build/profile-b
 PROFILE_BR_DIR = build/profile-b-rolled
 PROFILE_BO_DIR = build/profile-b-rolled-outer
+PROFILE_C_DIR  = build/profile-compact
 
 # Library archive outputs (c64-lib-contract SPEC §6). `make lib` builds
 # the full Profile-B archive `build/lib/chacha20poly1305.a`. Each
@@ -54,6 +55,14 @@ LIB_AEAD_ONLY_OBJS_DIR  = $(LIB_DIR)/objs-aead-only
 # gets a composable archive without ar65 member surgery.
 LIB_APP_OWNED_AR        = $(LIB_DIR)/$(LIB_NAME)-app-owned.a
 LIB_APP_OWNED_OBJS_DIR  = $(LIB_DIR)/objs-app-owned
+
+# compact variant (LIB_VARIANT_COMPACT): the size-first constant-time build —
+# rolled ChaCha20 core, rolled carry-branch-free Poly1305 multiply, no LUTs —
+# on app-owned semantics, i.e. the consumer supplies the §8.1 sqtab and the
+# §8.3 ct_mul_8x8 exactly as for lib-app-owned. A new variant, so it has no
+# deprecated basename to carry through a §6.5 window.
+LIB_COMPACT_AR          = $(LIB_DIR)/$(LIB_NAME)-compact.a
+LIB_COMPACT_OBJS_DIR    = $(LIB_DIR)/objs-compact
 
 # Consumer-facing header and example cfg, emitted alongside the archive so
 # a consumer who fetches build/lib/ gets an interface and a starter linker
@@ -235,7 +244,7 @@ BO_OBJS = $(PROFILE_BO_DIR)/main.o \
           $(PROFILE_BO_DIR)/lib_manifest.o \
           $(PROFILE_BO_DIR)/precalc_manifest.o
 
-.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer dist lib lib-aead-only lib-app-owned lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene verify-harness-routing lib-verify-isolation test test-fuzz test-fuzz-full
+.PHONY: verify all clean run profile-a profile-b profile-b-rolled profile-b-rolled-outer profile-compact dist lib lib-aead-only lib-app-owned lib-compact lib-verify-shared bench bench-check verify-zp-usage verify-knob-staleness verify-label-hygiene verify-harness-routing lib-verify-isolation test test-fuzz test-fuzz-full test-ct
 
 # --- Bench configuration (granular per-symbol benchmark) ------------------
 # All bench variables are BENCH_-prefixed to avoid colliding with other
@@ -514,6 +523,51 @@ profile-b-rolled-outer: $(BO_OBJS) $(CFG) | build
 	cp $(PROFILE_BO_DIR)/$(PRG_NAME) $(PRG)
 	cp $(PROFILE_BO_DIR)/$(LABELS_NAME) $(LABELS)
 
+# ---- Profile compact: LIB_VARIANT_COMPACT=1 (Profile B base) --------------
+# The size-first constant-time variant, linked as a standalone PRG so the
+# test suite, the fuzz and the CT timing check can jsr() into it. This is the
+# OWNER build — it links the library's own §8.1/§8.3 members — whereas
+# `make lib-compact` defers both to the consumer. Same code otherwise.
+#
+# Pattern rules rather than the per-object list the profiles above spell
+# out: every object here takes the same one define, and the four whose
+# source is not under src/lib/ get explicit rules, which make prefers.
+COMPACT_DEFINE = -DLIB_VARIANT_COMPACT=1
+
+C_OBJS = $(addprefix $(PROFILE_C_DIR)/,$(addsuffix .o,$(MODULES)))
+
+$(PROFILE_C_DIR)/main.o: src/main.s $(SRCS_INCLUDES) | $(PROFILE_C_DIR)
+	$(CA65) $(CA65FLAGS) $(COMPACT_DEFINE) $< -o $@
+
+$(PROFILE_C_DIR)/zp_config.o: src/zp_config.s | $(PROFILE_C_DIR)
+	$(CA65) $(CA65FLAGS) $(COMPACT_DEFINE) $< -o $@
+
+$(PROFILE_C_DIR)/lib_version.o: src/lib_version.s | $(PROFILE_C_DIR)
+	$(CA65) $(CA65FLAGS) $(COMPACT_DEFINE) $< -o $@
+
+$(PROFILE_C_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(PROFILE_C_DIR)
+	$(CA65) $(CA65FLAGS) $(COMPACT_DEFINE) $< -o $@
+
+$(PROFILE_C_DIR)/%.o: src/lib/%.s $(SRCS_INCLUDES) | $(PROFILE_C_DIR)
+	$(CA65) $(CA65FLAGS) $(COMPACT_DEFINE) $< -o $@
+
+$(PROFILE_C_DIR):
+	mkdir -p $(PROFILE_C_DIR)
+
+profile-compact: $(C_OBJS) $(CFG) | build
+	$(LD65) -C $(CFG) -Ln $(PROFILE_C_DIR)/$(LABELS_NAME) \
+	    $(C_OBJS) -o $(PROFILE_C_DIR)/$(PRG_NAME)
+	$(call FIXLABELS,$(PROFILE_C_DIR)/$(LABELS_NAME))
+	cp $(PROFILE_C_DIR)/$(PRG_NAME) $(PRG)
+	cp $(PROFILE_C_DIR)/$(LABELS_NAME) $(LABELS)
+
+# chacha20_lib.s `.include`s the compact core under LIB_VARIANT_COMPACT, in
+# whichever directory a knob reaches it — so every chacha20_lib.o depends
+# on it, not only the two compact ones.
+$(addsuffix /chacha20_lib.o,$(PROFILE_A_DIR) $(PROFILE_B_DIR) $(PROFILE_BR_DIR) \
+    $(PROFILE_BO_DIR) $(PROFILE_C_DIR) $(LIB_OBJS_DIR) $(LIB_AEAD_ONLY_OBJS_DIR) \
+    $(LIB_APP_OWNED_OBJS_DIR) $(LIB_COMPACT_OBJS_DIR)): src/lib/chacha20_compact.inc
+
 run: profile-a
 	x64sc -autostart $(PRG)
 
@@ -770,6 +824,33 @@ $(LIB_APP_OWNED_AR): $(LIB_APP_OWNED_OBJS) | $(LIB_DIR)
 $(LIB_APP_OWNED_OBJS_DIR):
 	mkdir -p $(LIB_APP_OWNED_OBJS_DIR)
 
+# --- compact variant (LIB_VARIANT_COMPACT on app-owned semantics) ----------
+# Both shared primitives deferred, as for lib-app-owned: the consumer links
+# its own §8.1 `mul_tables_init` and §8.3 `ct_mul_8x8` (+ poly_prod_lo/hi
+# and the two SMC sites). c64-https already owns both. The deferral is what
+# keeps the archive at the AEAD code alone — see the README size table.
+LIB_COMPACT_DEFINE = $(COMPACT_DEFINE) -DSHARED_SQTAB_INIT=1 -DSHARED_CT_MUL_8X8=1
+
+LIB_COMPACT_OBJS = $(addprefix $(LIB_COMPACT_OBJS_DIR)/,$(addsuffix .o,$(LIB_MODULES)))
+
+$(LIB_COMPACT_OBJS_DIR)/lib_version.o: src/lib_version.s | $(LIB_COMPACT_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_COMPACT_DEFINE) $< -o $@
+
+$(LIB_COMPACT_OBJS_DIR)/precalc_manifest.o: src/lib/precalc_manifest.s src/precalc_table.inc | $(LIB_COMPACT_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_COMPACT_DEFINE) $< -o $@
+
+$(LIB_COMPACT_OBJS_DIR)/%.o: src/lib/%.s $(SRCS_INCLUDES) | $(LIB_COMPACT_OBJS_DIR)
+	$(CA65) $(CA65FLAGS) $(LIB_COMPACT_DEFINE) $< -o $@
+
+lib-compact: $(LIB_COMPACT_AR)
+
+$(LIB_COMPACT_AR): $(LIB_COMPACT_OBJS) | $(LIB_DIR)
+	rm -f $@
+	ar65 r $@ $(LIB_COMPACT_OBJS)
+
+$(LIB_COMPACT_OBJS_DIR):
+	mkdir -p $(LIB_COMPACT_OBJS_DIR)
+
 $(LIB_DIR):
 	mkdir -p $(LIB_DIR)
 
@@ -1010,8 +1091,20 @@ verify-resident-bytes:
 	echo "  --- word32 axis: lib + WORD32_DEFINES ---"; \
 	$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(WORD32_DEFINES)" >/dev/null; \
 	python3 tools/measure_resident_bytes.py $(LIB_OBJS_DIR) --check; \
+	echo "  --- compact variant: lib-compact (both §8 switches) ---"; \
+	$(MAKE) --no-print-directory lib-compact >/dev/null; \
+	python3 tools/measure_resident_bytes.py $(LIB_COMPACT_OBJS_DIR) --check; \
+	for t in lib lib-aead-only; do \
+	  case "$$t" in \
+	    lib)            d=$(LIB_OBJS_DIR);; \
+	    lib-aead-only)  d=$(LIB_AEAD_ONLY_OBJS_DIR);; \
+	  esac; \
+	  echo "  --- compact variant, owner: $$t + $(COMPACT_DEFINE) ---"; \
+	  $(MAKE) --no-print-directory $$t CONTRACT_DEFINES="$(COMPACT_DEFINE)" >/dev/null; \
+	  python3 tools/measure_resident_bytes.py $$d --check; \
+	done; \
 	$(MAKE) --no-print-directory lib >/dev/null; \
-	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles, plus the consumer's own config and the multiply axis"
+	echo "  verify-resident-bytes: OK — every declared literal covers its bound, both profiles, plus the consumer's own config, the multiply axis and the compact variant"
 
 
 # §6.1 member-isolation guard (contract SPEC v1.2.0/v1.2.1/v1.2.2, issue #108).
@@ -1091,6 +1184,12 @@ verify-label-hygiene:
 	@echo "  --- consumer config (c64-wireguard), issue #122 ---"
 	@$(MAKE) --no-print-directory lib CONTRACT_DEFINES="$(CONSUMER_DEFINES)" >/dev/null
 	python3 tools/verify_label_hygiene.py build/lib/objs/chacha20poly1305_lib.o
+	@echo "  --- compact variant (LIB_VARIANT_COMPACT) ---"
+	@$(MAKE) --no-print-directory profile-compact >/dev/null
+	python3 tools/verify_label_hygiene.py \
+	    build/profile-compact/labels.txt build/profile-compact/chacha20poly1305_lib.o
+	@$(MAKE) --no-print-directory lib-compact >/dev/null
+	python3 tools/verify_label_hygiene.py build/lib/objs-compact/chacha20poly1305_lib.o
 	@$(MAKE) --no-print-directory lib >/dev/null
 
 lib-verify-shared: | $(LIB_SHARED_VERIFY_DIR)
@@ -1227,16 +1326,29 @@ test:
 	C64_BACKEND=$${C64_BACKEND:-vice} $(TEST_PYTHON) $(TEST_SUITE)
 	$(MAKE) profile-b
 	C64_BACKEND=$${C64_BACKEND:-vice} $(TEST_PYTHON) $(TEST_SUITE)
+	$(MAKE) profile-compact
+	C64_BACKEND=$${C64_BACKEND:-vice} $(TEST_PYTHON) $(TEST_SUITE)
 
 test-fuzz:
-	$(MAKE) profile-a profile-b
+	$(MAKE) profile-a profile-b profile-compact
 	$(TEST_PYTHON) $(FUZZ_TOOL) --profile a --quick --seed $(FUZZ_SEED)
 	$(TEST_PYTHON) $(FUZZ_TOOL) --profile b --quick --seed $(FUZZ_SEED)
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile compact --quick --seed $(FUZZ_SEED)
 
 test-fuzz-full:
-	$(MAKE) profile-a profile-b
+	$(MAKE) profile-a profile-b profile-compact
 	$(TEST_PYTHON) $(FUZZ_TOOL) --profile a --seed $(FUZZ_SEED)
 	$(TEST_PYTHON) $(FUZZ_TOOL) --profile b --seed $(FUZZ_SEED)
+	$(TEST_PYTHON) $(FUZZ_TOOL) --profile compact --seed $(FUZZ_SEED)
+
+# Constant-time check by exact cycle count (tools/ct_timing_check.py), VICE
+# only. Gates the compact variant, which is built to pass it. Profile A/B are
+# NOT gated here: their poly1305 multiply carries through poly_ripple, whose
+# early stop is a data-dependent cycle count this check reports — run
+# `$(TEST_PYTHON) tools/ct_timing_check.py --profile b` to see it.
+test-ct:
+	$(MAKE) profile-compact
+	$(TEST_PYTHON) tools/ct_timing_check.py --profile compact
 
 # Reproducible source tarball for a tagged release.
 # Usage: make dist VERSION=v0.5.0

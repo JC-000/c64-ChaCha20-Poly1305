@@ -1016,9 +1016,9 @@ def t_decrypt_fail_residue(c, rng):
 def main():
     ap = argparse.ArgumentParser(
         description="Adversarial differential fuzz vs pyca/cryptography hazmat")
-    ap.add_argument("--profile", choices=["a", "b"], required=True,
-                    help="Run against build/profile-<a|b>/ (pre-built via "
-                         "`make profile-a` / `make profile-b`)")
+    ap.add_argument("--profile", choices=["a", "b", "compact"], required=True,
+                    help="Run against build/profile-<a|b|compact>/ (pre-built "
+                         "via `make profile-a` / `profile-b` / `profile-compact`)")
     ap.add_argument("--seed", type=int, default=20260828,
                     help="PRNG seed for deterministic case generation "
                          "(default 20260828)")

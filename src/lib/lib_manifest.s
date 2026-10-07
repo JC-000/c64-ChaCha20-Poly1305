@@ -297,8 +297,24 @@ LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES   = 88
 ;   own stub, BASIC header and cfg padding — quoted only to show the
 ;   variant delta. The equates themselves use the segment-sum basis
 ;   described above, which is why they are smaller.)
+;
+;   LIB_VARIANT_COMPACT has its own two rows, ahead of the profile ladder.
+;   It has NO page-aligned section, so its only fill term is the segment
+;   start the consumer's `align = $100` forces (measure_resident_bytes.py
+;   recognises the variant from the build and charges exactly that):
+;     compact, both §8 switches (lib-compact)  1 690 B -> bound 1 945 -> 2 048
+;     compact, owner (profile-compact)         1 987 B -> bound 2 242 -> 2 304
+;   The switches are the same purely subtractive gates as on the default
+;   ladder, so one switch alone, or adding LIB_VARIANT_AEAD_ONLY (which
+;   removes an export, not a body), measures at or below the owner row.
 ; ---------------------------------------------------------------------------
-.ifdef POLY1305_PROFILE_LONG
+.ifdef LIB_VARIANT_COMPACT
+  .if .defined(SHARED_CT_MUL_8X8) .and .defined(SHARED_SQTAB_INIT)
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 2048
+  .else
+LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 2304
+  .endif
+.elseif .defined(POLY1305_PROFILE_LONG)
   ; Profile A: issue #34 F1 already gated sqtab / sqtab_init / mul_8x8 and
   ; the ct_mul_8x8 body out of this profile, so the §8.1/§8.3 deferral
   ; switches remove nothing further — an app-owned Profile A build
@@ -379,7 +395,11 @@ LIB_CHACHA20_POLY1305_RESIDENT_BYTES   = 17920
 ; alone would not know to import it. That is why RESIDENT_BYTES itself
 ; had to become variant-aware rather than leaving this as the only
 ; accurate figure.
-.ifdef POLY1305_PROFILE_LONG
+.ifdef LIB_VARIANT_COMPACT
+; The compact variant's AEAD-only form is itself: LIB_VARIANT_AEAD_ONLY
+; removes the chacha20_quarter_round / mul_8x8 EXPORTS there, no body.
+LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = LIB_CHACHA20_POLY1305_RESIDENT_BYTES
+.elseif .defined(POLY1305_PROFILE_LONG)
 LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 16384
 .else
 LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES = 17664

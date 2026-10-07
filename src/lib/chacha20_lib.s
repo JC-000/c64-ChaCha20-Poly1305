@@ -46,6 +46,14 @@
 .export chacha20_quarter_round
 .endif
 
+; LIB_VARIANT_COMPACT swaps in the size-first core — same entry points,
+; same exports, one rolled quarter-round that chacha20_block itself calls.
+; Everything between here and the matching `.endif` at the end of this file
+; is the default core and is not assembled in that variant.
+.ifdef LIB_VARIANT_COMPACT
+        .include "chacha20_compact.inc"
+.else
+
 .segment "LIB_CHACHA20_POLY1305_CODE"   ; SPEC §4 prefix (issue #48)
 
 ; --- ChaCha20 constants ("expand 32-byte k" as LE uint32 words) ---
@@ -931,3 +939,5 @@ chacha20_encrypt:
 
 @enc_done:
         rts
+
+.endif  ; .ifdef LIB_VARIANT_COMPACT — end of the default core

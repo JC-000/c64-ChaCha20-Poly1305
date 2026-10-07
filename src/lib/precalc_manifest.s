@@ -96,8 +96,12 @@ LIB_PRECALC_TABLE "sqtab", 1024, PRECALC_REGION_RAM, PRECALC_SHARED_YES, "CHACHA
 ; bit shape is generic (V<<4&$FF, V>>4) but no other adopter ships a
 ; rotl-4 fast path today; promote to §8.x only after a second sibling
 ; converges on bit-identical bytes.
+; Not emitted under LIB_VARIANT_COMPACT, whose ChaCha20 core reads no LUT —
+; so that variant enumerates the sqtab row only.
+.ifndef LIB_VARIANT_COMPACT
 LIB_PRECALC_TABLE "chacha_nibswap_hi_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
 LIB_PRECALC_TABLE "chacha_nibswap_lo_tab", 256, PRECALC_REGION_RAM, PRECALC_SHARED_NO, "CHACHA20_POLY1305"
+.endif
 
 ; r_tab_lo / r_tab_hi — Profile A Shoup per-r tables at $6000..$7FFF
 ; (4096 B each, page-aligned per limb). Library-private: the content

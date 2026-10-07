@@ -42,6 +42,23 @@
 ; General-purpose 16-bit pointers used by poly1305 / aead.
 .importzp chacha20poly1305_zp_ptr1, chacha20poly1305_zp_ptr2
 
+; --- LIB_VARIANT_COMPACT: the size-first constant-time variant ------------
+; Profile B semantics with a rolled ChaCha20 core (chacha20_compact.inc) and
+; a rolled, carry-branch-free Poly1305 multiply (poly1305_core.s). It owns
+; its whole code shape, so the knobs that select some other shape for the
+; same routine are refused rather than silently ignored.
+.ifdef LIB_VARIANT_COMPACT
+  .ifdef POLY1305_PROFILE_LONG
+    .error "LIB_VARIANT_COMPACT is Profile B only: drop POLY1305_PROFILE_LONG"
+  .endif
+  .if .defined(POLY1305_MULTIPLY_ROLLED) .or .defined(POLY1305_MULTIPLY_ROLLED_OUTER)
+    .error "LIB_VARIANT_COMPACT has its own rolled multiply: drop POLY1305_MULTIPLY_ROLLED / _ROLLED_OUTER"
+  .endif
+  .ifdef CHACHA20_USE_WORD32
+    .error "LIB_VARIANT_COMPACT uses no word32 primitives: drop CHACHA20_USE_WORD32"
+  .endif
+.endif
+
 ; --- Build profile flag -----------------------------------------------------
 ; POLY1305_PROFILE_LONG selects "Profile A" (long-message / REU-assisted,
 ; primary optimization target) vs "Profile B" (stock C64, no REU, portable

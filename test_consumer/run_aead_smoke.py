@@ -7,7 +7,7 @@ byte-identical AEAD output to the full variant for the RFC 7539 §2.8.2
 known answer.
 
 Usage:
-    python3 run_aead_smoke.py {full|aead}
+    python3 run_aead_smoke.py {full|aead|compact}
 
 Exits 0 on pass, 1 on fail, 2 on harness/build error.
 """
@@ -75,7 +75,7 @@ def main():
     variants = sys.argv[1:] or ["full", "aead"]
     fails = 0
     for v in variants:
-        if v not in ("full", "aead"):
+        if v not in ("full", "aead", "compact"):
             sys.stderr.write(f"unknown variant: {v}\n")
             return 2
         rc = run(v)

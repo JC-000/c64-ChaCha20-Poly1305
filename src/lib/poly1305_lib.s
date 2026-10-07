@@ -107,7 +107,12 @@
 ; is a member-isolation change and its verification bar is a byte-identical
 ; image. Take it as its own change, with its own re-measure of the five
 ; RESIDENT_BYTES literals.
+;
+; LIB_VARIANT_COMPACT has no v0.10.0 image to reproduce and no table to
+; align, so it takes the saving: up to 255 B of pad that buys it nothing.
+.ifndef LIB_VARIANT_COMPACT
         .align 256
+.endif
 
 ; =============================================================================
 ; poly1305_lib_init - One-time library initialization (Step 10)

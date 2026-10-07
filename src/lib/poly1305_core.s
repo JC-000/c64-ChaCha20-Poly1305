@@ -37,7 +37,9 @@
 ; Cross-module imports: data_lib state.
 .import poly_h, poly_r, poly_s, poly_product, poly1305_tag
 .import aead_scratch
-.import poly_ripple
+.ifndef LIB_VARIANT_COMPACT
+.import poly_ripple             ; the compact multiply never ripples
+.endif
 
 .export poly1305_multiply, poly1305_reduce
 .export poly1305_block, poly1305_update, poly1305_final
@@ -124,6 +126,158 @@
 :
 .endmacro
 .endif
+
+.ifdef LIB_VARIANT_COMPACT
+; =============================================================================
+; poly1305_multiply - LIB_VARIANT_COMPACT: rolled, carry-branch-free
+;
+; h (17 bytes) * r (16 bytes) into poly_product (33 bytes), then reduce.
+; Same J-outer / I-inner order as every Profile B body, r[j] SMC-baked into
+; ct_mul_8x8 once per row, so it composes with the §8.3 primitive exactly
+; as they do. What differs is how a partial product is accumulated.
+;
+; The other Profile B bodies add h[i]*r[j] into product[i+j..i+j+1] and,
+; when that leaves carry set, call poly_ripple, whose INC/BNE stops as soon
+; as a byte does not wrap. Both the call and the stop point depend on the
+; operand bytes, so their cycle count varies with h and r. This body never
+; branches on a carry. Each row keeps a one-byte running carry c:
+;
+;     s         = product[i+j] + h[i]*r[j] + c
+;     product[i+j] = s & $FF
+;     c         = s >> 8
+;
+; s <= 255 + 255*255 + 255 = $FFFF, so c always fits a byte and the final
+; ADC #0 below never carries out. After i = 16 the row's carry is STORED
+; (not added) at product[j+17]: rows 0..j-1 reach at most index j+16, so
+; that byte is still zero. Nothing ever propagates further, so no carry
+; flag is ever tested.
+;
+; Remaining branches: loop control on poly_i / poly_j only.
+;
+; ZP: poly_i (i), poly_j (j), poly_carry (row carry c), poly_tmp.
+; Clobbers: A, X, Y
+; =============================================================================
+poly1305_multiply:
+        ldx #32
+        lda #0
+@zero:  sta poly_product,x
+        dex
+        bpl @zero
+
+        sta poly_j              ; j = 0
+@jloop: ldx poly_j
+        lda poly_r,x
+        sta smc_sum_a_imm+1     ; bake `a` = r[j] (see §8.3 block, issue #47)
+        sta smc_diff_a_imm+1
+        lda #0
+        sta poly_carry          ; c = 0
+        sta poly_i              ; i = 0
+@iloop: ldx poly_i
+        ldy poly_h,x            ; Y = h[i] -> ct_mul_8x8 b operand
+        jsr ct_mul_8x8          ; poly_prod_lo/hi = r[j]*h[i]; clobbers A,X,Y
+
+        lda poly_i
+        clc
+        adc poly_j
+        tax                     ; X = i + j
+        lda poly_prod_lo
+        adc poly_product,x      ; C = 0 from the adc above (i+j <= 31)
+        sta poly_tmp
+        lda poly_prod_hi
+        adc #0                  ; hi <= $FE, so this cannot carry
+        tay                     ; Y = hi + C
+        clc
+        lda poly_tmp
+        adc poly_carry
+        sta poly_product,x      ; product[i+j] = s & $FF
+        tya
+        adc #0
+        sta poly_carry          ; c = s >> 8
+
+        inc poly_i
+        lda poly_i
+        cmp #17
+        bne @iloop
+
+        lda poly_carry          ; X = j + 16
+        sta poly_product+1,x    ; product[j+17] = c (was zero)
+
+        inc poly_j
+        lda poly_j
+        cmp #16
+        bne @jloop
+
+        ; Fall through to poly1305_reduce.
+
+; =============================================================================
+; poly1305_reduce - LIB_VARIANT_COMPACT: rolled, no LUT
+;
+; Same identity as the default body: product = L + 2^130 * H, and
+; product mod (2^130 - 5) = L + 5*H. The default body forms each byte of H
+; on the fly through a 256-byte page-aligned LUT. Here H is made in place by
+; shifting product[16..32] right twice, as the original reference code did,
+; so the variant carries no secret-indexed table and no alignment invariant.
+;
+; Every branch is a fixed-count loop. Clobbers: A, X, Y
+; =============================================================================
+poly1305_reduce:
+        ldx #15
+@low:   lda poly_product,x
+        sta poly_h,x
+        dex
+        bpl @low
+        lda poly_product+16
+        and #$03
+        sta poly_h+16           ; h = L (low 130 bits)
+
+        ldy #2                  ; product[16..32] >>= 2 -> H
+@pass:  ldx #16
+        clc
+@shr:   ror poly_product+16,x   ; DEX/BPL leave C alone
+        dex
+        bpl @shr
+        dey
+        bne @pass
+
+        ldx #0
+        stx poly_carry          ; running carry_in
+@red:   lda poly_product+16,x   ; A = H[k]
+        sta poly_tmp
+        lda #0
+        sta poly_j              ; hi(ov*5)
+        lda poly_tmp
+        asl
+        rol poly_j
+        asl
+        rol poly_j              ; poly_j:A = ov*4, C = 0
+        adc poly_tmp            ; + ov
+        sta poly_tmp
+        lda poly_j
+        adc #0
+        sta poly_j              ; poly_j:poly_tmp = ov*5
+
+        clc
+        lda poly_tmp
+        adc poly_carry
+        sta poly_tmp
+        lda poly_j
+        adc #0
+        sta poly_j              ; ov*5 + carry_in
+
+        clc
+        lda poly_h,x
+        adc poly_tmp
+        sta poly_h,x
+        lda poly_j
+        adc #0
+        sta poly_carry          ; carry_in for k+1
+
+        inx
+        cpx #17
+        bne @red
+        rts
+
+.else  ; .ifdef LIB_VARIANT_COMPACT — the default bodies follow
 
 ; =============================================================================
 ; poly_reduce_shl6_tab - 256-entry LUT: tab[y] = (y & 3) << 6
@@ -442,6 +596,8 @@ poly1305_reduce:
 
         rts
 
+.endif  ; .ifdef LIB_VARIANT_COMPACT (multiply + reduce)
+
 ; =============================================================================
 ; poly1305_block - Process one 16-byte block
 ;
@@ -455,7 +611,9 @@ poly1305_reduce:
 poly1305_block:
         sta poly_carry          ; save high bit value
 
-.ifdef POLY1305_PROFILE_LONG
+        ; LIB_VARIANT_COMPACT takes the 16-iteration loop for size; the
+        ; Profile B straight-line chain below is the cycle-first form.
+.if .defined(POLY1305_PROFILE_LONG) .or .defined(LIB_VARIANT_COMPACT)
         ; h += block (16 bytes from (chacha20poly1305_zp_ptr1))
         ; IMPORTANT: Use DEX/BNE for loop control — CPY clobbers carry,
         ; which would break carry propagation in the multi-byte addition.

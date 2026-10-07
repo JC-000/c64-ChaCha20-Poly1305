@@ -34,7 +34,11 @@
 .export aead_key, aead_nonce, aead_aad_ptr, aead_aad_len
 .export aead_data_ptr, aead_data_len, aead_tag, aead_scratch
 .export sqtab_ready
+.ifdef LIB_VARIANT_COMPACT
+.export cc20_qr_off
+.else
 .export chacha_nibswap_hi_tab, chacha_nibswap_lo_tab
+.endif
 
 .segment "LIB_CHACHA20_POLY1305_DATA"   ; SPEC §4 prefix (issue #48)
 
@@ -113,6 +117,19 @@ aead_scratch:
 ; Checked by poly1305_init to skip redundant sqtab rebuilds (Step 10).
 sqtab_ready:
         .res 1
+
+.ifdef LIB_VARIANT_COMPACT
+; --- Compact ChaCha20 core scratch (chacha20_compact.inc) ---
+; The current quarter-round's byte offsets into cc20_work, laid out
+; a,b,c,d,a,b so every step reads (off[m], off[m+1], off[m+3]).
+cc20_qr_off:
+        .res 6
+
+; The compact core reads no rotate LUT, so neither nibswap table below is
+; emitted — together with the unrolled core they are 3.8 KB of the default
+; build. Nothing else in the variant needs page alignment: see the CT note
+; in chacha20_compact.inc and poly1305_core.s.
+.else
 
 ; The two nibswap LUTs below are page-aligned by `.align 256`, and that
 ; alignment is a CT invariant (see each table's header). ld65 honours it
@@ -202,3 +219,4 @@ chacha_nibswap_lo_tab:
         .endrepeat
 
 .assert (chacha_nibswap_lo_tab & $00FF) = 0, lderror, "chacha_nibswap_lo_tab must be page-aligned - same CT invariant as chacha_nibswap_hi_tab"
+.endif  ; .ifdef LIB_VARIANT_COMPACT (nibswap tables)

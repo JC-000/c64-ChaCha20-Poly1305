@@ -1067,10 +1067,21 @@ def main():
     print(f"Using: {PRG_PATH}")
 
     labels = Labels.from_file(LABELS_PATH)
-    required = [
+    # LIB_VARIANT_COMPACT links no word32 primitives at all (its ChaCha20
+    # core rotates in place), so the rotation group has nothing to test
+    # there. The variant is recognised by its one private export rather
+    # than by the absence of the rotations, so a default build that loses
+    # them still fails here.
+    compact = labels.address("cc20_qr_off") is not None
+    word32 = [] if compact else [
         "w32_dst", "w32_src1", "w32_src2",
         "rotl32_4", "rotl32_7", "rotl32_8", "rotl32_12",
         "rotr32_1", "rotr32_4", "rotr32_7", "rotr32_8", "rotr32_12", "rotr32_16",
+    ]
+    if compact:
+        print("LIB_VARIANT_COMPACT build: no word32 primitives linked, "
+              "rotation group will be empty")
+    required = word32 + [
         "chacha20_init", "chacha20_block", "chacha20_quarter_round",
         "chacha20_encrypt",
         "cc20_key", "cc20_nonce", "cc20_counter", "cc20_state", "cc20_work",
