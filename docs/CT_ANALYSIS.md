@@ -753,6 +753,18 @@ post-ADD carry still leaks 1 bit per add; however, the alternative
 the plan makes a conscious tradeoff here. If the v0.4.0 CT claim
 is tightened, these would need to revisit.
 
+**Measured since (`tools/ct_timing_check.py`, exact cycle counts with
+the display blanked).** On the default Profile B build,
+`poly1305_multiply` takes 34 546 cy with h or r all-zero, 39 262 cy with
+both all-$FF, and 35 570–36 569 cy on random operands; `aead_encrypt`
+n=100 spans 8 774 cy across key/plaintext classes of equal length. The
+variation is the `poly_ripple` exit point, i.e. how far each carry runs,
+which is a function of h and r. So the caveat above is not hypothetical:
+the time of this routine depends on secret data, by thousands of cycles.
+This audit's classification is unchanged here — the branch is on a carry
+— but anyone needing measured constant time should use the compact
+variant below, whose multiply has no carry branch.
+
 ### 4.2 `aead_verify_tag` OR-accumulator fold → branch
 
 `chacha20poly1305_lib.s:100 bne @auth_fail` branches on the single
@@ -1160,3 +1172,37 @@ the c64-wireguard / c64-https reference `word32.s` files use
 No new secret-dependent branches and no new secret-indexed
 addressing (beyond the already-analyzed sqtab `abs,x` pattern
 inside `ct_mul_8x8`) were found in any of the three variant paths.
+
+## 6. LIB_VARIANT_COMPACT (post-v0.12.0)
+
+The compact variant (`make lib-compact`, `make profile-compact`) is the
+one build in this library that is constant-time **by measurement** as
+well as by review. `make test-ct` runs `tools/ct_timing_check.py`, which
+requires identical cycle counts across secret-input classes for
+`poly1305_multiply` (+ reduce), `chacha20_block`, `aead_encrypt` (fixed
+lengths) and `aead_decrypt` on an authentication failure (mismatch at
+byte 0 / 15 / everywhere). It passes with one count per routine.
+
+Per-file classification of what the variant adds:
+
+| Site | Branches | Class |
+|---|---|---|
+| `chacha20_compact.inc` `chacha20_quarter_round` | `@load` (4), `@step` (4), `@rotb` (count 1–2), `@rotr` (count 0/1/4), the `beq @next` on a zero bit count | loop counters and the fixed per-step rotation schedule — public |
+| `chacha20_compact.inc` `chacha20_block` / `_init` / `_encrypt` | copy/add loops, double-round and QR-index loops, counter-increment carry chain, length tests | public (the block counter is public, as in the default core) |
+| `poly1305_core.s` compact `poly1305_multiply` | `@zero`, `@iloop` (17), `@jloop` (16) | loop counters only. Each partial product is accumulated as `s = p[i+j] + h*r + c` (≤ $FFFF) with the row carry `c` held in a byte; no carry flag is ever tested and nothing ripples |
+| `poly1305_core.s` compact `poly1305_reduce` | `@low` (16), `@pass` (2), `@shr` (17), `@red` (17) | loop counters only |
+| `chacha20poly1305_lib.s` compact padding | `@zero_len`, `@zero_pad`, `@copy_pad` (count = remaining length) | public length |
+
+Secret-indexed addressing: none new. The variant has no lookup table
+indexed by secret data, so it carries no `.align` invariant at all; its
+only secret-indexed access is the existing sqtab `abs,x` / `abs,y` inside
+`ct_mul_8x8`, which is the consumer's (or the owner build's) §8.3 body.
+The quarter-round's `adc/eor cc20_work+I,y` are `abs,y` on a zero-page
+base with a public Y ≤ 63; an `.assert` keeps `cc20_work` wholly in page
+zero so they cannot cross a page.
+
+Mutation evidence (each built, run, and reverted): a `beq` skipping the
+multiply when `h[i] = 0` and a `bcc` on the row-carry add both leave the
+145-test suite green and turn `make test-ct` red (spreads of 20 128 cy and
+80 cy on `poly1305_multiply`). The second is a single cycle per taken
+branch; the check still sees it.

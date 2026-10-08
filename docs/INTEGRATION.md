@@ -762,6 +762,34 @@ footprint for +4.08% cycles. None of these flags change the AEAD
 calling convention or symbol names — see the stability promise
 above.
 
+### Compact variant (`LIB_VARIANT_COMPACT`)
+
+`make lib-compact` builds `build/lib/chacha20poly1305-compact.a`: a rolled,
+table-free ChaCha20 core and a rolled Poly1305 multiply with no carry
+branch, measured constant-time by `make test-ct`. **1 690 B** of library
+code + data in a minimal consumer link, at +58% `aead_encrypt` cycles
+against Profile B (−15% against the sprint-0 baseline). Same AEAD ABI.
+
+It is built **app-owned**, so the consumer supplies the §8.1 sqtab builder
+`mul_tables_init` and the §8.3 `ct_mul_8x8` with `poly_prod_lo/hi` and
+`smc_sum_a_imm` / `smc_diff_a_imm`, exactly as for `lib-app-owned`. The
+1 KB sqtab at `LIB_SHARED_SQTAB_BASE` is still needed. Everything else in
+this guide applies; differences:
+
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` reads **2048**.
+- It has no page-aligned table. Keep `align = $100` on
+  `LIB_CHACHA20_POLY1305_CODE` anyway — the RESIDENT_BYTES bound assumes it,
+  and the same cfg line then works for every variant.
+- `w32_src1` / `w32_src2` / `w32_dst` are not used, and nothing from
+  `word32_lib` is exported. `chacha20poly1305_zp_tmp1/_tmp2` are used by
+  the quarter-round.
+- Profile B only; `POLY1305_PROFILE_LONG`, `POLY1305_MULTIPLY_ROLLED[_OUTER]`
+  and `CHACHA20_USE_WORD32` are refused with a build error.
+
+`test_consumer/` links it twice: `make compact` (footprint — stub
+providers in plain `CODE`) and `make smoke-compact` (RFC 8439 §2.8.2 KAT,
+runnable via `python3 run_aead_smoke.py compact`).
+
 ## Verifying your wiring
 
 Once you've wired the library into your consumer project, copy

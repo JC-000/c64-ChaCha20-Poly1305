@@ -18,8 +18,11 @@ make profile-b              # Profile B: stock C64, portable baseline, lower ini
 make                        # alias for profile-a
 make profile-b-rolled       # Profile B with fully-rolled poly1305_multiply (min code)
 make profile-b-rolled-outer # Profile B with outer-loop-rolled poly1305_multiply
+make profile-compact        # size-first constant-time variant (LIB_VARIANT_COMPACT)
 make lib                    # full ar65 archive -> build/lib/chacha20poly1305.a
 make lib-aead-only          # trimmed archive -> build/lib/chacha20poly1305-aead-only.a
+make lib-compact            # compact archive -> build/lib/chacha20poly1305-compact.a
+make test-ct                # constant-time check by exact cycle count (compact)
 make bench                  # granular bench -> docs/BENCH_REPORT.md (+ JSON sidecar)
 make bench-check            # bench + drift gate vs docs/BENCH_REPORT.baseline.json
 make dist VERSION=vX.Y.Z    # reproducible source tarball (tools/build_release.sh)
@@ -93,6 +96,39 @@ Default builds are unchanged: all of these are opt-in, and `make
 profile-a` / `make profile-b` / `make lib` produce the same output as
 before.
 
+### Compact variant (`LIB_VARIANT_COMPACT`)
+
+A separate, size-first point well below config D, for a consumer that
+cannot hold 8 KB and wants constant time without argument:
+
+| config | build | PRG | min consumer link | library bytes | cycles, `aead_encrypt` n=1024 |
+|--------|-------|----:|------------------:|--------------:|------------------------------:|
+| D — combined, re-measured | aead-only archive + rolled-outer | 9 256 | 8 486 | 7 975 | +4.08% (v0.6.0 figure) |
+| **E — compact** | `make lib-compact` / `make profile-compact` | 2 500 | **2 201** | **1 690** | +58.1% vs Profile B, −15.4% vs sprint-0 |
+
+- "min consumer link" is the same measure as the table above — the
+  `test_consumer/` PRG (`make -C test_consumer compact`), BASIC stub and
+  alignment pad included. D's sizes were re-measured at this commit: the
+  9 000 / 8 230 B above are the v0.6.0 measurements, and the code has
+  grown since. Its cycle column was not re-measured.
+  "library bytes" is just the two `LIB_CHACHA20_POLY1305_*` segments in
+  that link's map (E: CODE 1 389 + DATA 301).
+- The compact archive is **app-owned**: like `lib-app-owned` it defers
+  the §8.1 sqtab builder and the §8.3 `ct_mul_8x8` to the consumer, so
+  those 217 B (and the 1 KB table) are the consumer's and are not in the
+  figure. `make profile-compact` is the owner build (2 242 B bound).
+- What it changes: one rolled quarter-round that `chacha20_block` calls 80
+  times, rotations built from byte-rotate and bit-rotate with no LUT; a
+  rolled Poly1305 multiply that carries row by row (no `poly_ripple`, no
+  branch on an operand or a carry); a rolled reduce; looped AEAD padding.
+  It has **no page-aligned table**. The §14.1 domain guards are unchanged.
+- Profile B only, and it owns its code shape: combining it with
+  `POLY1305_PROFILE_LONG`, `POLY1305_MULTIPLY_ROLLED[_OUTER]` or
+  `CHACHA20_USE_WORD32` is a build error.
+- Same public ABI. `word32_lib` and `poly_ripple` assemble empty, so the
+  word32 helpers are not exported; the variant adds one data export,
+  `cc20_qr_off` (6 B of quarter-round scratch).
+
 ### Build-time defines
 
 - `LIB_VARIANT_AEAD_ONLY=1` — strips test-only exports from the
@@ -138,6 +174,16 @@ bench-check` against `docs/BENCH_REPORT.baseline.json`. See
 `chacha20_quarter_round`, `chacha20_encrypt`, `poly1305_multiply`,
 `poly1305_reduce`, `aead_compute_tag`, `aead_verify_tag`,
 `sqtab_init`, and `ct_mul_8x8`.
+
+The compact variant, same tool, same session (`make profile-b` then
+`make profile-compact`, samples=3, VICE, display on):
+
+| routine               | S0 baseline | HEAD Profile B | compact   | vs S0   | vs Profile B |
+|-----------------------|------------:|---------------:|----------:|--------:|-------------:|
+| `chacha20_block`      |     149 987 |         39 404 |   108 197 | −27.9%  |   +174.6%    |
+| `poly1305_block`      |      53 270 |         37 992 |    48 770 |  −8.4%  |    +28.4%    |
+| `aead_encrypt` n=0    |     251 330 |         80 848 |   161 596 | −35.7%  |    +99.9%    |
+| `aead_encrypt` n=1024 |   5 974 048 |      3 195 923 | 5 051 813 | −15.4%  |    +58.1%    |
 
 v0.5.0 lands **C4** (branchless rotl-4 via two page-aligned 256-byte
 LUTs) on the ChaCha20 quarter-round, replacing the asl/lsr/ora chain
@@ -294,6 +340,26 @@ Validation evidence shipped alongside this release:
 This is an **internal audit**, not a third-party security review.
 The library is intended for hobbyist and research use.
 
+**Measured, not only reviewed, for the compact variant.** `make test-ct`
+(`tools/ct_timing_check.py`) counts cycles for `poly1305_multiply`
+(h, r all-zero / all-$FF / mixed / random), `chacha20_block` (key and
+nonce varied), `aead_encrypt` n=100 (key, nonce, AAD and plaintext
+varied, lengths fixed) and `aead_decrypt` (tag mismatching at byte 0 vs 15
+vs everywhere), and requires identical counts across every class. The
+display is blanked first, because VIC-II badlines otherwise add tens to
+hundreds of cycles of raster-phase noise; with it blanked, VICE repeats a
+count to the cycle and the tool checks that it does. The compact variant
+passes all four with one count each.
+
+**The default profiles do not pass it**, and that is the control showing
+the check can fail: on Profile B, `poly1305_multiply` spans 34 546–39 262
+cy across those classes and `aead_encrypt` n=100 spans 8 774 cy. The cause
+is `poly_ripple`, whose `INC/BNE` stops where the carry stops. The audit
+above classifies that branch as acceptable — it tests a carry, not an
+operand byte — but the carry is a function of h and r, so the time is
+too. Profile A carries through the same routine. The compact multiply
+was written so the question does not arise.
+
 ## Public symbols (library API)
 
 - `chacha20_init` -- seed ChaCha20 state from `cc20_key`, `cc20_nonce`, `cc20_counter`
@@ -357,7 +423,7 @@ aggregate-manifest convention (six §5 aggregate equates plus the two
 
 - `LIB_CHACHA20_POLY1305_REU_BANKS_USED` — bitmask of REU banks claimed. Always `$00`: the library issues no REU DMA in any profile (the former Profile A `POLY1305_REU` stash was removed by the issue #34 F1 slimming, PR #38).
 - `LIB_CHACHA20_POLY1305_ZP_USAGE_BYTES` — total ZP bytes claimed (88).
-- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile- and variant-aware: Profile A full **16640**, Profile A aead-only **16384**, Profile B full **17920**, Profile B aead-only **17664**, Profile B app-owned **17664**. **These are a BOUND, not a measurement** (issue #113): `od65` reports each object's segment sizes and cannot report the padding `ld65` inserts *between* sections, which this library forces to exist because `LIB_CHACHA20_POLY1305_CODE` must carry `align = $100` for its constant-time invariant. A consumer pays `sum + fill`, and fill is `(-offset) mod 256` per aligned section — so the declared value is `sum + (alignment-1) per aligned fragment + (alignment-1) for the segment start`, rounded up — the segment-start term covers ld65 padding the segment's own beginning to `align = $100` from wherever the consumer's preceding code ends. Until v0.11.0 these were the raw sum rounded up, omitting both the per-fragment fill and the segment-start fill,, which left all five **768 B short** of what a consumer could pay, in the dangerous direction. Now pinned by `make verify-resident-bytes`; re-measure with `python3 tools/measure_resident_bytes.py <objdir>`.
+- `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` — resident code+data upper bound, profile- and variant-aware: Profile A full **16640**, Profile A aead-only **16384**, Profile B full **17920**, Profile B aead-only **17664**, Profile B app-owned **17664**, compact (`lib-compact`) **2048**, compact owner **2304**. The compact variant has no page-aligned section, so its only fill term is the segment start; `tools/measure_resident_bytes.py` recognises the variant from its `cc20_qr_off` export and charges exactly that. **These are a BOUND, not a measurement** (issue #113): `od65` reports each object's segment sizes and cannot report the padding `ld65` inserts *between* sections, which this library forces to exist because `LIB_CHACHA20_POLY1305_CODE` must carry `align = $100` for its constant-time invariant. A consumer pays `sum + fill`, and fill is `(-offset) mod 256` per aligned section — so the declared value is `sum + (alignment-1) per aligned fragment + (alignment-1) for the segment start`, rounded up — the segment-start term covers ld65 padding the segment's own beginning to `align = $100` from wherever the consumer's preceding code ends. Until v0.11.0 these were the raw sum rounded up, omitting both the per-fragment fill and the segment-start fill,, which left all five **768 B short** of what a consumer could pay, in the dangerous direction. Now pinned by `make verify-resident-bytes`; re-measure with `python3 tools/measure_resident_bytes.py <objdir>`.
 - `LIB_CHACHA20_POLY1305_AEAD_ONLY_RESIDENT_BYTES` — tighter upper bound for consumers pinning the aead-only archive variant (Profile B **17664**, Profile A **16384** — bounds, not measurements; see the entry above).
 - `LIB_CHACHA20_POLY1305_COLD_BYTES` — overlay-able cold footprint (0; reserved for future hot/cold split).
 - `LIB_CHACHA20_POLY1305_AAD_LEN_MAX` — maximum AAD length in bytes (255). Published per §5's rule that a real input bound a consumer must respect should be a referenceable symbol rather than something the consumer re-derives. It is structural, not a policy choice: `aead_aad_len` is a single byte, so 255 is the largest AAD this ABI can express. The buffer-domain restriction `ptr + len <= $10000` is *not* published as a symbol, deliberately — it is a relation over two caller-supplied values, so no scalar expresses it.
@@ -560,6 +626,7 @@ src/
     data_lib.s                 mutable buffers (cc20_*, poly_*, aead_*)
     word32_lib.s               32-bit add / xor / rotate primitives
     chacha20_lib.s             ChaCha20 stream cipher (inlined QRs, rot-rename)
+    chacha20_compact.inc       LIB_VARIANT_COMPACT ChaCha20 core (rolled QR, no LUT)
     poly1305_lib.s             Poly1305 boot/key schedule (lib_init, init, clamp,
                                shoup_init)
     shared_sqtab_init.s        SPEC §8.1 mul_tables_init / sqtab_init (displaceable)
@@ -585,6 +652,7 @@ tools/
   build_release.sh             reproducible release tarball (make dist)
   audit_cross_check.py         30 000 random AEAD vectors vs pyca
   ct_mul_brute_check.py        65 536 exhaustive ct_mul_8x8 pairs
+  ct_timing_check.py           constant-time check by exact cycle count (make test-ct)
 examples/
   smoke_test/                  minimal external-consumer template
                                (own Makefile / cfg / main, RFC 7539
