@@ -118,6 +118,14 @@ $(BUILD)/app_owned-full.prg: $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o 
 # segment, so do not read a footprint off this map.
 compact: $(BUILD)/app_owned-compact.prg
 
+# The compact archive is the one target here that `make lib` /
+# `make lib-aead-only` do not produce, so build it on demand rather than fail
+# with "No rule to make target". Only when ABSENT: like the other two
+# archives, staleness against src/ is the parent Makefile's business —
+# rebuild with `make lib-compact` there after changing the library.
+$(LIB_COMPACT):
+	$(MAKE) -C $(PROJECT_ROOT) lib-compact
+
 $(BUILD)/app_owned-compact.prg: $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_COMPACT) | $(BUILD)
 	$(LD65) -C $(CFG) -m $(BUILD)/compact.map -Ln $(BUILD)/compact.labels \
 	    $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_COMPACT) -o $@

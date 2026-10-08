@@ -10,8 +10,17 @@ its secret operands fails, whatever the size of the difference.
 
   poly1305_multiply   h, r all-zero / all-$FF / mixed / random — the classes
                       the old `beq @skip_h_zero` / `beq @skip_r_zero` early
-                      outs and a carry ripple both separate. Includes
-                      poly1305_reduce, which it falls through into.
+                      outs and a carry ripple both separate — with h[16]
+                      over its whole reachable range 0..7 (h < 2^131 after
+                      the block add), and maximal-carry operands (h and r
+                      all-$FF). Includes poly1305_reduce, which it falls
+                      through into.
+  poly1305_final      h at and around every boundary of the final h >= p
+                      selection — 0, p-1, p, p+1, 2^130-6, 2^130, the
+                      largest reduce output, 2p-1, 2^131-1 — with s = 0
+                      and s = all-$FF. The F1 mask-blend is reached
+                      nowhere else with h >= p, so the AEAD classes cannot
+                      stand in for this.
   chacha20_block      key and nonce zero / $FF / random; counter fixed.
   aead_encrypt n=100  key, nonce, AAD bytes and plaintext bytes varied;
                       AAD length 13 and data length 100 fixed (both public).
@@ -90,19 +99,43 @@ def measure(transport, addr, overhead, setup, samples):
     return vals
 
 
+P1305 = 2 ** 130 - 5
+# Largest h poly1305_reduce can return: L <= 2^130-1 plus 5 * (h*r >> 130)
+# for h < 2^131 (the block-add bound) and the largest clamped r.
+R_CLAMP_MAX = 0x0ffffffc0ffffffc0ffffffc0fffffff
+REDUCE_MAX = 2 ** 130 - 1 + 5 * (((2 ** 131 - 1) * R_CLAMP_MAX) >> 130)
+
+
 def poly_classes(rng):
     rnd = lambda n: bytes(rng.randrange(256) for _ in range(n))
-    return [
+    rows = [
         ("h=0, r=0", bytes(17), bytes(16)),
         ("h=0, r=$FF", bytes(17), b"\xff" * 16),
         ("h=$FF, r=0", b"\xff" * 16 + b"\x03", bytes(16)),
         ("h=$FF, r=$FF", b"\xff" * 16 + b"\x03", b"\xff" * 16),
+        ("h=2^131-1, r=$FF (max carry)", b"\xff" * 16 + b"\x07",
+         b"\xff" * 16),
+        ("h=2^131-1, r=clamp max", b"\xff" * 16 + b"\x07",
+         R_CLAMP_MAX.to_bytes(16, "little")),
         ("alternating zero limbs", bytes([0, 0xff] * 8 + [3]),
          bytes([0xff, 0] * 8)),
-        ("random 1", rnd(16) + b"\x01", rnd(16)),
-        ("random 2", rnd(16) + b"\x02", rnd(16)),
-        ("random 3", rnd(16) + b"\x00", rnd(16)),
     ]
+    # h[16] over the whole reachable range, random limbs below it.
+    for top in range(8):
+        rows.append((f"random, h[16]={top}", rnd(16) + bytes([top]), rnd(16)))
+    return rows
+
+
+def final_classes():
+    hs = [("h=0", 0), ("h=p-1", P1305 - 1), ("h=p", P1305),
+          ("h=p+1", P1305 + 1), ("h=2^130-6", 2 ** 130 - 6),
+          ("h=2^130", 2 ** 130), ("h=reduce max", REDUCE_MAX),
+          ("h=2p-1", 2 * P1305 - 1), ("h=2^131-1", 2 ** 131 - 1)]
+    rows = []
+    for sname, s in (("s=0", bytes(16)), ("s=$FF", b"\xff" * 16)):
+        for hname, h in hs:
+            rows.append((f"{hname}, {sname}", h.to_bytes(17, "little"), s))
+    return rows
 
 
 def run_checks(transport, labels, samples, rng):
@@ -127,6 +160,16 @@ def run_checks(transport, labels, samples, rng):
         rows.append((name, measure(transport, labels["poly1305_multiply"],
                                    overhead, setup, samples)))
     results["poly1305_multiply"] = rows
+
+    # --- poly1305_final ------------------------------------------------
+    rows = []
+    for name, h, s in final_classes():
+        def setup(h=h, s=s):
+            write_bytes(transport, labels["poly_h"], h)
+            write_bytes(transport, labels["poly_s"], s)
+        rows.append((name, measure(transport, labels["poly1305_final"],
+                                   overhead, setup, samples)))
+    results["poly1305_final"] = rows
 
     # --- chacha20_block ------------------------------------------------
     rows = []
@@ -204,7 +247,7 @@ def run_checks(transport, labels, samples, rng):
         distinct = sorted(set(mins.values()))
         print(f"\n{routine}")
         for n, v in rows:
-            print(f"  {n:24s} {min(v):>9}" +
+            print(f"  {n:32s} {min(v):>9}" +
                   ("" if len(set(v)) == 1 else f"   VARIES {sorted(set(v))}"))
         if noisy:
             print(f"  ERROR: repeated runs of one input disagree ({noisy}) — "
@@ -235,7 +278,8 @@ def main():
         print(f"FATAL: {prg} not found — run `make profile-{args.profile}`")
         return 2
     labels = Labels.from_file(lbl)
-    need = ["poly1305_lib_init", "poly1305_multiply", "poly_h", "poly_r",
+    need = ["poly1305_lib_init", "poly1305_multiply", "poly1305_final",
+            "poly_h", "poly_r", "poly_s",
             "chacha20_init", "chacha20_block", "cc20_key", "cc20_nonce",
             "cc20_counter", "aead_encrypt", "aead_decrypt", "aead_key",
             "aead_nonce", "aead_aad_ptr", "aead_aad_len", "aead_data_ptr",
