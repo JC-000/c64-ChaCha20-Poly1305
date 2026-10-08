@@ -1187,7 +1187,9 @@ p−1, p, p+1, 2^130−1, 2^130, the largest reduce output, 2p−1, 2^131−1 �
 × s in {0, all-$FF, alternating $00/$FF, random}: 36 classes; F1's
 mask-blend is reached with h ≥ p nowhere else), `chacha20_block`,
 `aead_encrypt` at four length configurations (AAD/n = 13/100, 0/256,
-0/64, 16/300 — every public length gate taken both ways) and
+0/64, 16/300 — AAD absent and present, a partial and a whole final block
+in each pass, the data length's high byte zero and non-zero; n = 0, which
+skips the data pass entirely, is not a row) and
 `aead_decrypt` on an authentication failure (13 classes: difference $01,
 $80, $FF or random at byte 0, 7 or 15, or everywhere). It passes with one
 count per row.

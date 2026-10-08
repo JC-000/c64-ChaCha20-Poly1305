@@ -231,7 +231,7 @@ to within 0.01%. At the 64 MHz turbo setting `aead_encrypt` n=1024 takes
 64 and 48 are the nominal settings; the actual turbo clock was not
 measured, so the ratio is not a scaling efficiency. (The sweep tool prints
 ms at PAL 985 248 Hz unless given `--cia-hz 1022727`; its printed 81.3 /
-108.9 ms for this run are 3.7% high.) The two short routines' ratios are
+108.9 ms for this run are 3.8% high.) The two short routines' ratios are
 not quotable at 64 MHz: they run in ~700–1 600 ticks against a
 run-to-run spread of 86–215.
 

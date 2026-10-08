@@ -20,7 +20,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - **`LIB_VARIANT_COMPACT`, a size-first constant-time variant** — `make
   lib-compact` (`build/lib/chacha20poly1305-compact.a`, app-owned) and
-  `make profile-compact`. Rolled table-free ChaCha20 core, rolled Poly1305
+  `make profile-compact`. Rolled ChaCha20 core with no rotate LUT (it reads only the
+  public 32-byte quarter-round schedule), rolled Poly1305
   multiply with no carry branch, rolled reduce, no page-aligned table.
   1 690 B of library code + data in a minimal consumer link with the §8.1/
   §8.3 primitives consumer-supplied; 1 907 B for the owner build measured

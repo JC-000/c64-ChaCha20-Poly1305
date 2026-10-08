@@ -223,12 +223,16 @@ conditions, one about the message and one about the call — tests
 
 ### chacha20_quarter_round
 
-- **Module**: `chacha20_lib.s:502`
-- **Purpose**: **Test-only entry**. Performs one ChaCha20 quarter
-  round by patching `cc20_qr_idx` into `cc20_qr_table` and calling
-  the word32 helpers. Retained so
-  `tools/test_chacha20_poly1305.py:346` can exercise RFC 7539
-  §2.1.1's single-QR test vector.
+- **Module**: `chacha20_lib.s` (default core), `chacha20_compact.inc`
+  (`LIB_VARIANT_COMPACT`)
+- **Purpose**: Performs one ChaCha20 quarter round on the
+  `cc20_qr_table` row at offset `cc20_qr_idx`. In the default core it is
+  a **test-only entry** built on the word32 helpers (`chacha20_block`
+  inlines its own rounds); in the compact variant it is the routine
+  `chacha20_block` itself calls 80 times per block. The test suite's
+  `test_chacha20_quarter_round` exercises RFC 7539 §2.1.1's single-QR
+  vector through the shipped row 0 (QR 0,4,8,12) without writing to the
+  table — the compact core reads it, so it must not be patched.
 - **Signature**: Input ZP `cc20_qr_idx` = offset into `cc20_qr_table`
   (0, 4, 8, …, 28). Reads/writes `cc20_work`.
 - **Preconditions**: `cc20_work` must contain whatever state the

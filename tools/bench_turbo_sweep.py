@@ -56,7 +56,7 @@ DEFAULT_BUILD_LBL = os.path.join(PROJECT_ROOT, "build", "labels.txt")
 # It is the machine's VIDEO STANDARD that sets it, not the device model: an
 # NTSC machine (the C64 Ultimate tested for the compact variant was one)
 # ticks at 1 022 727 Hz, and PAL conversion overstates its wall clock by
-# 3.7%. Override with --cia-hz; tick counts and ratios are unaffected.
+# 3.8%. Override with --cia-hz; tick counts and ratios are unaffected.
 CIA_HZ = 985_248.0
 CIA_HZ_NTSC = 1_022_727.0
 

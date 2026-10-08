@@ -49,9 +49,9 @@ cc20_constants:
         .byte $74, $65, $20, $6b     ; 0x6b206574 "te k" (LE)
 
 ; --- Quarter-round index table: word indices (a, b, c, d) ---
-; Unlike the default core, chacha20_block DOES read this table. The test
-; suite patches row 0 to (0,1,2,3) to drive chacha20_quarter_round on an
-; isolated QR, exactly as it does against the default core.
+; Unlike the default core, chacha20_block DOES read this table, so treat it
+; as read-only. The test suite drives chacha20_quarter_round through the
+; shipped row 0 (QR 0,4,8,12) and checks the row is unchanged afterwards.
 cc20_qr_table:
         .byte  0,  4,  8, 12          ; column rounds
         .byte  1,  5,  9, 13
