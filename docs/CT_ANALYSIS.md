@@ -756,8 +756,10 @@ is tightened, these would need to revisit.
 **Measured since (`tools/ct_timing_check.py`, exact cycle counts with
 the display blanked).** On the default Profile B build,
 `poly1305_multiply` takes 34 546 cy with h or r all-zero, 39 262 cy with
-both all-$FF, and 35 570–36 569 cy on random operands; `aead_encrypt`
-n=100 spans 8 774 cy across key/plaintext classes of equal length. The
+both all-$FF, and in between on random operands (12 distinct counts
+over 15 classes); `aead_encrypt` n=100 spans 5 748 cy across
+key/plaintext classes of equal length (default seed 8439 — the random
+classes, and so this figure, move with the seed). The
 variation is the `poly_ripple` exit point, i.e. how far each carry runs,
 which is a function of h and r. So the caveat above is not hypothetical:
 the time of this routine depends on secret data, by thousands of cycles.
@@ -1179,9 +1181,19 @@ The compact variant (`make lib-compact`, `make profile-compact`) is the
 one build in this library that is constant-time **by measurement** as
 well as by review. `make test-ct` runs `tools/ct_timing_check.py`, which
 requires identical cycle counts across secret-input classes for
-`poly1305_multiply` (+ reduce), `chacha20_block`, `aead_encrypt` (fixed
-lengths) and `aead_decrypt` on an authentication failure (mismatch at
-byte 0 / 15 / everywhere). It passes with one count per routine.
+`poly1305_multiply` (+ reduce; h[16] over its reachable 0..7 and
+maximal-carry operands included), `poly1305_final` (h at 0, p−1, p, p+1,
+2^130−6, 2^130, the largest reduce output, 2p−1, 2^131−1, with s = 0 and
+all-$FF — F1's mask-blend is reached with h ≥ p nowhere else),
+`chacha20_block`, `aead_encrypt` (fixed lengths) and `aead_decrypt` on an
+authentication failure (mismatch at byte 0 / 15 / everywhere). It passes
+with one count per routine.
+
+It measures the OWNER build, whose `ct_mul_8x8` and sqtab are this
+library's. `make lib-compact` takes both from the consumer, so there the
+variant is constant-time only if the consumer's `ct_mul_8x8` is
+branch-free and its sqtab is page-aligned (both are §8.3/§8.1
+obligations; this check cannot see them).
 
 Per-file classification of what the variant adds:
 
@@ -1206,3 +1218,12 @@ multiply when `h[i] = 0` and a `bcc` on the row-carry add both leave the
 145-test suite green and turn `make test-ct` red (spreads of 20 128 cy and
 80 cy on `poly1305_multiply`). The second is a single cycle per taken
 branch; the check still sees it.
+
+Two further one-cycle mutants came from the adversarial review and were
+the reason the `poly1305_final` and h[16] = 4..7 classes exist: a
+`beq/nop` on the F1 mask in `poly1305_final` (PASSED the first version of
+the check, which reached `poly1305_final` only through AEAD calls that
+never have h ≥ p — now red on the `poly1305_final` row, 1 cy) and a
+`beq/nop` on `h[16] & 4` at multiply entry (passed the first version's
+multiply row, whose classes stopped at h[16] = 3, and was caught only by
+the AEAD row — now red on the multiply row, 1 cy).

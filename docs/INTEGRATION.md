@@ -757,8 +757,9 @@ form a size/speed dial (issue #34):
   the ZP-direct macro forms instead.
 
 Combining the aead-only archive with rolled-outer (issue #34's
-closing "config D" result) yields an **8 230 B** linked consumer
-footprint for +4.08% cycles. None of these flags change the AEAD
+closing "config D" result) yielded an **8 230 B** linked consumer
+footprint at v0.6.0 for +4.08% cycles; re-measured at HEAD it is 8 486 B
+(consumer PRG), 7 975 B of it library segments. None of these flags change the AEAD
 calling convention or symbol names — see the stability promise
 above.
 
@@ -767,7 +768,8 @@ above.
 `make lib-compact` builds `build/lib/chacha20poly1305-compact.a`: a rolled,
 table-free ChaCha20 core and a rolled Poly1305 multiply with no carry
 branch, measured constant-time by `make test-ct`. **1 690 B** of library
-code + data in a minimal consumer link, at +58% `aead_encrypt` cycles
+code + data in a minimal consumer link (your `ct_mul_8x8`, sqtab builder
+and the 1 KB sqtab not counted; 1 907 B if the library owned them), at +58% `aead_encrypt` cycles
 against Profile B (−15% against the sprint-0 baseline). Same AEAD ABI.
 
 It is built **app-owned**, so the consumer supplies the §8.1 sqtab builder
@@ -777,6 +779,10 @@ It is built **app-owned**, so the consumer supplies the §8.1 sqtab builder
 this guide applies; differences:
 
 - `LIB_CHACHA20_POLY1305_RESIDENT_BYTES` reads **2048**.
+- Its constant time is partly yours: `make test-ct` measures this library's
+  own §8.3 body. Your `ct_mul_8x8` must be branch-free and your sqtab
+  page-aligned, or the variant is not constant-time in your link.
+- `chacha20_block` reads `cc20_qr_table` at runtime; do not write to it.
 - It has no page-aligned table. Keep `align = $100` on
   `LIB_CHACHA20_POLY1305_CODE` anyway — the RESIDENT_BYTES bound assumes it,
   and the same cfg line then works for every variant.

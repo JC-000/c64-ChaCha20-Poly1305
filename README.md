@@ -67,7 +67,11 @@ secret data).
 
 Issue #34 (closed with this release) added two orthogonal, default-off
 size knobs on top of the Profile B baseline. Measured footprints
-(Profile B PRG bytes / minimal AEAD-only consumer link bytes):
+(Profile B PRG bytes / minimal AEAD-only consumer link bytes) — **as
+measured at v0.6.0**; the code has grown since, so read them as the
+relative dial they were. Config D re-measured at HEAD is in the compact
+table below (9 256 B PRG, 8 486 B consumer PRG, 7 975 B of library
+segments).
 
 | config | build | PRG | min consumer link | cycles, `aead_encrypt` n=1024 |
 |--------|-------|----:|------------------:|------------------------------:|
@@ -76,9 +80,10 @@ size knobs on top of the Profile B baseline. Measured footprints
 | C — rolled-outer | `-DPOLY1305_MULTIPLY_ROLLED_OUTER=1` | 9 256 | 9 254 | +4.08% |
 | D — combined | aead-only archive + rolled-outer | 9 000 | **8 230** | +4.08% |
 
-Config D is the headline result: **8,230 B** linked consumer footprint
-— less than half the 17,446 B baseline minimum link — for +4.08%
-cycles on `aead_encrypt` n=1024. Which knob to pick:
+Config D was v0.6.0's headline result: **8,230 B** linked consumer
+footprint at the time (8,486 B at HEAD) — less than half the baseline
+minimum link — for +4.08% cycles on `aead_encrypt` n=1024. Which knob to
+pick:
 
 - **aead-only** (`make lib-aead-only`) is free in cycles — it only
   strips test-only exports (see "Public symbols" below) — so any
@@ -99,35 +104,58 @@ before.
 ### Compact variant (`LIB_VARIANT_COMPACT`)
 
 A separate, size-first point well below config D, for a consumer that
-cannot hold 8 KB and wants constant time without argument:
+cannot hold 8 KB and wants constant time without argument. Footprints
+measured at this commit:
 
-| config | build | PRG | min consumer link | library bytes | cycles, `aead_encrypt` n=1024 |
-|--------|-------|----:|------------------:|--------------:|------------------------------:|
-| D — combined, re-measured | aead-only archive + rolled-outer | 9 256 | 8 486 | 7 975 | +4.08% (v0.6.0 figure) |
-| **E — compact** | `make lib-compact` / `make profile-compact` | 2 500 | **2 201** | **1 690** | +58.1% vs Profile B, −15.4% vs sprint-0 |
+| config | archive | consumer | min consumer PRG | library segments |
+|--------|---------|----------|-----------------:|-----------------:|
+| D — aead-only + rolled-outer | `make lib-aead-only CONTRACT_DEFINES=-DPOLY1305_MULTIPLY_ROLLED_OUTER=1` | `min_aead_consumer` | 8 486 | 7 975 |
+| E′ — compact, owner (like-for-like with D) | `make lib-aead-only CONTRACT_DEFINES=-DLIB_VARIANT_COMPACT=1` | `min_aead_consumer` | 2 418 | 1 907 |
+| **E — compact, app-owned** | `make lib-compact` | `app_owned_consumer` (stub providers) | **2 201** | **1 690** |
 
-- "min consumer link" is the same measure as the table above — the
-  `test_consumer/` PRG (`make -C test_consumer compact`), BASIC stub and
-  alignment pad included. D's sizes were re-measured at this commit: the
-  9 000 / 8 230 B above are the v0.6.0 measurements, and the code has
-  grown since. Its cycle column was not re-measured.
-  "library bytes" is just the two `LIB_CHACHA20_POLY1305_*` segments in
-  that link's map (E: CODE 1 389 + DATA 301).
-- The compact archive is **app-owned**: like `lib-app-owned` it defers
-  the §8.1 sqtab builder and the §8.3 `ct_mul_8x8` to the consumer, so
-  those 217 B (and the 1 KB table) are the consumer's and are not in the
-  figure. `make profile-compact` is the owner build (2 242 B bound).
+- **D and E′ are the same measure**: the `test_consumer/` PRG of
+  `min_aead_consumer` linked against an archive that owns the §8.1/§8.3
+  shared primitives, so the library segments include `sqtab_init`,
+  `ct_mul_8x8` and `poly_prod_lo/hi` (217 B). (`make -C test_consumer
+  aead_only` after the archive build shown.)
+- **E is not the same measure.** `lib-compact` defers those primitives to
+  the consumer, so its link uses `app_owned_consumer`, which supplies them
+  as stubs in its own `CODE` (18 B instead of 10). The 217 B are then the
+  consumer's — c64-https already ships both — and are not counted; nor is
+  the 1 KB sqtab, in either row. `make -C test_consumer compact`.
+- "library segments" is the two `LIB_CHACHA20_POLY1305_*` segments in the
+  link's map (E: CODE 1 389 + DATA 301). The PRG adds the BASIC stub,
+  header, the consumer's code and the pad to the page-aligned segment.
+- Cycles: `aead_encrypt` n=1024 is +58% against Profile B and −15%
+  against the sprint-0 baseline — see the table under "Performance".
 - What it changes: one rolled quarter-round that `chacha20_block` calls 80
   times, rotations built from byte-rotate and bit-rotate with no LUT; a
   rolled Poly1305 multiply that carries row by row (no `poly_ripple`, no
   branch on an operand or a carry); a rolled reduce; looped AEAD padding.
   It has **no page-aligned table**. The §14.1 domain guards are unchanged.
+- **What its constant time depends on.** `lib-compact` takes
+  `ct_mul_8x8` and the sqtab from the consumer, so the variant is only as
+  constant-time as those: the consumer's `ct_mul_8x8` must be branch-free
+  (the §8.3 reference body is) and the sqtab must be page-aligned at
+  `LIB_SHARED_SQTAB_BASE`, because `ct_mul_8x8` indexes it with
+  secret-derived X/Y. `make test-ct` measures the owner build, i.e. this
+  library's own §8.3 body; it says nothing about a consumer's.
+- `chacha20_block` **reads `cc20_qr_table` at runtime** in this variant
+  (the default core inlines its schedule). The table is ordinary writable
+  data: anything that patches it — as the test suite's quarter-round test
+  used to — changes every later block. The suite now drives the shipped
+  row and checks it is unchanged afterwards.
 - Profile B only, and it owns its code shape: combining it with
   `POLY1305_PROFILE_LONG`, `POLY1305_MULTIPLY_ROLLED[_OUTER]` or
   `CHACHA20_USE_WORD32` is a build error.
 - Same public ABI. `word32_lib` and `poly_ripple` assemble empty, so the
-  word32 helpers are not exported; the variant adds one data export,
-  `cc20_qr_off` (6 B of quarter-round scratch).
+  word32 helpers are not exported (the suite reports its rotation group
+  as SKIP); the variant adds one data export, `cc20_qr_off` (6 B of
+  quarter-round scratch).
+- `make -C test_consumer` (its `all`) now includes the two compact links,
+  so it needs `make lib-compact` first, as it already needed `make lib
+  lib-aead-only`. A missing archive is built for you by the test_consumer
+  Makefile.
 
 ### Build-time defines
 
@@ -176,14 +204,30 @@ bench-check` against `docs/BENCH_REPORT.baseline.json`. See
 `sqtab_init`, and `ct_mul_8x8`.
 
 The compact variant, same tool, same session (`make profile-b` then
-`make profile-compact`, samples=3, VICE, display on):
+`make profile-compact`, VICE, display on, min of 3 samples, ± the
+run-to-run spread over those 3 — badline DMA makes counts vary with the
+raster phase at entry, so the last digits are not significant):
 
-| routine               | S0 baseline | HEAD Profile B | compact   | vs S0   | vs Profile B |
-|-----------------------|------------:|---------------:|----------:|--------:|-------------:|
-| `chacha20_block`      |     149 987 |         39 404 |   108 197 | −27.9%  |   +174.6%    |
-| `poly1305_block`      |      53 270 |         37 992 |    48 770 |  −8.4%  |    +28.4%    |
-| `aead_encrypt` n=0    |     251 330 |         80 848 |   161 596 | −35.7%  |    +99.9%    |
-| `aead_encrypt` n=1024 |   5 974 048 |      3 195 923 | 5 051 813 | −15.4%  |    +58.1%    |
+| routine               | S0 baseline | HEAD Profile B   | compact          | vs S0  | vs Profile B |
+|-----------------------|------------:|-----------------:|-----------------:|-------:|-------------:|
+| `chacha20_block`      |     149 987 |    39 404 ± 261  |   108 197 ± 398  |  −28%  |    +175%     |
+| `poly1305_block`      |      53 270 |    37 992 ± 164  |    48 770 ± 87   |   −8%  |     +28%     |
+| `aead_encrypt` n=0    |     251 330 |    80 848 ± 255  |   161 596 ± 88   |  −36%  |    +100%     |
+| `aead_encrypt` n=1024 |   5 974 048 | 3 195 923 ± 1602 | 5 051 813 ± 262  |  −15%  |     +58%     |
+
+With the display blanked (no badlines) VICE repeats a count to the cycle;
+`make test-ct` reports compact at `chacha20_block` 101 641,
+`poly1305_multiply` 45 394, `poly1305_final` 1 179 and `aead_encrypt`
+n=100 724 453 cycles, identical across every input class it tries.
+
+On hardware — C64 Ultimate, the same compact PRG, `tools/bench_turbo_sweep.py`
+through the c64-test-harness queue, min of 3, one power-on session: at
+1 MHz the CIA tick counts (`chacha20_block` 108 212, `poly1305_block`
+48 769, `aead_encrypt` n=1024 5 052 218) agree with the VICE column above
+to within 0.01%; at 64 MHz `aead_encrypt` n=1024 takes **81.3 ms**
+of wall clock (108.9 ms at 48 MHz), 63.1× its 1 MHz time against an ideal
+64×. The two short routines' ratios are not quotable at 64 MHz: they run
+in ~700–1 600 ticks against a run-to-run spread of 86–215.
 
 v0.5.0 lands **C4** (branchless rotl-4 via two page-aligned 256-byte
 LUTs) on the ChaCha20 quarter-round, replacing the asl/lsr/ora chain
@@ -342,18 +386,23 @@ The library is intended for hobbyist and research use.
 
 **Measured, not only reviewed, for the compact variant.** `make test-ct`
 (`tools/ct_timing_check.py`) counts cycles for `poly1305_multiply`
-(h, r all-zero / all-$FF / mixed / random), `chacha20_block` (key and
-nonce varied), `aead_encrypt` n=100 (key, nonce, AAD and plaintext
-varied, lengths fixed) and `aead_decrypt` (tag mismatching at byte 0 vs 15
-vs everywhere), and requires identical counts across every class. The
-display is blanked first, because VIC-II badlines otherwise add tens to
-hundreds of cycles of raster-phase noise; with it blanked, VICE repeats a
-count to the cycle and the tool checks that it does. The compact variant
-passes all four with one count each.
+(h, r all-zero / all-$FF / mixed / random, h[16] over its reachable
+0..7, maximal-carry operands), `poly1305_final` (h at 0, p−1, p, p+1,
+2^130−6, 2^130, the largest reduce output, 2p−1 and 2^131−1, each with
+s = 0 and all-$FF — the only place the h ≥ p mask-blend is exercised),
+`chacha20_block` (key and nonce varied), `aead_encrypt` n=100 (key,
+nonce, AAD and plaintext varied, lengths fixed) and `aead_decrypt` (tag
+mismatching at byte 0 vs 15 vs everywhere), and requires identical counts
+across every class. The display is blanked first, because VIC-II
+badlines otherwise add tens to hundreds of cycles of raster-phase noise;
+with it blanked, VICE repeats a count to the cycle and the tool checks
+that it does. The compact variant passes all five with one count each.
+A one-cycle branch planted in `poly1305_final`'s mask or on `h[16]` bit 2
+at multiply entry turns it red on that routine's own row.
 
 **The default profiles do not pass it**, and that is the control showing
 the check can fail: on Profile B, `poly1305_multiply` spans 34 546–39 262
-cy across those classes and `aead_encrypt` n=100 spans 8 774 cy. The cause
+cy across those classes and `aead_encrypt` n=100 spans 5 748 cy (seed 8439). The cause
 is `poly_ripple`, whose `INC/BNE` stops where the carry stops. The audit
 above classifies that branch as acceptable — it tests a carry, not an
 operand byte — but the carry is a function of h and r, so the time is
@@ -778,7 +827,8 @@ sibling library for the first time, moving library code to
 release, **v0.6.0** (2026-07-28), was the c64-lib-contract adoption +
 size-variants release, closing issue #34 with the ar65 archive
 variants and the rolled-multiply size knobs (config D: 8,230 B linked
-consumer footprint — see "Size variants" above). **v0.5.0** landed the C4 branchless
+consumer footprint at v0.6.0, 8,486 B at HEAD — see "Size variants"
+above). **v0.5.0** landed the C4 branchless
 rotl-4 LUT optimization on the ChaCha20 quarter-round (−8.8%
 `chacha20_block`, −3.8% / −1.9% AEAD encrypt at n=1024 for Profile
 A / B vs v0.4.0). Tagged releases are published on the
