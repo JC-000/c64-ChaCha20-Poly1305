@@ -16,16 +16,25 @@ its secret operands fails, whatever the size of the difference.
                       all-$FF). Includes poly1305_reduce, which it falls
                       through into.
   poly1305_final      h at and around every boundary of the final h >= p
-                      selection — 0, p-1, p, p+1, 2^130-6, 2^130, the
-                      largest reduce output, 2p-1, 2^131-1 — with s = 0
-                      and s = all-$FF. The F1 mask-blend is reached
-                      nowhere else with h >= p, so the AEAD classes cannot
-                      stand in for this.
+                      selection — 0, p-1 (= 2^130-6), p, p+1, 2^130-1,
+                      2^130, the largest reduce output, 2p-1, 2^131-1:
+                      9 distinct values — each with s = 0, all-$FF,
+                      alternating $00/$FF and random (36 classes). The F1
+                      mask-blend is reached nowhere else with h >= p, so
+                      the AEAD classes cannot stand in for this.
   chacha20_block      key and nonce zero / $FF / random; counter fixed.
-  aead_encrypt n=100  key, nonce, AAD bytes and plaintext bytes varied;
-                      AAD length 13 and data length 100 fixed (both public).
-  aead_decrypt        tags that mismatch at byte 0 vs byte 15 vs all bytes
-                      — the compare must not stop at the first difference.
+  aead_encrypt        one row per LENGTH configuration, because lengths
+                      are public and gate different code: AAD 13 / data
+                      100 (both final blocks partial), AAD 0 / data 256
+                      (no AAD pass, data_len high byte set, data a
+                      multiple of 16), AAD 0 / data 64, AAD 16 / data 300
+                      (AAD whole blocks, n >= 256 with a partial final
+                      block). Within a row key, nonce, AAD and plaintext
+                      bytes vary.
+  aead_decrypt        failing tags whose difference is $01, $80, $FF or a
+                      random nonzero byte, at byte 0, 7 or 15, plus a tag
+                      differing everywhere — the compare must depend
+                      neither on where the tags differ nor on which bits.
 
 HOW THE CYCLES ARE MADE EXACT. The count comes from the bench's chained
 CIA #1 wrapper (tools/benchmark_chacha20_poly1305.py). CIA timers count bus
@@ -79,8 +88,9 @@ VIC_CR1 = 0xD011
 AAD_BUF = 0xC200
 DATA_BUF = 0x5000
 SHIM = 0xC1E0
-AAD_LEN = 13
-DATA_LEN = 100
+# (AAD length, data length) per aead_encrypt row. The first is also the
+# aead_decrypt message.
+AEAD_LENGTHS = [(13, 100), (0, 256), (0, 64), (16, 300)]
 
 
 def write_ptr(transport, addr, target):
@@ -127,12 +137,18 @@ def poly_classes(rng):
 
 
 def final_classes():
+    # p-1 IS 2^130-6; 2^130-1 is the top of the "keep h" side's 130-bit
+    # range, the other end of the run the +5 carry has to cross.
     hs = [("h=0", 0), ("h=p-1", P1305 - 1), ("h=p", P1305),
-          ("h=p+1", P1305 + 1), ("h=2^130-6", 2 ** 130 - 6),
+          ("h=p+1", P1305 + 1), ("h=2^130-1", 2 ** 130 - 1),
           ("h=2^130", 2 ** 130), ("h=reduce max", REDUCE_MAX),
           ("h=2p-1", 2 * P1305 - 1), ("h=2^131-1", 2 ** 131 - 1)]
+    assert len({h for _, h in hs}) == len(hs), "duplicate h boundary"
+    srand = random.Random(130).randbytes(16)
     rows = []
-    for sname, s in (("s=0", bytes(16)), ("s=$FF", b"\xff" * 16)):
+    for sname, s in (("s=0", bytes(16)), ("s=$FF", b"\xff" * 16),
+                     ("s=$00/$FF", bytes([0, 0xff] * 8)),
+                     ("s=random", srand)):
         for hname, h in hs:
             rows.append((f"{hname}, {sname}", h.to_bytes(17, "little"), s))
     return rows
@@ -203,34 +219,47 @@ def run_checks(transport, labels, samples, rng):
                     struct.pack("<H", len(pt)))
 
     rnd = lambda n: bytes(rng.randrange(256) for _ in range(n))
-    aead_cases = [
-        ("all zero", bytes(32), bytes(12), bytes(AAD_LEN), bytes(DATA_LEN)),
-        ("all $FF", b"\xff" * 32, b"\xff" * 12, b"\xff" * AAD_LEN,
-         b"\xff" * DATA_LEN),
-        ("random 1", rnd(32), rnd(12), rnd(AAD_LEN), rnd(DATA_LEN)),
-        ("random 2", rnd(32), rnd(12), rnd(AAD_LEN), rnd(DATA_LEN)),
-    ]
-    rows = []
-    for name, *case in aead_cases:
-        rows.append((name, measure(transport, labels["aead_encrypt"], overhead,
-                                   lambda case=case: aead_inputs(*case),
-                                   samples)))
-    results[f"aead_encrypt n={DATA_LEN}"] = rows
+
+    def secret_classes(aad_len, n):
+        return [
+            ("all zero", bytes(32), bytes(12), bytes(aad_len), bytes(n)),
+            ("all $FF", b"\xff" * 32, b"\xff" * 12, b"\xff" * aad_len,
+             b"\xff" * n),
+            ("random 1", rnd(32), rnd(12), rnd(aad_len), rnd(n)),
+            ("random 2", rnd(32), rnd(12), rnd(aad_len), rnd(n)),
+        ]
+
+    aead_cases = None
+    for aad_len, n in AEAD_LENGTHS:
+        cases = secret_classes(aad_len, n)
+        aead_cases = aead_cases or cases
+        rows = []
+        for name, *case in cases:
+            rows.append((name, measure(transport, labels["aead_encrypt"],
+                                       overhead,
+                                       lambda case=case: aead_inputs(*case),
+                                       samples)))
+        results[f"aead_encrypt aad={aad_len} n={n}"] = rows
 
     # --- aead_decrypt, tag mismatch position ---------------------------
     # Encrypt once for a valid (ct, tag), then corrupt the tag in different
     # places. Every case fails authentication, so every case takes the same
     # path through the API; only WHERE the tags differ changes.
-    key, nonce, aad, pt = aead_cases[2][1:]
+    key, nonce, aad, pt = aead_cases[2][1:]     # AAD 13 / n 100, random
     aead_inputs(key, nonce, aad, pt)
     jsr(transport, labels["aead_encrypt"], timeout=120.0)
-    ct = read_bytes(transport, DATA_BUF, DATA_LEN)
+    ct = read_bytes(transport, DATA_BUF, len(pt))
     tag = read_bytes(transport, labels["aead_tag"], 16)
     rows = []
-    for name, flip in [("differs at byte 0", [0]),
-                       ("differs at byte 15", [15]),
-                       ("differs everywhere", list(range(16)))]:
-        bad = bytes(t ^ (0x01 if i in flip else 0) for i, t in enumerate(tag))
+    mismatches = []
+    rdiff = random.Random(16)
+    for pos in (0, 7, 15):
+        for dname, d in (("$01", 0x01), ("$80", 0x80), ("$FF", 0xFF),
+                         ("random", rdiff.randrange(1, 256))):
+            mismatches.append((f"byte {pos} ^ {dname}", {pos: d}))
+    mismatches.append(("every byte ^ $01", {i: 0x01 for i in range(16)}))
+    for name, flips in mismatches:
+        bad = bytes(t ^ flips.get(i, 0) for i, t in enumerate(tag))
 
         def setup(bad=bad):
             aead_inputs(key, nonce, aad, ct)
