@@ -1182,12 +1182,15 @@ one build in this library that is constant-time **by measurement** as
 well as by review. `make test-ct` runs `tools/ct_timing_check.py`, which
 requires identical cycle counts across secret-input classes for
 `poly1305_multiply` (+ reduce; h[16] over its reachable 0..7 and
-maximal-carry operands included), `poly1305_final` (h at 0, p−1, p, p+1,
-2^130−6, 2^130, the largest reduce output, 2p−1, 2^131−1, with s = 0 and
-all-$FF — F1's mask-blend is reached with h ≥ p nowhere else),
-`chacha20_block`, `aead_encrypt` (fixed lengths) and `aead_decrypt` on an
-authentication failure (mismatch at byte 0 / 15 / everywhere). It passes
-with one count per routine.
+maximal-carry operands included), `poly1305_final` (9 distinct h — 0,
+p−1, p, p+1, 2^130−1, 2^130, the largest reduce output, 2p−1, 2^131−1 —
+× s in {0, all-$FF, alternating $00/$FF, random}: 36 classes; F1's
+mask-blend is reached with h ≥ p nowhere else), `chacha20_block`,
+`aead_encrypt` at four length configurations (AAD/n = 13/100, 0/256,
+0/64, 16/300 — every public length gate taken both ways) and
+`aead_decrypt` on an authentication failure (13 classes: difference $01,
+$80, $FF or random at byte 0, 7 or 15, or everywhere). It passes with one
+count per row.
 
 It measures the OWNER build, whose `ct_mul_8x8` and sqtab are this
 library's. `make lib-compact` takes both from the consumer, so there the
@@ -1227,3 +1230,11 @@ never have h ≥ p — now red on the `poly1305_final` row, 1 cy) and a
 `beq/nop` on `h[16] & 4` at multiply entry (passed the first version's
 multiply row, whose classes stopped at h[16] = 3, and was caught only by
 the AEAD row — now red on the multiply row, 1 cy).
+
+Third round, same pattern: the first two versions of the check passed
+three more one-cycle mutants, each now red on its own row — a `bpl/nop`
+on bit 7 of the tag difference in `aead_verify_tag` (every mismatch class
+had XORed $01), a `beq/nop` on `s[0] ^ s[1]` in `poly1305_final` (every s
+class was uniform), and a branch on a data byte reached only when
+`cc20_remain_hi` ≠ 0 in the AEAD padding walker (every AEAD class had
+n = 100).

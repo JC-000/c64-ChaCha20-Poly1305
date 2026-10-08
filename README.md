@@ -153,9 +153,9 @@ measured at this commit:
   as SKIP); the variant adds one data export, `cc20_qr_off` (6 B of
   quarter-round scratch).
 - `make -C test_consumer` (its `all`) now includes the two compact links,
-  so it needs `make lib-compact` first, as it already needed `make lib
-  lib-aead-only`. A missing archive is built for you by the test_consumer
-  Makefile.
+  so it needs `make lib-compact` as well as `make lib lib-aead-only`. Only
+  the compact archive is built on demand by the test_consumer Makefile;
+  the other two must already exist, as before.
 
 ### Build-time defines
 
@@ -218,16 +218,22 @@ raster phase at entry, so the last digits are not significant):
 With the display blanked (no badlines) VICE repeats a count to the cycle;
 `make test-ct` reports compact at `chacha20_block` 101 641,
 `poly1305_multiply` 45 394, `poly1305_final` 1 179 and `aead_encrypt`
-n=100 724 453 cycles, identical across every input class it tries.
+724 453 (AAD 13, n=100) / 1 297 439 (AAD 0, n=256) cycles, identical
+across every input class it tries.
 
 On hardware — C64 Ultimate, the same compact PRG, `tools/bench_turbo_sweep.py`
 through the c64-test-harness queue, min of 3, one power-on session: at
 1 MHz the CIA tick counts (`chacha20_block` 108 212, `poly1305_block`
 48 769, `aead_encrypt` n=1024 5 052 218) agree with the VICE column above
-to within 0.01%; at 64 MHz `aead_encrypt` n=1024 takes **81.3 ms**
-of wall clock (108.9 ms at 48 MHz), 63.1× its 1 MHz time against an ideal
-64×. The two short routines' ratios are not quotable at 64 MHz: they run
-in ~700–1 600 ticks against a run-to-run spread of 86–215.
+to within 0.01%. At the 64 MHz turbo setting `aead_encrypt` n=1024 takes
+80 059 ticks — **78.3 ms** at the C64U's NTSC phi2 of 1 022 727 Hz
+(104.9 ms, 107 289 ticks, at 48 MHz) — 63.1× fewer ticks than at 1 MHz.
+64 and 48 are the nominal settings; the actual turbo clock was not
+measured, so the ratio is not a scaling efficiency. (The sweep tool prints
+ms at PAL 985 248 Hz unless given `--cia-hz 1022727`; its printed 81.3 /
+108.9 ms for this run are 3.7% high.) The two short routines' ratios are
+not quotable at 64 MHz: they run in ~700–1 600 ticks against a
+run-to-run spread of 86–215.
 
 v0.5.0 lands **C4** (branchless rotl-4 via two page-aligned 256-byte
 LUTs) on the ChaCha20 quarter-round, replacing the asl/lsr/ora chain
@@ -387,17 +393,22 @@ The library is intended for hobbyist and research use.
 **Measured, not only reviewed, for the compact variant.** `make test-ct`
 (`tools/ct_timing_check.py`) counts cycles for `poly1305_multiply`
 (h, r all-zero / all-$FF / mixed / random, h[16] over its reachable
-0..7, maximal-carry operands), `poly1305_final` (h at 0, p−1, p, p+1,
-2^130−6, 2^130, the largest reduce output, 2p−1 and 2^131−1, each with
-s = 0 and all-$FF — the only place the h ≥ p mask-blend is exercised),
-`chacha20_block` (key and nonce varied), `aead_encrypt` n=100 (key,
-nonce, AAD and plaintext varied, lengths fixed) and `aead_decrypt` (tag
-mismatching at byte 0 vs 15 vs everywhere), and requires identical counts
-across every class. The display is blanked first, because VIC-II
+0..7, maximal-carry operands), `poly1305_final` (9 distinct h — 0, p−1,
+p, p+1, 2^130−1, 2^130, the largest reduce output, 2p−1, 2^131−1 — each
+with s = 0, all-$FF, alternating $00/$FF and random: 36 classes; the only
+place the h ≥ p mask-blend is exercised), `chacha20_block` (key and nonce
+varied), `aead_encrypt` at four length configurations — AAD 13 / n 100,
+AAD 0 / n 256, AAD 0 / n 64, AAD 16 / n 300 — so the code behind each
+public length gate is timed (key, nonce, AAD and plaintext varied within
+each), and `aead_decrypt` (failing tags differing by $01, $80, $FF or a
+random byte at byte 0, 7 or 15, or everywhere: 13 classes), and requires
+identical counts across every class. The display is blanked first, because VIC-II
 badlines otherwise add tens to hundreds of cycles of raster-phase noise;
 with it blanked, VICE repeats a count to the cycle and the tool checks
-that it does. The compact variant passes all five with one count each.
-A one-cycle branch planted in `poly1305_final`'s mask or on `h[16]` bit 2
+that it does. The compact variant passes every row with one count each.
+A one-cycle branch planted on bit 7 of a tag difference, on a
+non-uniform s, behind the n ≥ 256 length gate, in `poly1305_final`'s
+mask or on `h[16]` bit 2
 at multiply entry turns it red on that routine's own row.
 
 **The default profiles do not pass it**, and that is the control showing

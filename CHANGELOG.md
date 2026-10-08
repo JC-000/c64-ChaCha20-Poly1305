@@ -32,8 +32,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-identical.
 - **`make test-ct`** (`tools/ct_timing_check.py`): exact cycle counts, with
   the display blanked, across secret-input classes for `poly1305_multiply`
-  (h[16] over 0..7), `poly1305_final` (h around every h >= p boundary),
-  `chacha20_block`, `aead_encrypt` and failing `aead_decrypt`. Gates the
+  (h[16] over 0..7), `poly1305_final` (9 h boundaries x 4 s patterns),
+  `chacha20_block`, `aead_encrypt` at four length configurations, and
+  failing `aead_decrypt` (13 tag-difference classes). Gates the
   compact variant. It **fails on the default Profile B build** —
   `poly1305_multiply` varies 34 546–39 262 cy with h and r through
   `poly_ripple` — which docs/CT_ANALYSIS.md §4.1 now records.

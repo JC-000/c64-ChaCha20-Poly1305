@@ -7,7 +7,7 @@ multiple CPU turbo speeds on an Ultimate 64 / C64 Ultimate.
 
 Method: the CIA #1 chained Timer A+B wrapper (shared with
 benchmark_chacha20_poly1305.py) counts CIA ticks. On Ultimate hardware
-the CIA keeps ticking at the stock PAL phi2 rate (~985 kHz) regardless
+the CIA keeps ticking at the stock phi2 rate (PAL ~985 kHz, NTSC ~1023 kHz) regardless
 of CPU turbo, so ticks are approximately wall-clock microseconds. If a
 routine scales cleanly with CPU clock, ticks at N MHz ~= ticks at
 1 MHz / N; any speed-invariant component (REU DMA, I/O-anchored waits)
@@ -53,7 +53,12 @@ DEFAULT_BUILD_PRG = os.path.join(
 DEFAULT_BUILD_LBL = os.path.join(PROJECT_ROOT, "build", "labels.txt")
 
 # PAL phi2 — CIA tick rate on Ultimate hardware regardless of CPU turbo.
+# It is the machine's VIDEO STANDARD that sets it, not the device model: an
+# NTSC machine (the C64 Ultimate tested for the compact variant was one)
+# ticks at 1 022 727 Hz, and PAL conversion overstates its wall clock by
+# 3.7%. Override with --cia-hz; tick counts and ratios are unaffected.
 CIA_HZ = 985_248.0
+CIA_HZ_NTSC = 1_022_727.0
 
 
 def _routine_targets(target, labels):
@@ -176,7 +181,7 @@ def render_md(product, rows, samples):
         lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
     header = (
         f"Measured on {product}, CIA #1 chained-timer wrapper "
-        f"(ticks ~= wall-clock at PAL phi2 regardless of turbo), min of "
+        f"(ticks converted at {CIA_HZ:,.0f} Hz phi2 regardless of turbo), min of "
         f"{samples} samples per cell, single power-on session, "
         f"`tools/bench_turbo_sweep.py`.\n\n"
     )
@@ -184,6 +189,7 @@ def render_md(product, rows, samples):
 
 
 def main():
+    global CIA_HZ
     ap = argparse.ArgumentParser()
     ap.add_argument("--speeds", default="1,16,48,64",
                     help="comma-separated turbo MHz values (default "
@@ -191,7 +197,11 @@ def main():
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--md", default=None,
                     help="write a markdown table to this path")
+    ap.add_argument("--cia-hz", type=float, default=CIA_HZ,
+                    help=f"CIA tick rate for the ms conversion (default PAL "
+                         f"{CIA_HZ:.0f}; NTSC machines {CIA_HZ_NTSC:.0f})")
     args = ap.parse_args()
+    CIA_HZ = args.cia_hz
 
     speeds = [int(s) for s in args.speeds.split(",")]
     if speeds[0] != 1:

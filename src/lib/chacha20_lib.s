@@ -67,8 +67,9 @@ cc20_constants:
 ; The main chacha20_block hot path no longer uses this table — it inlines
 ; all 8 quarter-rounds per double-round with literal indices. The table
 ; and the `chacha20_quarter_round` entry point below are kept so the
-; dynamic-index test vector in `tools/test_chacha20_poly1305.py` can still
-; patch in arbitrary (a,b,c,d) tuples and exercise a single QR.
+; quarter-round test in `tools/test_chacha20_poly1305.py` can exercise a
+; single QR through row 0. It no longer patches the table (the compact
+; core's chacha20_block reads it), so the table is effectively read-only.
 cc20_qr_table:
         ; Column rounds
         .byte  0,  4,  8, 12          ; QR(0, 4, 8, 12)
@@ -560,8 +561,9 @@ cc20_qr_table:
 ;        pointing to 4 byte indices (a, b, c, d).
 ;
 ; This is the original (slow) JSR-driven implementation retained so
-; the `test_chacha20_quarter_round` vector can patch cc20_qr_table with
-; arbitrary (a,b,c,d) tuples and exercise a single QR. chacha20_block
+; the `test_chacha20_quarter_round` vector can exercise a single QR
+; through cc20_qr_table row 0 (it reads the table, no longer patches
+; it). chacha20_block
 ; itself uses the inlined +cc20_qr macro above — no table lookups, no
 ; JSR — for speed.
 ;

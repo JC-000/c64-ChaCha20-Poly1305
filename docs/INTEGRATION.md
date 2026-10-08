@@ -765,11 +765,16 @@ above.
 
 ### Compact variant (`LIB_VARIANT_COMPACT`)
 
-`make lib-compact` builds `build/lib/chacha20poly1305-compact.a`: a rolled,
-table-free ChaCha20 core and a rolled Poly1305 multiply with no carry
-branch, measured constant-time by `make test-ct`. **1 690 B** of library
-code + data in a minimal consumer link (your `ct_mul_8x8`, sqtab builder
-and the 1 KB sqtab not counted; 1 907 B if the library owned them), at +58% `aead_encrypt` cycles
+`make lib-compact` builds `build/lib/chacha20poly1305-compact.a`: a rolled
+ChaCha20 core with no rotate LUT (it still reads the 32-byte public
+`cc20_qr_table` schedule — see below) and a rolled Poly1305 multiply with
+no carry branch, measured constant-time by `make test-ct`. **1 690 B** of
+library code + data in a minimal consumer link. That figure leaves out
+three things that are yours: the §8.1 builder `mul_tables_init` (160 B),
+the §8.3 `ct_mul_8x8` body with `poly_prod_lo/hi` (57 B), and the 1 KB
+sqtab itself. The owner build, which supplies the first two, measures
+1 907 B the same way — still without the 1 KB table, which is RAM filled
+at run time, not image. At +58% `aead_encrypt` cycles
 against Profile B (−15% against the sprint-0 baseline). Same AEAD ABI.
 
 It is built **app-owned**, so the consumer supplies the §8.1 sqtab builder
