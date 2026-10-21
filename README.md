@@ -244,8 +244,11 @@ reaches `._client` or pokes a `write_mem` threshold.
 `make test` builds each profile and runs
 `tools/test_chacha20_poly1305.py` against it; the target exits non-zero
 on the first failing profile. Both `make test` and the fuzz targets
-below use `TEST_PYTHON` (defaults to the c64-test-harness venv) and pass
-`C64_BACKEND` / `U64_HOST` through from the environment.
+below use `TEST_PYTHON` (defaults to the shared harness venv,
+`~/.local/share/c64-harness/venv/bin/python`, which carries
+c64-test-harness and pyca/cryptography) and pass `C64_BACKEND` /
+`U64_HOST` through from the environment. The `python3 tools/...`
+examples in this README assume that interpreter too.
 
 ### Differential fuzz
 
