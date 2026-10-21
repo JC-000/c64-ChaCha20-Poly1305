@@ -18,6 +18,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `transport.set_speed(1)`. Library PRG output is unchanged — tooling only.
 
 ### Added
+- **`LIB_VARIANT_COMPACT`, a size-first constant-time variant** — `make
+  lib-compact` (`build/lib/chacha20poly1305-compact.a`, app-owned) and
+  `make profile-compact`. Rolled ChaCha20 core with no rotate LUT (it reads only the
+  public 32-byte quarter-round schedule), rolled Poly1305
+  multiply with no carry branch, rolled reduce, no page-aligned table.
+  1 690 B of library code + data in a minimal consumer link with the §8.1/
+  §8.3 primitives consumer-supplied; 1 907 B for the owner build measured
+  the same way as config D (7 975 B at HEAD). `aead_encrypt` n=1024
+  5 051 813 ± 262 cy (display on), +58% vs Profile B and −15% vs sprint-0. Passes the RFC suite (145/145; no word32 group),
+  `hazmat_fuzz` (quick and full) and the KAT smoke. `RESIDENT_BYTES` 2048 / 2304,
+  pinned by new `verify-resident-bytes` legs; also covered by
+  `verify-label-hygiene` and `lib-verify-isolation`. Default builds are
+  byte-identical.
+- **`make test-ct`** (`tools/ct_timing_check.py`): exact cycle counts, with
+  the display blanked, across secret-input classes for `poly1305_multiply`
+  (h[16] over 0..7), `poly1305_final` (9 h boundaries x 4 s patterns),
+  `chacha20_block`, `aead_encrypt` at four length configurations, and
+  failing `aead_decrypt` (13 tag-difference classes). Gates the
+  compact variant. It **fails on the default Profile B build** —
+  `poly1305_multiply` varies 34 546–39 262 cy with h and r through
+  `poly_ripple` — which docs/CT_ANALYSIS.md §4.1 now records.
 - **`make verify-harness-routing`** (`tools/verify_harness_routing.py`), a
   toolchain-only gate in the `make verify` umbrella that fails if any tool
   reaches the private client (`._client`) or hardcodes a `write_mem`

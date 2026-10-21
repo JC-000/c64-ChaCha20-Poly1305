@@ -15,6 +15,12 @@
 
 .include "constants_lib.s"
 
+; LIB_VARIANT_COMPACT: nothing in the variant calls these (its ChaCha20 core
+; rotates in place, and CHACHA20_USE_WORD32 is refused there), so the TU
+; assembles to an empty member rather than 537 B no link would pull but
+; every RESIDENT_BYTES sum would count.
+.ifndef LIB_VARIANT_COMPACT
+
 .export add32, add32_to_dst, xor32, xor32_in_place, copy32, zero32
 .export rotl32_4, rotl32_8, rotl32_12
 .export rotr32_1, rotr32_4, rotr32_8, rotr32_12, rotr32_16
@@ -546,3 +552,5 @@ zero32:
         iny
         sta (w32_dst),y
         rts
+
+.endif  ; .ifndef LIB_VARIANT_COMPACT

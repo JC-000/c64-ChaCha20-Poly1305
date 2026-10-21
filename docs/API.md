@@ -223,12 +223,16 @@ conditions, one about the message and one about the call — tests
 
 ### chacha20_quarter_round
 
-- **Module**: `chacha20_lib.s:502`
-- **Purpose**: **Test-only entry**. Performs one ChaCha20 quarter
-  round by patching `cc20_qr_idx` into `cc20_qr_table` and calling
-  the word32 helpers. Retained so
-  `tools/test_chacha20_poly1305.py:346` can exercise RFC 7539
-  §2.1.1's single-QR test vector.
+- **Module**: `chacha20_lib.s` (default core), `chacha20_compact.inc`
+  (`LIB_VARIANT_COMPACT`)
+- **Purpose**: Performs one ChaCha20 quarter round on the
+  `cc20_qr_table` row at offset `cc20_qr_idx`. In the default core it is
+  a **test-only entry** built on the word32 helpers (`chacha20_block`
+  inlines its own rounds); in the compact variant it is the routine
+  `chacha20_block` itself calls 80 times per block. The test suite's
+  `test_chacha20_quarter_round` exercises RFC 7539 §2.1.1's single-QR
+  vector through the shipped row 0 (QR 0,4,8,12) without writing to the
+  table — the compact core reads it, so it must not be patched.
 - **Signature**: Input ZP `cc20_qr_idx` = offset into `cc20_qr_table`
   (0, 4, 8, …, 28). Reads/writes `cc20_work`.
 - **Preconditions**: `cc20_work` must contain whatever state the
@@ -685,7 +689,8 @@ Profile B with the full export surface and unchanged codegen.
 | `POLY1305_PROFILE_LONG` | off (= Profile B) | Selects **Profile A** (long-message): `poly1305_init` builds the 8 KB Shoup per-r tables `r_tab_lo/hi` at `$6000..$7FFF` via `shoup_init`; the quarter-square sqtab, `sqtab_init`, and `mul_8x8` are not emitted at all (issue #34 F1). Undefined = **Profile B**: sqtab + `ct_mul_8x8`. `make profile-a` passes it. | v0.2 |
 | `LIB_VARIANT_AEAD_ONLY` | off | Builds the trimmed `make lib-aead-only` archive (`build/lib/chacha20poly1305-aead-only.a`): strips the test-only exports — `chacha20_quarter_round` (export and body), `rotl32_1` / `rotl32_7` / `rotr32_7`, and `mul_8x8` — while leaving the crypto code paths untouched. `rotr32_1` stays exported in both variants. | v0.6.0 (PR #35) |
 | `POLY1305_MULTIPLY_ROLLED` | off | Profile B only: `poly1305_multiply` becomes a runtime nested J/I loop instead of the 17×16 unrolled macro expansion — smallest code, largest cycle cost. `make profile-b-rolled`. | v0.6.0 (PR #36) |
-| `POLY1305_MULTIPLY_ROLLED_OUTER` | off | Profile B only: outer j loop rolled, the 17 inner partial products still inlined — the size↔cycles midpoint. Takes precedence over `POLY1305_MULTIPLY_ROLLED` when both are defined. Measured "config D": combined with the aead-only archive it yields an 8,230 B linked consumer footprint at +4.08% cycles on `aead_encrypt` n=1024. `make profile-b-rolled-outer`. | v0.6.0 (PR #36) |
+| `POLY1305_MULTIPLY_ROLLED_OUTER` | off | Profile B only: outer j loop rolled, the 17 inner partial products still inlined — the size↔cycles midpoint. Takes precedence over `POLY1305_MULTIPLY_ROLLED` when both are defined. Measured "config D": combined with the aead-only archive it yielded an 8,230 B linked consumer footprint at v0.6.0 (re-measured at HEAD: 8,486 B consumer PRG, 7,975 B of library segments) at +4.08% cycles (v0.6.0) on `aead_encrypt` n=1024. `make profile-b-rolled-outer`. | v0.6.0 (PR #36) |
+| `LIB_VARIANT_COMPACT` | off | The size-first constant-time variant: a rolled ChaCha20 core (`src/lib/chacha20_compact.inc`, no rotate LUT), a rolled Poly1305 multiply that accumulates with a byte-wide row carry instead of `poly_ripple`, a rolled reduce, and looped AEAD padding. No page-aligned table. Profile B only; `.error` with `POLY1305_PROFILE_LONG`, `POLY1305_MULTIPLY_ROLLED[_OUTER]` or `CHACHA20_USE_WORD32`. `make profile-compact` (owner PRG) / `make lib-compact` (archive, with both `SHARED_*` deferrals). Same entry points; `word32_lib` is not exported; adds the data export `cc20_qr_off`. `RESIDENT_BYTES` 2048 (both deferrals) / 2304 (otherwise). | unreleased |
 | `CHACHA20_USE_WORD32` | off | Opt-in pointer-mode: the ChaCha20 `*_zp` rotate/add/xor macros expand to `jsr`s into the shared `word32_lib.s` subroutines (via the `w32_dst` pointer convention) instead of inline ZP code — for consumers that already link a word32 module. Default off preserves the existing (faster, inline) codegen. | v0.6.0 (PR #31) |
 | `LIB_SHARED_SQTAB_BASE` | `$8000` | Value equate, Profile B only: relocates the 1 KB quarter-square table (`sqtab_lo` = base, `sqtab_hi` = base + `$0200`). Must be page-aligned (assemble-time `.assert`). This is the c64-lib-contract SPEC §8.1 canonical placement equate: a multi-lib PRG passes one shared `-D LIB_SHARED_SQTAB_BASE=0x<addr>` so all §8.1 adopters agree on a single table. | v0.6.0 (PR #39) |
 | `SHARED_SQTAB_INIT` | off | c64-lib-contract SPEC §8.1 deferral: the library stops exporting **both** `mul_tables_init` and its `sqtab_init` alias, and instead imports the consumer's canonical `mul_tables_init` (aliased locally so internal callers keep working), and drops the `$0001` sqtab bit from `LIB_CHACHA20_POLY1305_SHARED_PRIMITIVES`. | v0.6.0 (PRs #39/#43) |

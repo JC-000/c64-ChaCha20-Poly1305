@@ -71,6 +71,16 @@ Do not re-derive from a measured consumer link. There is no single real link:
 a consumer pulling part of the archive measures below the sum, one pulling all
 of it measures above.
 
+LIB_VARIANT_COMPACT. That variant has no page-aligned table at all, so its
+objects legitimately report zero aligned sections and the sanity check below
+would call a correct parse broken. The check is relaxed only for a directory
+whose data_lib.o exports `cc20_qr_off` — the compact variant's one private
+symbol — so the variant is recognised from the build, not from a flag a caller
+could pass against the wrong directory. Its segment-start term stays: §4 still
+tells every consumer to declare LIB_CHACHA20_POLY1305_CODE with
+`align = $100`, so ld65 still pads up to the page from wherever the
+consumer's code ends, whether or not anything inside needs the alignment.
+
 PARSER NOTE. `Alignment:` follows `Size:`, which follows `Name:`. A one-pass
 state machine that reads them in the wrong order silently reports zero aligned
 sections — that produced a bound equal to the sum during this issue's work,
@@ -82,6 +92,22 @@ import os
 import re
 import subprocess
 import sys
+
+
+CODE_SEGMENT = "LIB_CHACHA20_POLY1305_CODE"
+CFG_CODE_ALIGN = 256    # the `align = $100` §4 has every consumer declare
+
+
+def is_compact(objdir):
+    """True iff this directory was built with LIB_VARIANT_COMPACT."""
+    obj = os.path.join(objdir, "data_lib.o")
+    if not os.path.exists(obj):
+        sys.exit(f"FATAL: {obj} missing — cannot tell which variant this is.")
+    out = subprocess.run(["od65", "--dump-exports", obj],
+                         capture_output=True, text=True)
+    if out.returncode != 0 or 'Name:' not in out.stdout:
+        sys.exit(f"FATAL: od65 produced no export table for {obj}.")
+    return re.search(r'Name:\s*"cc20_qr_off"', out.stdout) is not None
 
 
 def measure(objdir):
@@ -122,13 +148,18 @@ def measure(objdir):
         sys.exit(f"FATAL: no LIB_CHACHA20_POLY1305_* sections in {objdir} — "
                  "wrong path, an .a archive, or od65's format changed. Every "
                  "number below would be vacuous.")
-    if aligned == 0:
+    compact = is_compact(objdir)
+    if aligned == 0 and not compact:
         sys.exit(f"FATAL: {seen} library sections in {objdir} but NONE page-aligned. "
                  "This library's CT invariant requires aligned sections, so this "
                  "is a broken parser rather than a real measurement (see the "
                  "PARSER NOTE in this file).")
     # One more boundary per aligned SEGMENT: its start must be padded to
     # alignment from wherever the consumer's preceding code ends.
+    # The cfg-mandated alignment holds whatever the fragments ask for; only
+    # the compact variant has a CODE segment with no aligned fragment in it.
+    if compact:
+        seg_align[CODE_SEGMENT] = max(seg_align.get(CODE_SEGMENT, 1), CFG_CODE_ALIGN)
     start_charge = sum(a - 1 for a in seg_align.values())
     return total, aligned, charge, start_charge, seen
 

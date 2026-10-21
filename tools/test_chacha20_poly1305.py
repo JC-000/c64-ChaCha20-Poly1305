@@ -342,34 +342,38 @@ def test_rotations(target, labels):
 
 
 def test_chacha20_quarter_round(target, labels):
-    """RFC 7539 §2.1.1: QR on isolated {a,b,c,d} = {0,1,2,3}."""
+    """RFC 7539 §2.1.1: QR on an isolated {a,b,c,d}.
+
+    Drives row 0 of cc20_qr_table as shipped — QR(0,4,8,12) — by placing the
+    vector's a,b,c,d in words 0,4,8,12. This used to patch the row to
+    (0,1,2,3) and restore it afterwards, which was harmless while the table
+    was test-only, but the compact core's chacha20_block READS that table:
+    an exception between patch and restore would have corrupted every later
+    block. The table is now only read, and checked unchanged afterwards.
+    """
     passed = failed = 0
     transport = target.transport
     with open(VECTORS_PATH) as f:
         vectors = json.load(f)
 
+    row = read_bytes(transport, labels["cc20_qr_table"], 4)
+    if row != bytes([0, 4, 8, 12]):
+        print(f"  FAIL cc20_qr_table row 0 is {row.hex()}, want 0004080c")
+        return 0, 1
     for vec in vectors["chacha20_quarter_round"]:
         for i, hex_val in enumerate(vec["input"]):
             val = int(hex_val, 16)
-            write_bytes(transport, labels["cc20_work"] + i * 4,
+            write_bytes(transport, labels["cc20_work"] + row[i] * 4,
                         val.to_bytes(4, 'little'))
-
-        # The QR function indexes into cc20_qr_table via cc20_qr_idx.
-        # Temporarily overwrite the first table entry with {0,1,2,3} so that
-        # the routine operates on cc20_work words 0..3.
-        orig_table = read_bytes(transport, labels["cc20_qr_table"], 4)
-        write_bytes(transport, labels["cc20_qr_table"], bytes([0, 1, 2, 3]))
         write_bytes(transport, labels["cc20_qr_idx"], bytes([0]))
 
         run_subroutine(target, labels["chacha20_quarter_round"], timeout=30.0)
-
-        write_bytes(transport, labels["cc20_qr_table"], orig_table)
 
         all_match = True
         for i, hex_val in enumerate(vec["expected"]):
             expected = int(hex_val, 16)
             got = int.from_bytes(
-                read_bytes(transport, labels["cc20_work"] + i * 4, 4),
+                read_bytes(transport, labels["cc20_work"] + row[i] * 4, 4),
                 'little',
             )
             if got != expected:
@@ -383,6 +387,9 @@ def test_chacha20_quarter_round(target, labels):
                 print(f"  PASS quarter-round: {vec['desc']}")
         else:
             failed += 1
+    if read_bytes(transport, labels["cc20_qr_table"], 4) != row:
+        print("  FAIL cc20_qr_table row 0 changed during the test")
+        failed += 1
     return passed, failed
 
 
@@ -1020,6 +1027,11 @@ def run_tests(target, labels, seed):
             p, f = fn()
             total_passed += p
             total_failed += f
+            # A group with nothing applicable (the rotation group on a
+            # compact build) is a SKIP, not a vacuous 0/0 OK.
+            if p + f == 0:
+                print("  SKIP: no applicable tests in this build")
+                continue
             status = "OK" if f == 0 else "FAIL"
             print(f"  {status}: {p}/{p + f} passed")
         except Exception as e:
@@ -1067,10 +1079,21 @@ def main():
     print(f"Using: {PRG_PATH}")
 
     labels = Labels.from_file(LABELS_PATH)
-    required = [
+    # LIB_VARIANT_COMPACT links no word32 primitives at all (its ChaCha20
+    # core rotates in place), so the rotation group has nothing to test
+    # there. The variant is recognised by its one private export rather
+    # than by the absence of the rotations, so a default build that loses
+    # them still fails here.
+    compact = labels.address("cc20_qr_off") is not None
+    word32 = [] if compact else [
         "w32_dst", "w32_src1", "w32_src2",
         "rotl32_4", "rotl32_7", "rotl32_8", "rotl32_12",
         "rotr32_1", "rotr32_4", "rotr32_7", "rotr32_8", "rotr32_12", "rotr32_16",
+    ]
+    if compact:
+        print("LIB_VARIANT_COMPACT build: no word32 primitives linked, "
+              "rotation group will be empty")
+    required = word32 + [
         "chacha20_init", "chacha20_block", "chacha20_quarter_round",
         "chacha20_encrypt",
         "cc20_key", "cc20_nonce", "cc20_counter", "cc20_state", "cc20_work",

@@ -13,12 +13,13 @@ PROJECT_ROOT = ..
 # ones here is what proves a consumer can migrate off the old spelling.
 LIB_FULL = $(PROJECT_ROOT)/build/lib/chacha20poly1305.a
 LIB_AEAD = $(PROJECT_ROOT)/build/lib/chacha20poly1305-aead-only.a
+LIB_COMPACT = $(PROJECT_ROOT)/build/lib/chacha20poly1305-compact.a
 
 BUILD = build
 
-.PHONY: all clean full aead_only smoke-full smoke-aead app-owned-default-link
+.PHONY: all clean full aead_only smoke-full smoke-aead app-owned-default-link compact smoke-compact
 
-all: full aead_only smoke-full smoke-aead app-owned-default-link
+all: full aead_only smoke-full smoke-aead app-owned-default-link compact smoke-compact
 
 # The consumer side provides:
 #   - min_aead_consumer.o   (its own program)
@@ -101,6 +102,46 @@ $(BUILD)/app_owned_consumer.o: app_owned_consumer.s | $(BUILD)
 $(BUILD)/app_owned-full.prg: $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_FULL) | $(BUILD)
 	$(LD65) -C $(CFG) -m $(BUILD)/app-owned.map -Ln $(BUILD)/app-owned.labels \
 	    $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_FULL) -o $@
+
+# --- compact archive (LIB_VARIANT_COMPACT, app-owned) ----------------------
+# The compact archive defers the §8.1 sqtab init and the §8.3 ct_mul_8x8 to
+# the consumer, so neither link below can be made against it alone.
+#
+# `compact` is the FOOTPRINT link. app_owned_consumer.o supplies the shared
+# primitives as stubs in plain CODE, so every byte in the two
+# LIB_CHACHA20_POLY1305_* segments of build/compact.map is the archive's —
+# that is the figure the README size table quotes for this variant.
+#
+# `smoke-compact` is the RUNNABLE link: real providers, assembled from the
+# library's own owner sources with no deferral define, standing in for the
+# consumer's (c64-https ships the same §8.3 body). They land in the library
+# segment, so do not read a footprint off this map.
+compact: $(BUILD)/app_owned-compact.prg
+
+# The compact archive is the one target here that `make lib` /
+# `make lib-aead-only` do not produce, so build it on demand rather than fail
+# with "No rule to make target". Only when ABSENT: like the other two
+# archives, staleness against src/ is the parent Makefile's business —
+# rebuild with `make lib-compact` there after changing the library.
+$(LIB_COMPACT):
+	$(MAKE) -C $(PROJECT_ROOT) lib-compact
+
+$(BUILD)/app_owned-compact.prg: $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_COMPACT) | $(BUILD)
+	$(LD65) -C $(CFG) -m $(BUILD)/compact.map -Ln $(BUILD)/compact.labels \
+	    $(BUILD)/app_owned_consumer.o $(BUILD)/zp_config.o $(LIB_COMPACT) -o $@
+
+PROVIDER_OBJS = $(BUILD)/provider_shared_ct_mul.o \
+                $(BUILD)/provider_shared_prod_scratch.o \
+                $(BUILD)/provider_shared_sqtab_init.o
+
+$(BUILD)/provider_%.o: $(PROJECT_ROOT)/src/lib/%.s | $(BUILD)
+	$(CA65) $(CA65FLAGS) $< -o $@
+
+smoke-compact: $(BUILD)/aead_smoke-compact.prg
+
+$(BUILD)/aead_smoke-compact.prg: $(BUILD)/aead_smoke.o $(BUILD)/zp_config.o $(PROVIDER_OBJS) $(LIB_COMPACT) | $(BUILD)
+	$(LD65) -C $(CFG) -m $(BUILD)/smoke-compact.map -Ln $(BUILD)/smoke-compact.labels \
+	    $(BUILD)/aead_smoke.o $(BUILD)/zp_config.o $(PROVIDER_OBJS) $(LIB_COMPACT) -o $@
 
 clean:
 	rm -rf $(BUILD)

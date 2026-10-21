@@ -27,6 +27,10 @@
 
 .include "constants_lib.s"
 
+; LIB_VARIANT_COMPACT's multiply carries row-wise and never ripples (see
+; poly1305_core.s), so this TU is an empty member in that variant.
+.ifndef LIB_VARIANT_COMPACT
+
 .import poly_product
 
 .export poly_ripple
@@ -60,3 +64,4 @@ poly_ripple:
 @done:
         rts
 
+.endif  ; .ifndef LIB_VARIANT_COMPACT

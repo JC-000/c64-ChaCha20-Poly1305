@@ -90,12 +90,17 @@ ROOT = Path(__file__).resolve().parent.parent
 NAME_RE = re.compile(r'Name:\s*"([^"]*)"')
 NAME_ROW_RE = re.compile(r"Name:")
 
-# The three shipped variants and the object dir each `make lib*` target fills.
+# The shipped variants and the object dir each `make lib*` target fills.
 VARIANTS = {
     "lib": "build/lib/objs",
     "lib-aead-only": "build/lib/objs-aead-only",
     "lib-app-owned": "build/lib/objs-app-owned",
+    "lib-compact": "build/lib/objs-compact",
 }
+
+# lib-compact is Profile B only: its sources `.error` on POLY1305_PROFILE_LONG,
+# so it is checked under the Profile B pass and skipped, by name, under A.
+PROFILE_B_ONLY = {"lib-compact"}
 
 # The two suppression knobs §6.1 names. Values are ca65 define strings; the
 # NAMES of the resulting symbols are never written down anywhere in this file.
@@ -331,6 +336,9 @@ def main():
                                 "build, so leg 1 would pass vacuously")
 
             for target, objdir in VARIANTS.items():
+                if target in PROFILE_B_ONLY and pdefines:
+                    print(f"  {target}: skipped (Profile B only)")
+                    continue
                 build_tree(tree, target, pdefines)
                 failures += [f"{pname}: {f}" for f in
                              check_variant(target, tree / objdir, displaceable)]
